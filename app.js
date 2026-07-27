@@ -411,7 +411,7 @@ let _actPlanRun = false;
 async function maybeActivatePlanned() {
   if (_actPlanRun || !me || isCustomerRole()) return;
   if (!_loadedColls.holdings || !_loadedColls.inventory) return;   // 로드 전 계산 금지(오배치 방지)
-  const hasPlanned = (state.holdings || []).some(h => !['확정', '해제'].includes(h.status || '홀딩') && holdItems(h).some(it => it.planned));
+  const hasPlanned = (state.holdings || []).some(h => !['확정', '해제'].includes(h.status || '홀딩') && ((h.status === '예정') || holdItems(h).some(it => it.planned)));
   if (!hasPlanned) return;
   _actPlanRun = true;
   try {
@@ -1287,7 +1287,7 @@ function stockState(it) {
 /* 입고 후: 예정홀딩을 검사해 '자재가 전부 가용 범위에 들면' 오래된 순으로 자동 활성화(다자재) */
 async function activatePlannedHolds(name, physJang) {
   // 대상: 예정 홀딩 + '홀딩'인데 일부 품목이 예정(planned)인 건
-  const cand = state.holdings.filter(h => !['확정', '해제'].includes(h.status || '홀딩') && holdItems(h).some(it => it.planned))
+  const cand = state.holdings.filter(h => !['확정', '해제'].includes(h.status || '홀딩') && ((h.status === '예정') || holdItems(h).some(it => it.planned)))
     .sort((a, b) => (a.useDate || '9999').localeCompare(b.useDate || '9999') || (a.createdAt || 0) - (b.createdAt || 0));
   if (!cand.length) return 0;
   const extra = {};
@@ -1301,12 +1301,13 @@ async function activatePlannedHolds(name, physJang) {
     const items = holdItems(h);
     let changed = false;
     const newItems = items.map(it => {
-      if (it.planned && availOf(it.materialName) >= (+it.jang || 0)) {   // 이제 재고 확보 → 활성화
+      const needsStock = it.planned || (h.status === '예정');   // '예정' 홀딩은 플래그가 없어도 전 품목을 예정으로 간주
+      if (needsStock && availOf(it.materialName) >= (+it.jang || 0)) {   // 이제 재고 확보 → 활성화
         extra[_normName(it.materialName)] = (extra[_normName(it.materialName)] || 0) + (+it.jang || 0);
         changed = true;
         return Object.assign({}, it, { planned: false });
       }
-      return it;
+      return needsStock ? Object.assign({}, it, { planned: true }) : it;   // 재고 못 잡으면 예정 유지
     });
     if (changed) {
       const newStatus = newItems.every(x => x.planned) ? '예정' : '홀딩';
