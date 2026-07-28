@@ -4655,10 +4655,22 @@ function chulgoDispatchGroups() {
   return Object.keys(map).map(k => {
     const reqs = map[k].sort((a, b) => (+a.createdAt || 0) - (+b.createdAt || 0));
     const rep = reqs[0]; const sts = reqs.map(r => r.status || '');
+    // 업체별로 묶고, 하차지는 업체별로 각각 유지 (같은 차량이라도 하차지 다름)
+    const stopMap = {};
+    reqs.forEach(r => {
+      const c = r.client || '-';
+      if (!stopMap[c]) stopMap[c] = { client: c, dests: new Set(), items: [], companyDispatch: false };
+      if (r.companyDispatch) stopMap[c].companyDispatch = true;
+      else if ((r.dispatchDest || '').trim()) stopMap[c].dests.add((r.dispatchDest || '').trim());
+      (r.items || []).forEach(it => stopMap[c].items.push(it));
+    });
+    const stops = Object.values(stopMap).map(s => ({ client: s.client, dest: s.companyDispatch ? '업체 배차' : [...s.dests].join(' / '), items: s.items }));
     return {
       dispatchId: k, reqs,
       status: sts.includes('지시') ? '지시' : (sts.includes('확인') ? '확인' : '완료'),
-      vehicle: rep.vehicle || '', driver: rep.driver || '', companyDispatch: !!rep.companyDispatch, loadTime: rep.loadTime || '', packing: reqs.some(r => r.packing), dispatchDest: rep.dispatchDest || '',
+      vehicle: rep.vehicle || '', driver: rep.driver || '', companyDispatch: !!rep.companyDispatch, loadTime: rep.loadTime || '', packing: reqs.some(r => r.packing),
+      dispatchDest: [...new Set(reqs.map(r => (r.dispatchDest || '').trim()).filter(Boolean))].join(' / '),
+      stops,
       handler: (reqs.find(r => r.handler) || {}).handler || '', memos: reqs.map(r => (r.memo || '').trim()).filter(Boolean),
       dispatchedAt: rep.dispatchedAt || 0, dispatchedBy: rep.dispatchedBy || '',
       urgent: reqs.some(r => r.urgent),
@@ -4673,9 +4685,13 @@ function chulgoDispatchCard(g, forWarehouse) {
   const urgBadge = g.urgent ? '<span class="pill" style="background:#fde8e8;color:#c0341d;font-size:10px">긴급</span> ' : '';
   const packBadge = g.packing ? '<span class="pill" style="background:#e6f0ff;color:#1b4fb0;font-size:10px;font-weight:700">📦 포장</span> ' : '';
   const packBar = g.packing ? '<div style="margin-top:6px;background:#e6f0ff;color:#1b4fb0;font-weight:700;font-size:12.5px;text-align:center;border-radius:8px;padding:5px 8px"><i class="ti ti-package"></i> 포장 건 — 포장 후 출고</div>' : '';
-  const items = g.items.map(it => `<div style="font-size:12.5px;color:var(--t2)">· <b style="color:var(--t1)">${esc(it.name)}</b> ${+it.qty || 0}${esc(it.unit || '')}${it.spec ? ` <span style="color:var(--t3)">(${esc(it.spec)})</span>` : ''}${g.clients.length > 1 ? ` <span style="color:var(--blue);font-size:11px">${esc(it._client || '')}</span>` : ''}</div>`).join('');
+  const multiStop = (g.stops || []).length > 1;
+  const items = (g.stops || []).map(s => `<div style="margin-top:7px">
+      <div style="font-size:12.5px;font-weight:700;color:#1b4fb0"><i class="ti ti-map-pin" style="font-size:13px;vertical-align:-1px"></i> ${esc(s.client)}${s.dest ? ' <span style="color:var(--t2)">· 하차 ' + esc(s.dest) + '</span>' : ''}</div>
+      ${s.items.map(it => `<div style="font-size:12.5px;color:var(--t2);padding-left:5px">· <b style="color:var(--t1)">${esc(it.name)}</b> ${+it.qty || 0}${esc(it.unit || '')}${it.spec ? ` <span style="color:var(--t3)">(${esc(it.spec)})</span>` : ''}</div>`).join('')}
+    </div>`).join('');
   const when = g.dispatchedAt ? new Date(+g.dispatchedAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
-  const veh = [g.companyDispatch ? '🚚 업체 배차' : (g.driver ? '기사 ' + g.driver : ''), g.loadTime ? '상차 ' + g.loadTime : '', g.dispatchDest ? '→ ' + g.dispatchDest : ''].filter(Boolean).join(' · ');
+  const veh = [g.companyDispatch ? '🚚 업체 배차' : (g.driver ? '기사 ' + g.driver : ''), g.loadTime ? '상차 ' + g.loadTime : '', multiStop ? '하차지 ' + g.stops.length + '곳' : ''].filter(Boolean).join(' · ');
   return `<div class="card" style="margin-bottom:9px;padding:12px 14px;border-left:4px solid ${g.urgent ? '#e23b3b' : '#2f6fed'}">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
       <div style="min-width:0"><div style="font-weight:700;font-size:14px">${urgBadge}${packBadge}출고 지시 · ${esc(g.clients.join(', ') || '-')}${g.reqs.length > 1 ? ` <span style="font-size:11px;color:var(--t3)">(${g.reqs.length}건 묶음)</span>` : ''}</div>
@@ -4742,10 +4758,16 @@ function chulgoPrintDispatch(dispatchId) {
   if (!g) { toast('지시를 찾을 수 없습니다'); return; }
   const e = s => esc(s == null ? '' : String(s));
   const urg = g.urgent ? '긴급' : '보통';
-  const multi = g.clients.length > 1;
-  const MIN = Math.max(8, g.items.length);
-  let rows = g.items.map((it, i) => `<tr><td class="c">${i + 1}</td><td class="l">${e(it.name)}</td><td class="l">${e(it.spec)}</td><td class="r">${e(it.qty)}</td><td class="c">${e(it.unit)}</td>${multi ? `<td class="l">${e(it._client)}</td>` : ''}</tr>`).join('');
-  for (let i = g.items.length; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td>${multi ? '<td></td>' : ''}</tr>`;
+  const stops = g.stops || [{ client: g.clients.join(', '), dest: g.dispatchDest, items: g.items }];
+  const multiStop = stops.length > 1;
+  const COLS = 5;
+  let rows = ''; let no = 0;
+  stops.forEach(s => {
+    if (multiStop) rows += `<tr><td class="l" colspan="${COLS}" style="background:#eef4ff;font-weight:800">🏭 ${e(s.client)}${s.dest ? '　·　하차: ' + e(s.dest) : ''}</td></tr>`;
+    (s.items || []).forEach(it => { no++; rows += `<tr><td class="c">${no}</td><td class="l">${e(it.name)}</td><td class="l">${e(it.spec)}</td><td class="r">${e(it.qty)}</td><td class="c">${e(it.unit)}</td></tr>`; });
+  });
+  const MIN = Math.max(8, no);
+  for (let i = no; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td></tr>`;
   const memoTxt = (g.memos || []).join('  /  ');
   const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>출고 요청서 ${e(g.clients.join(','))}</title>
 <style>*{box-sizing:border-box}body{font-family:'맑은 고딕','Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#111;margin:0;padding:22px 26px;position:relative}
@@ -4765,10 +4787,10 @@ table{border-collapse:collapse;width:100%}.info td{border:1px solid #444;padding
     <tr><td class="k">거래처</td><td>${e(g.clients.join(', '))}</td><td class="k">묶음</td><td>${g.reqs.length}건</td></tr>
     <tr><td class="k">긴급도</td><td class="${urg !== '보통' ? 'urg' : ''}">${e(urg)}</td><td class="k">요청자</td><td>${e(g.dispatchedBy)}</td></tr>
     <tr><td class="k">기사 / 배차</td><td>${g.companyDispatch ? '업체 배차' : (e(g.driver) || '-')}</td><td class="k">상차 예정</td><td>${e(g.loadTime) || '-'}</td></tr>
-    <tr><td class="k">출고지</td><td>${g.companyDispatch ? '업체 배차 · 직접 수령' : (e(g.dispatchDest) || '-')}</td><td class="k">포장</td><td class="${g.packing ? 'urg' : ''}">${g.packing ? '○ 포장 건' : '-'}</td></tr>
+    <tr><td class="k">하차지</td><td>${g.companyDispatch ? '업체 배차 · 직접 수령' : (multiStop ? '업체별 (아래 표 참조)' : (e(g.dispatchDest) || '-'))}</td><td class="k">포장</td><td class="${g.packing ? 'urg' : ''}">${g.packing ? '○ 포장 건' : '-'}</td></tr>
   </table>
-  <table class="items"><colgroup><col style="width:7%"><col style="width:${multi ? '30%' : '40%'}"><col style="width:26%"><col style="width:12%"><col style="width:9%">${multi ? '<col style="width:16%">' : ''}</colgroup>
-    <thead><tr><th>No</th><th>품목명</th><th>규격 / 롯트·패턴</th><th>수량</th><th>단위</th>${multi ? '<th>거래처</th>' : ''}</tr></thead><tbody>${rows}</tbody></table>
+  <table class="items"><colgroup><col style="width:8%"><col style="width:40%"><col style="width:28%"><col style="width:14%"><col style="width:10%"></colgroup>
+    <thead><tr><th>No</th><th>품목명</th><th>규격 / 롯트·패턴</th><th>수량</th><th>단위</th></tr></thead><tbody>${rows}</tbody></table>
   <div class="memo"><div class="mh">특이사항 및 비고</div><div class="mb">${e(memoTxt)}</div></div>
   <table class="foot"><tr><td class="k">출고 담당</td><td>${e(g.handler)}</td><td class="k">인수인 (서명)</td><td></td></tr></table>
 </body></html>`;
@@ -4783,6 +4805,7 @@ function chulgoQueueRow(r) {
     <input type="checkbox" class="cq-chk" value="${r.id}" style="width:19px;height:19px;margin-top:2px">
     <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13.5px">${r.urgent ? '<span class="pill" style="background:#fde8e8;color:#c0341d;font-size:10px">긴급</span> ' : ''}${esc(r.client || '-')}</div>
       <div style="font-size:12px;color:var(--t2);margin-top:2px;word-break:break-word">${items}</div>
+      ${(r.dispatchDest || '').trim() ? `<div style="font-size:11px;color:#1b4fb0;margin-top:2px"><i class="ti ti-map-pin" style="font-size:12px;vertical-align:-1px"></i> 하차 ${esc(r.dispatchDest)}</div>` : ''}
       <div style="font-size:10.5px;color:var(--t3);margin-top:2px">${esc(r.docNo || '')} · ${esc(r.sender || '')}</div></div>
     <button class="btn btn-ghost btn-sm" style="flex:none" onclick="event.preventDefault();chulgoPrint('${r.id}')" title="출고증/지시서"><i class="ti ti-printer"></i></button>
     ${isAdmin() ? `<button class="btn btn-ghost btn-sm" style="flex:none;color:var(--gd)" onclick="event.preventDefault();chulgoQueueComplete('${r.id}')" title="바로 완료 처리(관리자) — 이미 기출고된 건"><i class="ti ti-circle-check"></i></button>` : ''}
@@ -4810,7 +4833,7 @@ function chulgoDispatchDests() { return [...new Set((state.chulgoReqs || []).map
 function chulgoDriverChanged() {
   const sel = el('dsp-driver-sel'); if (!sel) return; const v = sel.value;
   const other = el('dsp-driver-other'); if (other) { if (v === '__other') { other.classList.remove('hidden'); try { other.focus(); } catch (e) { } } else { other.classList.add('hidden'); other.value = ''; } }
-  const dest = el('dsp-dest'); if (dest) { if (v === '__company') { dest.placeholder = '출고지 (업체 배차 — 생략 가능)'; dest.style.borderColor = 'var(--bd2)'; } else { dest.placeholder = '출고지 (현장/공장) · 필수'; dest.style.borderColor = '#f0b0b0'; } }
+  const dest = el('dsp-dest'); if (dest) { dest.style.borderColor = 'var(--bd2)'; dest.placeholder = v === '__company' ? '출고지 (업체 배차 — 불필요)' : '공통 하차지(선택) · 비우면 각 건 하차지 사용'; }
 }
 function chulgoTogglePack() {
   const b = el('dsp-pack'); if (!b) return; const on = b.dataset.on === '1'; b.dataset.on = on ? '0' : '1';
@@ -4840,7 +4863,7 @@ function chulgoOfficeSection() {
         </select>
       </div>
       <input id="dsp-driver-other" lang="ko" placeholder="기사명 직접 입력" class="hidden" style="width:100%;font-size:15px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:10px;margin-bottom:8px">
-      <input id="dsp-dest" lang="ko" list="dsp-dest-list" placeholder="출고지 (현장/공장) · 필수" style="width:100%;font-size:15px;padding:9px 11px;border:1.5px solid #f0b0b0;border-radius:10px;margin-bottom:10px">
+      <input id="dsp-dest" lang="ko" list="dsp-dest-list" placeholder="공통 하차지(선택) · 비우면 각 건 하차지 사용" style="width:100%;font-size:15px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:10px;margin-bottom:10px">
       <datalist id="dsp-dest-list">${dests.map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist>
       <button type="button" id="dsp-pack" data-on="0" onclick="chulgoTogglePack()" class="btn btn-sm" style="width:100%;justify-content:center;margin-bottom:10px"><i class="ti ti-package"></i> 포장 건 — 누르면 표시</button>
       <button class="btn btn-pri btn-block" onclick="issueDispatch()"><i class="ti ti-truck-delivery"></i>선택 항목 묶어 출고 지시 내리기 (창고 알림)</button>
@@ -4903,17 +4926,24 @@ async function issueDispatch() {
   else if (sel === '__other') driver = (el('dsp-driver-other') && el('dsp-driver-other').value || '').trim();
   else driver = sel;
   const loadTime = (el('dsp-time') && el('dsp-time').value || '').trim();
-  const dest = (el('dsp-dest') && el('dsp-dest').value || '').trim();
+  const overrideDest = (el('dsp-dest') && el('dsp-dest').value || '').trim();   // 공통 하차지(선택) — 비우면 각 건의 하차지 유지
   const packing = !!(el('dsp-pack') && el('dsp-pack').dataset.on === '1');
+  const selReqs = (state.chulgoReqs || []).filter(r => ids.includes(r.id));
   if (sel === '__other' && !driver) { toast('기사명을 입력하세요'); return; }
-  if (!company && !dest) { toast('출고지를 입력하세요 (업체 배차는 생략 가능)'); return; }
+  if (!company && selReqs.some(r => !(overrideDest || (r.dispatchDest || '').trim()))) { toast('하차지가 없는 건이 있습니다. 공통 출고지를 입력하거나 출고 등록 시 하차지를 지정하세요'); return; }
   if (_busy) return; _busy = true;
   try {
     const dispatchId = 'D' + Date.now();
-    const selReqs = (state.chulgoReqs || []).filter(r => ids.includes(r.id));
     const clients = [...new Set(selReqs.map(r => r.client).filter(Boolean))];
-    for (const id of ids) { await Store.update('chulgoReqs', id, { status: '지시', dispatchId, vehicle: '', driver, companyDispatch: company, loadTime, packing, dispatchDest: dest, dispatchedAt: Date.now(), dispatchedBy: (me && me.name) || '' }); }
-    const summary = (clients.join(', ') || '출고') + (ids.length > 1 ? ` 외 ${ids.length}건` : '') + (packing ? ' · 📦포장' : '') + (dest ? ' → ' + dest : '');
+    const dests = new Set();
+    for (const id of ids) {
+      const r = selReqs.find(x => x.id === id) || {};
+      const itemDest = company ? '' : (overrideDest || (r.dispatchDest || '').trim());   // 업체별 하차지 유지(공통 입력 시 덮어씀)
+      if (itemDest) dests.add(itemDest);
+      await Store.update('chulgoReqs', id, { status: '지시', dispatchId, vehicle: '', driver, companyDispatch: company, loadTime, packing, dispatchDest: itemDest, dispatchedAt: Date.now(), dispatchedBy: (me && me.name) || '' });
+    }
+    const destTxt = company ? '' : [...dests].join(' / ');
+    const summary = (clients.join(', ') || '출고') + (ids.length > 1 ? ` 외 ${ids.length}건` : '') + (packing ? ' · 📦포장' : '') + (destTxt ? ' → ' + destTxt : '');
     notifyChulgoDispatch(summary);   // 옵트인한 휴대폰으로 푸시
     toast('출고 지시 ' + ids.length + '건 발령 · 창고에 알림 🔔');
     renderChulgo();
