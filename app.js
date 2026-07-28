@@ -4767,7 +4767,7 @@ function chulgoQueueRow(r) {
 async function chulgoQueueComplete(id) {
   if (!isAdmin()) { toast('관리자만 가능합니다'); return; }
   const r = (state.chulgoReqs || []).find(x => x.id === id); if (!r) return;
-  if (!confirm('이 건을 바로 완료 처리할까요?\n(이미 출고된 건 · 재고는 그대로 유지)')) return;
+  if (!confirm('이 건을 바로 완료 처리할까요?\n(등록 시 재고는 이미 차감됨 · 완료로만 정리)')) return;
   await Store.update('chulgoReqs', id, { status: '완료', dispatchId: r.dispatchId || ('D' + Date.now()), doneBy: (me && me.name) || '', doneAt: Date.now(), dispatchedAt: r.dispatchedAt || Date.now(), dispatchedBy: r.dispatchedBy || (me && me.name) || '' });
   toast('완료 처리됨'); renderChulgo();
 }
@@ -4775,7 +4775,7 @@ async function chulgoQueueCompleteAll() {
   if (!isAdmin()) { toast('관리자만 가능합니다'); return; }
   const queue = (state.chulgoReqs || []).filter(r => r.reqType === '출고' && (r.status || '') === '대기열');
   if (!queue.length) { toast('대기열이 비어 있습니다'); return; }
-  if (!confirm(`대기열 ${queue.length}건을 모두 완료 처리할까요?\n(이미 기출고된 건 정리 · 재고는 그대로 유지)`)) return;
+  if (!confirm(`대기열 ${queue.length}건을 모두 완료 처리할까요?\n(등록 시 재고는 이미 차감됨 · 완료로만 정리)`)) return;
   const now = Date.now();
   for (const r of queue) { try { await Store.update('chulgoReqs', r.id, { status: '완료', dispatchId: r.dispatchId || ('D' + now + '_' + r.id), doneBy: (me && me.name) || '', doneAt: now, dispatchedAt: r.dispatchedAt || now, dispatchedBy: r.dispatchedBy || (me && me.name) || '' }); } catch (e) { } }
   toast(`대기열 ${queue.length}건 완료 처리됨`); renderChulgo();
