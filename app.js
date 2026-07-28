@@ -4760,8 +4760,25 @@ function chulgoQueueRow(r) {
       <div style="font-size:12px;color:var(--t2);margin-top:2px;word-break:break-word">${items}</div>
       <div style="font-size:10.5px;color:var(--t3);margin-top:2px">${esc(r.docNo || '')} · ${esc(r.sender || '')}</div></div>
     <button class="btn btn-ghost btn-sm" style="flex:none" onclick="event.preventDefault();chulgoPrint('${r.id}')" title="출고증/지시서"><i class="ti ti-printer"></i></button>
+    ${isAdmin() ? `<button class="btn btn-ghost btn-sm" style="flex:none;color:var(--gd)" onclick="event.preventDefault();chulgoQueueComplete('${r.id}')" title="바로 완료 처리(관리자) — 이미 기출고된 건"><i class="ti ti-circle-check"></i></button>` : ''}
     <button class="btn btn-ghost btn-sm" style="flex:none;color:var(--red-t)" onclick="event.preventDefault();delChulgoReq('${r.id}')" title="출고 취소(재고 복구)"><i class="ti ti-x"></i></button>
   </label>`;
+}
+async function chulgoQueueComplete(id) {
+  if (!isAdmin()) { toast('관리자만 가능합니다'); return; }
+  const r = (state.chulgoReqs || []).find(x => x.id === id); if (!r) return;
+  if (!confirm('이 건을 바로 완료 처리할까요?\n(이미 출고된 건 · 재고는 그대로 유지)')) return;
+  await Store.update('chulgoReqs', id, { status: '완료', dispatchId: r.dispatchId || ('D' + Date.now()), doneBy: (me && me.name) || '', doneAt: Date.now(), dispatchedAt: r.dispatchedAt || Date.now(), dispatchedBy: r.dispatchedBy || (me && me.name) || '' });
+  toast('완료 처리됨'); renderChulgo();
+}
+async function chulgoQueueCompleteAll() {
+  if (!isAdmin()) { toast('관리자만 가능합니다'); return; }
+  const queue = (state.chulgoReqs || []).filter(r => r.reqType === '출고' && (r.status || '') === '대기열');
+  if (!queue.length) { toast('대기열이 비어 있습니다'); return; }
+  if (!confirm(`대기열 ${queue.length}건을 모두 완료 처리할까요?\n(이미 기출고된 건 정리 · 재고는 그대로 유지)`)) return;
+  const now = Date.now();
+  for (const r of queue) { try { await Store.update('chulgoReqs', r.id, { status: '완료', dispatchId: r.dispatchId || ('D' + now + '_' + r.id), doneBy: (me && me.name) || '', doneAt: now, dispatchedAt: r.dispatchedAt || now, dispatchedBy: r.dispatchedBy || (me && me.name) || '' }); } catch (e) { } }
+  toast(`대기열 ${queue.length}건 완료 처리됨`); renderChulgo();
 }
 function chulgoDispatchDrivers() { return [...new Set((state.chulgoReqs || []).map(r => (r.driver || '').trim()).filter(d => d && d !== '업체 배차'))].sort((a, b) => a.localeCompare(b)); }
 function chulgoDispatchDests() { return [...new Set((state.chulgoReqs || []).map(r => (r.dispatchDest || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b)); }
@@ -4782,8 +4799,8 @@ function chulgoOfficeSection() {
   const times = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
   return `
     <div class="card" style="padding:13px 15px;margin-bottom:12px">
-      <div style="font-weight:700;font-size:14px;margin-bottom:3px"><i class="ti ti-list-check" style="color:var(--blue)"></i> 출고 대기열 <span style="font-size:12px;color:var(--t3)">(${queue.length}건)</span></div>
-      <div style="font-size:11.5px;color:var(--t3);margin-bottom:9px">출고 탭에서 출고를 등록하면 여기에 쌓입니다. 묶을 항목을 체크하고 배차 정보를 넣어 <b>출고 지시</b>를 내리면 창고에 소리로 알림이 갑니다.</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:3px"><div style="font-weight:700;font-size:14px"><i class="ti ti-list-check" style="color:var(--blue)"></i> 출고 대기열 <span style="font-size:12px;color:var(--t3)">(${queue.length}건)</span></div>${isAdmin() && queue.length ? `<button class="btn btn-ghost btn-sm" style="flex:none;color:var(--gd)" onclick="chulgoQueueCompleteAll()" title="이미 기출고된 대기열 전체를 완료 처리(관리자)"><i class="ti ti-checks"></i> 전체 완료</button>` : ''}</div>
+      <div style="font-size:11.5px;color:var(--t3);margin-bottom:9px">출고 탭에서 출고를 등록하면 여기에 쌓입니다. 묶을 항목을 체크하고 배차 정보를 넣어 <b>출고 지시</b>를 내리면 창고에 소리로 알림이 갑니다.${isAdmin() ? ' <span style="color:var(--gd)">관리자는 각 건의 ✓로 바로 완료 처리할 수 있습니다.</span>' : ''}</div>
       <div id="chulgo-queue" data-keepscroll style="max-height:38vh;overflow-y:auto;-webkit-overflow-scrolling:touch;border:0.5px solid var(--bd);border-radius:10px;margin-bottom:10px">${queue.length ? queue.map(chulgoQueueRow).join('') : `<div style="padding:18px;text-align:center;color:var(--t3);font-size:12.5px">대기열이 비어 있습니다.<br>출고 탭 → 출고 등록을 하면 여기로 올라옵니다.</div>`}</div>
       <div style="display:flex;gap:8px;margin-bottom:8px">
         <select id="dsp-driver-sel" onchange="chulgoDriverChanged()" style="flex:1.3;min-width:0;font-size:15px;padding:9px 10px;border:1.5px solid var(--bd2);border-radius:10px">
