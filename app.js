@@ -625,9 +625,34 @@ function pushStatus() {
   if (!('Notification' in window) || !pushSupported()) return 'unsupported';
   return Notification.permission; // default | granted | denied
 }
+function _wantChulgoPush() { try { return localStorage.getItem('wantChulgoPush') === '1'; } catch (e) { return false; } }
 async function _saveToken(token) {
   const id = token.replace(/[\/#?]/g, '_').slice(0, 1400);
-  await cref('pushTokens').doc(id).set({ token, name: me ? me.name : '', email: me ? me.email : '', ua: navigator.userAgent, updatedAt: Date.now() });
+  await cref('pushTokens').doc(id).set({ token, name: me ? me.name : '', email: me ? me.email : '', ua: navigator.userAgent, wantChulgo: _wantChulgoPush(), updatedAt: Date.now() });
+}
+/* 출고 지시 → 옵트인한 기기에 푸시 (Cloud Function 'chulgo' 액션 필요) */
+async function notifyChulgoDispatch(summary) {
+  try {
+    if (!CLOUD || !auth || !auth.currentUser) return;
+    const token = await auth.currentUser.getIdToken();
+    await fetch(PUSH_FN + '?action=chulgo', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ summary: summary || '', by: (me && me.name) || '' }) });
+  } catch (e) { }
+}
+function chulgoPushEnabled() { return _wantChulgoPush() && ('Notification' in window) && Notification.permission === 'granted'; }
+async function toggleChulgoPush() {
+  if (_wantChulgoPush()) {
+    try { localStorage.setItem('wantChulgoPush', '0'); } catch (e) { }
+    try { await refreshPushToken(); } catch (e) { }
+    toast('휴대폰 출고 지시 알림 꺼짐'); try { renderChulgo(); } catch (e) { }
+    return;
+  }
+  if (!pushSupported()) { toast('이 기기/브라우저는 알림 미지원 (아이폰은 홈 화면에 추가 후 사용)'); return; }
+  try { localStorage.setItem('wantChulgoPush', '1'); } catch (e) { }
+  if (Notification.permission === 'granted') { await refreshPushToken(); }
+  else { await enablePush(); }
+  if (chulgoPushEnabled()) toast('휴대폰 출고 지시 알림 켜짐 ✓ · 앱이 꺼져 있어도 알림이 옵니다');
+  else { try { localStorage.setItem('wantChulgoPush', '0'); } catch (e) { } toast('알림 권한이 없어 켜지 못했습니다'); }
+  try { renderChulgo(); } catch (e) { }
 }
 function bindForegroundPush() {
   if (_onMsgBound || !_pushMsg) return; _onMsgBound = true;
@@ -4865,6 +4890,7 @@ function renderChulgo() {
       <button type="button" class="${side === 'office' ? 'on' : ''}" onclick="chulgoGoSide('office')"><i class="ti ti-building" style="font-size:14px"></i> 사무실(배차·지시)</button>
       <button type="button" class="${side === 'warehouse' ? 'on' : ''}" onclick="chulgoGoSide('warehouse')"><i class="ti ti-building-warehouse" style="font-size:14px"></i> 창고${newN ? ` <b>${newN}</b>` : ''}</button>
     </div>
+    <button class="btn btn-sm btn-block" style="margin-bottom:10px;${chulgoPushEnabled() ? 'background:var(--gl2);border-color:var(--gbd);color:var(--gd)' : ''}" onclick="toggleChulgoPush()"><i class="ti ti-device-mobile"></i> 📱 휴대폰 출고 지시 알림 <b>${chulgoPushEnabled() ? '켜짐' : '꺼짐'}</b> · 눌러서 ${chulgoPushEnabled() ? '끄기' : '켜기'} <span style="font-weight:500;color:var(--t3)">(원하는 사람만 · 앱 꺼져도 수신)</span></button>
     ${side === 'office' ? chulgoOfficeSection() : chulgoWarehouseSection()}`;
 }
 async function issueDispatch() {
@@ -4884,7 +4910,11 @@ async function issueDispatch() {
   if (_busy) return; _busy = true;
   try {
     const dispatchId = 'D' + Date.now();
+    const selReqs = (state.chulgoReqs || []).filter(r => ids.includes(r.id));
+    const clients = [...new Set(selReqs.map(r => r.client).filter(Boolean))];
     for (const id of ids) { await Store.update('chulgoReqs', id, { status: '지시', dispatchId, vehicle: '', driver, companyDispatch: company, loadTime, packing, dispatchDest: dest, dispatchedAt: Date.now(), dispatchedBy: (me && me.name) || '' }); }
+    const summary = (clients.join(', ') || '출고') + (ids.length > 1 ? ` 외 ${ids.length}건` : '') + (packing ? ' · 📦포장' : '') + (dest ? ' → ' + dest : '');
+    notifyChulgoDispatch(summary);   // 옵트인한 휴대폰으로 푸시
     toast('출고 지시 ' + ids.length + '건 발령 · 창고에 알림 🔔');
     renderChulgo();
   } finally { setTimeout(() => { _busy = false; }, 600); }
