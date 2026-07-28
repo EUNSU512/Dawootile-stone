@@ -3152,6 +3152,7 @@ function renderShip() {
         <div style="font-size:13px;color:var(--t2)" id="r-sum">전체 기간</div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">${isAdmin() ? `<button class="btn btn-sm" onclick="autoLinkSoleLots()"><i class="ti ti-link"></i>미지정 롯트 자동연결</button>` : ''}<button class="btn btn-sm btn-pri" onclick="downloadShipXls()"><i class="ti ti-file-spreadsheet"></i>엑셀 다운로드</button></div>
       </div>
+      <div id="r-daily" style="margin-bottom:10px"></div>
       <div class="tbl-wrap" id="r-wrap" data-keepscroll style="max-height:340px;overflow:auto">
         <table class="tbl"><thead><tr><th>날짜</th><th>거래처</th><th>자재</th><th>장수</th><th>헤베</th><th>출고지</th></tr></thead><tbody id="r-body"></tbody></table>
       </div>
@@ -3253,6 +3254,24 @@ function shipReport() {
   const tj = list.reduce((a, b) => a + (+b.jang || 0), 0), th = list.reduce((a, b) => a + (+b.hebe || 0), 0);
   if (el('r-body')) el('r-body').innerHTML = list.length ? list.map(t => `<tr style="cursor:pointer" onclick="openOutEdit('${t.id}')" title="탭하면 롯트·패턴·장수 수정"><td>${esc(t.date || '')}</td><td><b>${esc(t.targetName || '')}</b></td><td>${esc(t.itemName || '')}${t.lot || t.pattern ? `<div style="font-size:10.5px;color:var(--t3)">${[t.lot ? '롯트 ' + esc(t.lot) : '', t.pattern ? '패턴 ' + esc(t.pattern) : ''].filter(Boolean).join(' · ')}</div>` : ''}</td><td>${+t.jang || 0}장</td><td>${(+t.hebe || 0).toFixed(1)}㎡</td><td>${esc(t.dest || t.factory || '')}</td></tr>`).join('') : `<tr><td colspan="6"><div class="empty" style="padding:18px"><i class="ti ti-search-off"></i>해당 출고 내역이 없습니다</div></td></tr>`;
   if (el('r-sum')) el('r-sum').innerHTML = `${list.length}건 · 합계 <b style="color:var(--t1)">${tj}장 · ${th.toFixed(1)}㎡</b>`;
+  if (el('r-daily')) {
+    const dmap = {};
+    list.forEach(t => { const d = t.date || '(미상)'; if (!dmap[d]) dmap[d] = { date: d, cnt: 0, jang: 0, hebe: 0 }; dmap[d].cnt++; dmap[d].jang += (+t.jang || 0); dmap[d].hebe += (+t.hebe || 0); });
+    const days = Object.values(dmap).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+    const wd = ['일', '월', '화', '수', '목', '금', '토'];
+    const dayLbl = d => { const p = String(d).split('-'); if (p.length !== 3) return esc(d); const dt = new Date(+p[0], +p[1] - 1, +p[2]); return `${+p[1]}/${+p[2]}<span style="color:var(--t3)">(${wd[dt.getDay()]})</span>`; };
+    el('r-daily').innerHTML = days.length ? `<details open><summary style="cursor:pointer;font-size:13px;font-weight:700;color:var(--t2);padding:4px 2px"><i class="ti ti-calendar-stats"></i> 일별 출고 <span style="font-weight:500;color:var(--t3)">· ${days.length}일 · 탭하면 그 날짜만 조회</span></summary>
+      <div class="tbl-wrap" style="max-height:200px;overflow:auto;margin-top:6px;border:0.5px solid var(--bd);border-radius:10px">
+        <table class="tbl"><thead><tr><th>날짜</th><th>건수</th><th>장수</th><th>헤베</th></tr></thead><tbody>
+        ${days.map(d => `<tr style="cursor:pointer" onclick="shipReportPickDay('${d.date}')" title="이 날짜만 조회"><td>${dayLbl(d.date)}</td><td>${d.cnt}건</td><td><b style="color:var(--t1)">${d.jang}장</b></td><td style="color:var(--gd)">${d.hebe.toFixed(1)}㎡</td></tr>`).join('')}
+        </tbody></table>
+      </div></details>` : '';
+  }
+}
+function shipReportPickDay(d) {
+  if (el('r-from')) el('r-from').value = d;
+  if (el('r-to')) el('r-to').value = d;
+  shipReport();
 }
 function downloadShipXls() {
   const list = shipReportList();
