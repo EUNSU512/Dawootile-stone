@@ -4763,21 +4763,46 @@ function chulgoDispatchCard(g, forWarehouse) {
 }
 function _chulgoDoneTs(g) { return (g.reqs.find(r => r.doneAt) || {}).doneAt || g.dispatchedAt || 0; }
 function _chulgoDoneDay(g) { const ts = _chulgoDoneTs(g); if (!ts) return '(날짜미상)'; const d = new Date(+ts); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+let _chulgoCalYM = '', _chulgoCalDay = '';
+function chulgoCalNav(delta) { const [y, m] = (_chulgoCalYM || todayStr().slice(0, 7)).split('-').map(Number); const d = new Date(y, m - 1 + delta, 1); _chulgoCalYM = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); _chulgoCalDay = ''; renderChulgo(); }
+function chulgoCalPick(key) { _chulgoCalDay = (_chulgoCalDay === key ? '' : key); renderChulgo(); }
 function chulgoCompletedSection() {
-  const done = chulgoDispatchGroups().filter(g => g.status === '완료').sort((a, b) => _chulgoDoneTs(b) - _chulgoDoneTs(a));
+  const done = chulgoDispatchGroups().filter(g => g.status === '완료');
   if (!done.length) return '';
   const wd = ['일', '월', '화', '수', '목', '금', '토'];
-  const dayLbl = day => { const p = String(day).split('-'); if (p.length !== 3) return esc(day); const dt = new Date(+p[0], +p[1] - 1, +p[2]); return `${+p[1]}/${+p[2]} <span style="color:var(--t3);font-weight:500">(${wd[dt.getDay()]})</span>`; };
-  const groupsByDay = {}; const order = [];
-  done.forEach(g => { const day = _chulgoDoneDay(g); if (!groupsByDay[day]) { groupsByDay[day] = []; order.push(day); } groupsByDay[day].push(g); });
-  const body = order.map(day => {
-    const gs = groupsByDay[day];
-    const cnt = gs.reduce((a, g) => a + g.reqs.length, 0);
-    return `<details ${order[0] === day ? 'open' : ''} style="margin-bottom:6px"><summary style="cursor:pointer;font-size:12.5px;font-weight:700;color:var(--t1);padding:7px 9px;background:var(--soft);border-radius:8px"><i class="ti ti-calendar" style="font-size:13px"></i> ${dayLbl(day)} <span style="color:var(--t3);font-weight:500">· 지시 ${gs.length}건 · 품목 ${cnt}건</span></summary>
-      <div style="padding:7px 2px 1px">${gs.map(chulgoCompletedRow).join('')}</div></details>`;
-  }).join('');
-  return `<details style="margin-top:14px"><summary style="font-size:13px;color:var(--t2);cursor:pointer;padding:6px 2px;font-weight:600"><i class="ti ti-checks"></i> 완료 내역 <span style="color:var(--t3);font-weight:400">(${done.length}건 · 일별 · 요청서 재인쇄/되돌리기 가능)</span></summary>
-    <div data-keepscroll style="margin-top:6px;max-height:52vh;overflow:auto">${body}</div></details>`;
+  const dayLbl = day => { const p = String(day).split('-'); if (p.length !== 3) return esc(day); const dt = new Date(+p[0], +p[1] - 1, +p[2]); return `${+p[0]}년 ${+p[1]}월 ${+p[2]}일 (${wd[dt.getDay()]})`; };
+  const byDay = {}; done.forEach(g => { const d = _chulgoDoneDay(g); (byDay[d] = byDay[d] || []).push(g); });
+  const allDays = Object.keys(byDay).sort();
+  if (!_chulgoCalYM) _chulgoCalYM = (allDays[allDays.length - 1] || todayStr()).slice(0, 7);
+  const [Y, M] = _chulgoCalYM.split('-').map(Number);
+  const startDow = new Date(Y, M - 1, 1).getDay();
+  const dim = new Date(Y, M, 0).getDate();
+  const cellBase = 'position:relative;min-height:40px;border:0.5px solid var(--bd);border-radius:8px;padding:3px 4px;text-align:left';
+  let cells = '';
+  for (let i = 0; i < startDow; i++) cells += `<div style="${cellBase};border-color:transparent"></div>`;
+  for (let d = 1; d <= dim; d++) {
+    const key = `${Y}-${String(M).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const gs = byDay[key] || []; const cnt = gs.length; const dow = (startDow + d - 1) % 7;
+    const dcol = dow === 0 ? '#c0341d' : (dow === 6 ? '#1b4fb0' : 'var(--t2)');
+    const sel = _chulgoCalDay === key;
+    const bg = sel ? 'background:#2f6fed;' : (cnt ? 'background:#eaf1ff;' : '');
+    const numCol = sel ? '#fff' : dcol;
+    cells += `<div ${cnt ? `onclick="chulgoCalPick('${key}')"` : ''} style="${cellBase};${bg}cursor:${cnt ? 'pointer' : 'default'}">
+      <div style="font-size:11.5px;font-weight:700;color:${numCol}">${d}</div>
+      ${cnt ? `<div style="position:absolute;right:3px;bottom:3px;background:${sel ? '#fff' : '#2f6fed'};color:${sel ? '#2f6fed' : '#fff'};border-radius:9px;min-width:16px;text-align:center;font-size:10.5px;font-weight:800;padding:0 4px;line-height:16px">${cnt}</div>` : ''}</div>`;
+  }
+  const monthTot = allDays.filter(d => d.slice(0, 7) === _chulgoCalYM).reduce((a, d) => a + byDay[d].length, 0);
+  const head = `<div style="display:flex;align-items:center;justify-content:space-between;margin:4px 2px 8px">
+      <button class="btn btn-ghost btn-sm" style="flex:none" onclick="chulgoCalNav(-1)"><i class="ti ti-chevron-left"></i></button>
+      <div style="font-size:14px;font-weight:800">${Y}년 ${M}월 <span style="font-size:11.5px;color:var(--t3);font-weight:500">· 완료 ${monthTot}건</span></div>
+      <button class="btn btn-ghost btn-sm" style="flex:none" onclick="chulgoCalNav(1)"><i class="ti ti-chevron-right"></i></button></div>`;
+  const dowRow = `<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px;margin-bottom:3px">${wd.map((w, i) => `<div style="text-align:center;font-size:10.5px;font-weight:700;color:${i === 0 ? '#c0341d' : (i === 6 ? '#1b4fb0' : 'var(--t3)')}">${w}</div>`).join('')}</div>`;
+  const grid = `<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:3px">${cells}</div>`;
+  const selList = (_chulgoCalDay && byDay[_chulgoCalDay])
+    ? `<div style="margin-top:10px"><div style="font-size:12.5px;font-weight:700;margin:0 2px 6px"><i class="ti ti-calendar-event" style="font-size:13px"></i> ${dayLbl(_chulgoCalDay)} · ${byDay[_chulgoCalDay].length}건</div><div data-keepscroll style="max-height:40vh;overflow:auto">${byDay[_chulgoCalDay].sort((a, b) => _chulgoDoneTs(b) - _chulgoDoneTs(a)).map(chulgoCompletedRow).join('')}</div></div>`
+    : `<div style="font-size:12px;color:var(--t3);text-align:center;padding:12px 6px">파란 숫자 배지가 있는 날짜를 누르면 그날 완료된 출고가 나옵니다.</div>`;
+  return `<details style="margin-top:14px"><summary style="font-size:13px;color:var(--t2);cursor:pointer;padding:6px 2px;font-weight:600"><i class="ti ti-calendar-check"></i> 완료 내역 <span style="color:var(--t3);font-weight:400">(달력 · ${done.length}건 · 재인쇄/되돌리기)</span></summary>
+    <div style="margin-top:8px;border:0.5px solid var(--bd);border-radius:12px;padding:10px 11px;background:#fff">${head}${dowRow}${grid}${selList}</div></details>`;
 }
 function chulgoCompletedRow(g) {
   const doneAt = (g.reqs.find(r => r.doneAt) || {}).doneAt;
