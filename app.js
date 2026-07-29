@@ -4761,6 +4761,35 @@ function chulgoDispatchCard(g, forWarehouse) {
     </div>
   </div>`;
 }
+function chulgoCompletedSection() {
+  const done = chulgoDispatchGroups().filter(g => g.status === '완료')
+    .sort((a, b) => (((b.reqs.find(r => r.doneAt) || {}).doneAt || b.dispatchedAt || 0) - ((a.reqs.find(r => r.doneAt) || {}).doneAt || a.dispatchedAt || 0))).slice(0, 60);
+  if (!done.length) return '';
+  return `<details style="margin-top:14px"><summary style="font-size:13px;color:var(--t2);cursor:pointer;padding:6px 2px;font-weight:600"><i class="ti ti-checks"></i> 완료 내역 <span style="color:var(--t3);font-weight:400">(${done.length}건 · 최근순 · 요청서 재인쇄/되돌리기 가능)</span></summary>
+    <div data-keepscroll style="border:0.5px solid var(--bd);border-radius:12px;padding:8px 9px 1px;background:#fff;margin-top:6px;max-height:48vh;overflow:auto">${done.map(chulgoCompletedRow).join('')}</div></details>`;
+}
+function chulgoCompletedRow(g) {
+  const doneAt = (g.reqs.find(r => r.doneAt) || {}).doneAt;
+  const when = doneAt ? new Date(+doneAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+  const doneBy = (g.reqs.find(r => r.doneBy) || {}).doneBy || '';
+  return `<div class="card" style="margin-bottom:8px;padding:9px 11px;border-left:3px solid #9ca3af">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start">
+      <div style="min-width:0"><div style="font-weight:700;font-size:13px">${esc(g.clients.join(', ') || '-')}${g.reqs.length > 1 ? ` <span style="font-size:10.5px;color:var(--t3)">(${g.reqs.length}건)</span>` : ''}</div>
+        <div style="font-size:10.5px;color:var(--t3);margin-top:1px">완료 ${when}${doneBy ? ' · ' + esc(doneBy) : ''}</div></div>
+      <span class="pill p-done" style="flex:none">완료</span></div>
+    <div class="frm-foot" style="margin-top:7px">
+      <button class="btn btn-sm" onclick="chulgoPrintDispatch('${g.dispatchId}')"><i class="ti ti-printer"></i>요청서</button>
+      ${isAdmin() ? `<button class="btn btn-sm" style="color:var(--blue)" onclick="chulgoRestoreDispatch('${g.dispatchId}')" title="진행 중(지시)으로 되돌림"><i class="ti ti-arrow-back-up"></i>되돌리기</button>` : ''}
+    </div></div>`;
+}
+async function chulgoRestoreDispatch(dispatchId) {
+  if (!isAdmin()) { toast('관리자만 되돌릴 수 있습니다'); return; }
+  const reqs = (state.chulgoReqs || []).filter(r => r.dispatchId === dispatchId && (r.status || '') === '완료');
+  if (!reqs.length) { toast('되돌릴 건이 없습니다'); return; }
+  if (!confirm(`이 완료건(${reqs.length}건)을 진행 중(지시)으로 되돌릴까요?`)) return;
+  for (const r of reqs) { try { await Store.update('chulgoReqs', r.id, { status: '지시', doneAt: 0, doneBy: '' }); } catch (e) { } }
+  toast('진행 중(지시)으로 되돌림'); renderChulgo();
+}
 function chulgoHandlerNames() { return (state.chulgoHandlers || []).map(h => (h.name || h.value || '').trim()).filter(Boolean).sort((a, b) => a.localeCompare(b)); }
 function chulgoAckDispatch(dispatchId) { openChulgoAckModal(dispatchId); }
 function openChulgoAckModal(dispatchId) {
@@ -4911,7 +4940,7 @@ function chulgoTogglePack() {
   else { b.style.background = ''; b.style.borderColor = ''; b.style.color = ''; b.innerHTML = '<i class="ti ti-package"></i> 포장 건 — 누르면 표시'; }
 }
 function chulgoOfficeSection() {
-  const queue = (state.chulgoReqs || []).filter(r => r.reqType === '출고' && (r.status || '') === '대기열').sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
+  const queue = (state.chulgoReqs || []).filter(r => r.reqType === '출고' && ['대기열', '대기'].includes(r.status || '')).sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
   const active = chulgoDispatchGroups().filter(g => g.status !== '완료');
   const drivers = chulgoDispatchDrivers(), dests = chulgoDispatchDests();
   const times = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
@@ -4941,6 +4970,7 @@ function chulgoOfficeSection() {
     </div>
     <div style="font-size:12px;font-weight:600;color:var(--t2);margin:2px 2px 6px">진행 중 지시</div>
     ${active.length ? `<div id="chulgo-active" data-keepscroll style="max-height:40vh;overflow-y:auto;-webkit-overflow-scrolling:touch;border:0.5px solid var(--bd);border-radius:12px;padding:9px 9px 1px;background:#fff">${active.map(g => chulgoDispatchCard(g, false)).join('')}</div>` : `<div class="empty" style="padding:14px"><i class="ti ti-inbox"></i>진행 중 지시가 없습니다</div>`}
+    ${chulgoCompletedSection()}
     <details style="margin-top:14px"><summary style="font-size:13px;color:var(--t2);cursor:pointer;padding:6px 2px"><i class="ti ti-plus"></i> 입고 · 입고알림 직접 등록</summary>
       <div class="card" style="padding:13px 15px;margin-top:8px">
         <div style="display:flex;gap:8px;margin-bottom:8px">
@@ -4973,7 +5003,7 @@ function chulgoWarehouseSection() {
     ? `<button class="btn btn-sm btn-block" style="margin-bottom:9px;background:var(--gl2);border-color:var(--gbd);color:var(--gd)" onclick="chulgoDisarmAudio()"><i class="ti ti-bell-ringing"></i> 🔔 알림 소리 <b>켜짐</b> · 눌러서 끄기 <span style="font-weight:500;color:var(--t3)">(새 지시가 오면 접수할 때까지 울려요)</span></button>`
     : `<button class="btn btn-sm btn-block" style="margin-bottom:9px;background:#fff6e6;border-color:#f0c060;color:#8a5a00" onclick="chulgoPrimeAudio()"><i class="ti ti-bell-off"></i> 알림 소리 <b>꺼짐</b> · 눌러서 켜기 <span style="font-weight:500;color:var(--t3)">(이 기기 · 새 지시가 오면 소리로 알려요)</span></button>`;
   return `${alarmBtn}
-    <div style="font-size:12px;color:var(--t3);margin:2px 0 8px"><span class="live-dot" style="background:#1D9E75;--pc:rgba(29,158,117,.6);width:7px;height:7px;display:inline-block;vertical-align:middle;margin-right:5px"></span>실시간 · 새 출고 지시 <b style="color:#c0341d">${newN}건</b></div>${box}${inBox}`;
+    <div style="font-size:12px;color:var(--t3);margin:2px 0 8px"><span class="live-dot" style="background:#1D9E75;--pc:rgba(29,158,117,.6);width:7px;height:7px;display:inline-block;vertical-align:middle;margin-right:5px"></span>실시간 · 새 출고 지시 <b style="color:#c0341d">${newN}건</b></div>${box}${inBox}${chulgoCompletedSection()}`;
 }
 function renderChulgo() {
   const side = chulgoSide();
