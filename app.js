@@ -3178,21 +3178,29 @@ function parseThick(name, spec) {
   if (parts.length >= 2) { const last = parseInt(parts[parts.length - 1], 10); if (!isNaN(last) && last > 0 && last <= 50) return last + 'T'; }   // 타일 두께로 볼 만한 값(≤50mm)만
   return '';
 }
-/* 출고 두께별 장수 집계 (조건: 날짜 predicate). 두께는 명칭·규격에서 파악, 없으면 재고 규격 참조 */
+/* 출고 두께별 장수 집계 (조건: 날짜 predicate). 두께는 명칭·규격에서 파악, 세면대는 별도(개) */
 function shipThickAgg(pred) {
   const m = {}; let total = 0;
   (state.transactions || []).forEach(t => {
     if (t.type !== 'out') return; if (!pred(t.date || '')) return; const j = +t.jang || 0; if (j <= 0) return;
-    let spec = t.spec || ''; if (!spec) { const it = (state.inventory || []).find(i => _normName(i.name) === _normName(t.itemName)); if (it) spec = it.spec || ''; }
-    const key = parseThick(t.itemName, spec) || '기타';
+    const it = (state.inventory || []).find(i => _normName(i.name) === _normName(t.itemName));
+    let spec = t.spec || ''; if (!spec && it) spec = it.spec || '';
+    const isBasin = /세면대/.test(t.itemName || '') || (it && itemCat(it) === '세면대');
+    const key = isBasin ? '세면대' : (parseThick(t.itemName, spec) || '기타');
     m[key] = (m[key] || 0) + j; total += j;
   });
   return { total, m };
 }
 function thickChipsHtml(agg) {
-  const keys = Object.keys(agg.m).sort((a, b) => { const na = parseInt(a); const nb = parseInt(b); if (isNaN(na)) return 1; if (isNaN(nb)) return -1; return nb - na; });
+  const rank = k => k === '세면대' ? -2 : (k === '기타' ? -3 : (parseInt(k) || 0));   // 두께 큰 순 → 세면대 → 기타
+  const keys = Object.keys(agg.m).sort((a, b) => rank(b) - rank(a));
   if (!keys.length) return '<span style="color:var(--t3)">출고 없음</span>';
-  return keys.map(k => `<span style="display:inline-block;background:#eaf1ff;color:#1b4fb0;border-radius:7px;padding:2px 8px;font-size:12.5px;font-weight:700;margin:2px 4px 2px 0">${esc(k.replace('T', '티'))} <b>${agg.m[k]}</b>장</span>`).join('');
+  return keys.map(k => {
+    const unit = k === '세면대' ? '개' : '장';
+    const label = k === '세면대' ? '세면대' : (k === '기타' ? '기타' : k.replace('T', '티'));
+    const col = k === '세면대' ? 'background:#eef7ee;color:#256b2a' : (k === '기타' ? 'background:#f2f2f0;color:#555' : 'background:#eaf1ff;color:#1b4fb0');
+    return `<span style="display:inline-block;${col};border-radius:7px;padding:2px 8px;font-size:12.5px;font-weight:700;margin:2px 4px 2px 0">${esc(label)} <b>${agg.m[k]}</b>${unit}</span>`;
+  }).join('');
 }
 function renderShip() {
   const _shipSY = window.scrollY, _shipTW = el('r-wrap') ? el('r-wrap').scrollTop : 0;   // 재렌더 후 스크롤 위치 유지
