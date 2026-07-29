@@ -3167,12 +3167,26 @@ function filterShipSlips() {
   if (el('slip-list')) el('slip-list').innerHTML = shipSlipListHtml();
   const x = el('slip-search-x'); if (x) x.style.display = (filters.slipSearch || '').trim() ? '' : 'none';
 }
-/* 자재명에서 두께(티) 추출: "…12T","…6티" → "12T" / 없으면 '' */
-function parseThick(name) { const m = String(name || '').match(/(\d{1,3})\s*(?:T|t|티)(?![a-zA-Z가-힣])/); return m ? m[1] + 'T' : ''; }
-/* 출고 두께별 장수 집계 (조건: 날짜 predicate) */
+/* 두께(티) 추출: ① 자재명 "…12T/6티" ② 규격 마지막 치수(예: 1600*3200*12 → 12) / 없으면 '' */
+function parseThick(name, spec) {
+  const nm = String(name || '').match(/(\d{1,3})\s*(?:T|t|티)(?![a-zA-Z가-힣])/);
+  if (nm) return nm[1] + 'T';
+  const s = String(spec || '');
+  const st = s.match(/(\d{1,3})\s*(?:T|t|티)(?![a-zA-Z가-힣])/);   // 규격에 "12T" 형태
+  if (st) return st[1] + 'T';
+  const parts = s.split(/[*xX×]/).map(x => (x.match(/\d+/) || [''])[0]).filter(Boolean);   // 규격 W*H*두께
+  if (parts.length >= 2) { const last = parseInt(parts[parts.length - 1], 10); if (!isNaN(last) && last > 0 && last <= 50) return last + 'T'; }   // 타일 두께로 볼 만한 값(≤50mm)만
+  return '';
+}
+/* 출고 두께별 장수 집계 (조건: 날짜 predicate). 두께는 명칭·규격에서 파악, 없으면 재고 규격 참조 */
 function shipThickAgg(pred) {
   const m = {}; let total = 0;
-  (state.transactions || []).forEach(t => { if (t.type !== 'out') return; if (!pred(t.date || '')) return; const j = +t.jang || 0; if (j <= 0) return; const key = parseThick(t.itemName) || '기타'; m[key] = (m[key] || 0) + j; total += j; });
+  (state.transactions || []).forEach(t => {
+    if (t.type !== 'out') return; if (!pred(t.date || '')) return; const j = +t.jang || 0; if (j <= 0) return;
+    let spec = t.spec || ''; if (!spec) { const it = (state.inventory || []).find(i => _normName(i.name) === _normName(t.itemName)); if (it) spec = it.spec || ''; }
+    const key = parseThick(t.itemName, spec) || '기타';
+    m[key] = (m[key] || 0) + j; total += j;
+  });
   return { total, m };
 }
 function thickChipsHtml(agg) {
