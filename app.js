@@ -29,7 +29,9 @@ function prefillEmail() {
 }
 function cref(name) { return db.collection('teams').doc(TEAM).collection(name); }
 
-const COLLS = ['members', 'sites', 'inventory', 'holdings', 'transactions', 'specs', 'factories', 'teams', 'suppliers', 'clients', 'issues', 'restocks', 'basins', 'holdRequests', 'shipments', 'chulgoReqs', 'chulgoHandlers', 'quotes', 'clientPrices'];
+const COLLS = ['members', 'sites', 'inventory', 'holdings', 'transactions', 'specs', 'factories', 'teams', 'suppliers', 'clients', 'issues', 'restocks', 'basins', 'holdRequests', 'shipments', 'chulgoReqs', 'chulgoHandlers', 'quotes', 'clientPrices', 'priceList', 'appmeta'];
+const CTYPES = ['유통', '인테리어', '소비자'];   // 거래처 유형
+function ctypeKey(t) { return t === '유통' ? 'dist' : (t === '인테리어' ? 'interior' : 'consumer'); }
 
 // 로컬(미리보기) 모드용 - 같은 기기의 다른 탭끼리 실시간 반영
 const bc = ('BroadcastChannel' in window) ? new BroadcastChannel('dws') : null;
@@ -707,6 +709,7 @@ function goD(t) { closeDrawer(); go(t); }
 
 function go(t) {
   if (isRestrictedRole()) t = 'stock';   // 고객·시공팀은 전용 화면만
+  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; }   // 견적 화면 상태 초기화
   tab = t;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-i').forEach(n => n.classList.toggle('active', n.dataset.tab === t));
@@ -3353,11 +3356,16 @@ function openTopClients() {
    =================================================================== */
 function fmtWon(n) { return Math.round(+n || 0).toLocaleString('ko-KR'); }
 function _numv(v) { return parseFloat(String(v == null ? '' : v).replace(/,/g, '')) || 0; }
-/* 단가 조회: 거래처별 단가 우선 → 기본단가(client='') → 품목 price */
-function quoteGetPrice(client, name) {
+/* 거래처 유형(유통/인테리어/소비자) — 거래처 문서 ctype, 기본 소비자 */
+function clientType(name) { const c = (state.clients || []).find(x => _normName(x.value) === _normName(name)); return (c && c.ctype) || '소비자'; }
+/* 견적 비고 기본 양식 */
+function quoteMemoTemplate() { const m = (state.appmeta || []).find(x => x.key === 'quoteMemo'); return m ? (m.text || '') : ''; }
+/* 단가 조회: ① 거래처 개별단가(override) ② 유형별 단가표 ③ 품목 price */
+function quoteGetPrice(client, name, typeOverride) {
   const cn = _normName(client || ''), nm = _normName(name || ''); const cps = state.clientPrices || [];
   if (client && client.trim()) { const hit = cps.find(p => (p.client || '').trim() && _normName(p.client) === cn && _normName(p.itemName) === nm); if (hit) return +hit.price || 0; }
-  const base = cps.find(p => !(p.client || '').trim() && _normName(p.itemName) === nm); if (base) return +base.price || 0;
+  const type = typeOverride || clientType(client); const pl = (state.priceList || []).find(p => _normName(p.itemName) === nm);
+  if (pl) { const v = +pl[ctypeKey(type)] || 0; if (v) return v; }
   const it = (state.inventory || []).find(i => _normName(i.name) === nm); return it ? (+it.price || 0) : 0;
 }
 function quoteNextDocNo() { const d = todayStr().replace(/-/g, ''); const n = (state.quotes || []).filter(q => (q.docNo || '').startsWith('Q' + d)).length; return 'Q' + d + '-' + (n + 1); }
@@ -3382,12 +3390,20 @@ function quoteMatPick(inp) {
   const it = (state.inventory || []).find(x => _normName(x.name) === _normName(name));
   const specEl = row.querySelector('.q-spec'); if (it && specEl && !specEl.value.trim()) specEl.value = it.spec || '';
   const client = (el('q-client') && el('q-client').value || '').trim();
-  const priceEl = row.querySelector('.q-price'); const p = quoteGetPrice(client, name); if (p && !_numv(priceEl.value)) priceEl.value = p;
+  const type = el('q-ctype') ? el('q-ctype').value : '';
+  const priceEl = row.querySelector('.q-price'); const p = quoteGetPrice(client, name, type); if (p && !_numv(priceEl.value)) priceEl.value = p;
   quoteRecalc();
 }
 function quoteClientChanged() {
   const client = (el('q-client') && el('q-client').value || '').trim();
-  document.querySelectorAll('#q-rows .q-row').forEach(r => { const name = (r.querySelector('.q-mat').value || '').trim(); if (!name) return; const p = quoteGetPrice(client, name); if (p) r.querySelector('.q-price').value = p; });
+  const cs = el('q-ctype'); if (cs) cs.value = clientType(client);
+  quoteRefillPrices();
+}
+function quoteTypeChanged() { quoteRefillPrices(); }
+function quoteRefillPrices() {
+  const client = (el('q-client') && el('q-client').value || '').trim();
+  const type = el('q-ctype') ? el('q-ctype').value : '';
+  document.querySelectorAll('#q-rows .q-row').forEach(r => { const name = (r.querySelector('.q-mat').value || '').trim(); if (!name) return; const p = quoteGetPrice(client, name, type); if (p) r.querySelector('.q-price').value = p; });
   quoteRecalc();
 }
 function quoteRecalc() {
@@ -3414,7 +3430,10 @@ function renderQuoteForm() {
       <button class="btn btn-sm" onclick="quoteCancel()"><i class="ti ti-arrow-left"></i> 목록</button></div>
     <div id="qform-root" class="card" style="padding:15px 17px">
       <div class="frm" style="display:block">
-        <div class="fld full" style="margin-bottom:10px"><label>거래처 <span class="req">*</span></label>${searchBox('q-client', '업체명 검색·입력', v.client || '', 'companyNames', 'quoteClientChanged')}</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+          <div class="fld" style="flex:2;min-width:180px;margin:0"><label>거래처 <span class="req">*</span></label>${searchBox('q-client', '업체명 검색·입력', v.client || '', 'companyNames', 'quoteClientChanged')}</div>
+          <div class="fld" style="flex:1;min-width:130px;margin:0"><label>단가 유형</label><select id="q-ctype" onchange="quoteTypeChanged()" style="width:100%;font-size:15px;padding:9px 10px;border:1.5px solid var(--bd2);border-radius:10px">${CTYPES.map(t => `<option ${((editing && v.ctype) || clientType(v.client || '')) === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+        </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
           <div class="fld" style="flex:1;min-width:150px;margin:0"><label>견적일</label><input type="date" id="q-date" value="${esc((editing && v.date) || todayStr())}"></div>
           <div class="fld" style="flex:1;min-width:150px;margin:0"><label>유효기간</label><input id="q-valid" lang="ko" value="${esc(v.valid || '견적일로부터 15일')}"></div>
@@ -3425,7 +3444,7 @@ function renderQuoteForm() {
           <datalist id="q-mat-list">${matOpts}</datalist>
           <button type="button" class="btn btn-ghost btn-sm btn-block" onclick="addQRow()"><i class="ti ti-plus"></i>품목 추가</button>
         </div>
-        <div class="fld full" style="margin-bottom:10px"><label>비고</label><textarea id="q-memo" lang="ko" placeholder="결제조건·납기 등 (선택)" style="min-height:52px">${esc(v.memo || '')}</textarea></div>
+        <div class="fld full" style="margin-bottom:10px"><label>비고 <span style="color:var(--t3);font-weight:500">(기본 양식은 견적 설정에서 관리)</span></label><textarea id="q-memo" lang="ko" placeholder="결제조건·납기 등" style="min-height:64px">${esc(editing ? (v.memo || '') : (v.memo || quoteMemoTemplate()))}</textarea></div>
         <div style="background:var(--soft);border-radius:11px;padding:12px 14px;max-width:360px;margin-left:auto">
           <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:5px"><span style="color:var(--t2)">공급가액</span><b id="q-supply">0</b></div>
           <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:7px"><span style="color:var(--t2)">부가세 (10%)</span><b id="q-vat">0</b></div>
@@ -3445,17 +3464,19 @@ function collectQItems() {
   });
   return items;
 }
-async function quoteSavePrice(client, name, price) {
-  if (!name || !(price > 0)) return; const cps = state.clientPrices || [];
-  const cn = (client || '').trim();
-  if (cn) { const ex = cps.find(p => (p.client || '').trim() && _normName(p.client) === _normName(cn) && _normName(p.itemName) === _normName(name)); if (ex) { if ((+ex.price || 0) !== price) await Store.update('clientPrices', ex.id, { price }); } else await Store.add('clientPrices', { client: cn, itemName: name, price }); }
-  const base = cps.find(p => !(p.client || '').trim() && _normName(p.itemName) === _normName(name)); if (!base) await Store.add('clientPrices', { client: '', itemName: name, price });
+/* 견적 저장 시 유형별 단가표에 반영(학습) */
+async function quoteLearnPrice(type, name, price) {
+  if (!name || !(price > 0)) return; const key = ctypeKey(type);
+  const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(name));
+  if (pl) { if ((+pl[key] || 0) !== price) { const patch = {}; patch[key] = price; await Store.update('priceList', pl.id, patch); } }
+  else { const obj = { itemName: name, dist: 0, interior: 0, consumer: 0 }; obj[key] = price; await Store.add('priceList', obj); }
 }
 async function submitQuote(id) {
   const client = (el('q-client') && el('q-client').value || '').trim();
   if (!client) { toast('거래처를 입력하세요'); return; }
   const items = collectQItems();
   if (!items.length) { toast('견적 품목과 수량을 입력하세요'); return; }
+  const ctype = (el('q-ctype') && el('q-ctype').value) || '소비자';
   const date = (el('q-date') && el('q-date').value) || todayStr();
   const valid = (el('q-valid') && el('q-valid').value || '').trim();
   const attn = (el('q-attn') && el('q-attn').value || '').trim();
@@ -3466,10 +3487,11 @@ async function submitQuote(id) {
     await ensureClient(client);
     const q = id ? (state.quotes || []).find(x => x.id === id) : null;
     const docNo = (q && q.docNo) || quoteNextDocNo();
-    const data = { docNo, client, date, valid, attn, items, supply, vat, total, memo, by: (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
+    const data = { docNo, client, ctype, date, valid, attn, items, supply, vat, total, memo, by: (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
     if (id) await Store.update('quotes', id, data); else await Store.add('quotes', data);
-    for (const it of items) { try { await quoteSavePrice(client, it.name, +it.price || 0); } catch (e) { } }   // 단가 기억(거래처·기본)
-    filters.quoteEdit = ''; filters.quoteCopy = false; toast(id ? '견적 저장됨' : '견적 저장 · 단가 기억됨'); renderQuote();
+    try { const cdoc = (state.clients || []).find(x => _normName(x.value) === _normName(client)); if (cdoc && (cdoc.ctype || '') !== ctype) await Store.update('clients', cdoc.id, { ctype }); } catch (e) { }   // 거래처 유형 기억
+    for (const it of items) { try { await quoteLearnPrice(ctype, it.name, +it.price || 0); } catch (e) { } }   // 유형별 단가표 학습
+    filters.quoteEdit = ''; filters.quoteCopy = false; toast(id ? '견적 저장됨' : '견적 저장 · 유형별 단가 반영됨'); renderQuote();
   } finally { setTimeout(() => { _busy = false; }, 500); }
 }
 async function delQuote(id) {
@@ -3485,7 +3507,73 @@ function quoteToShip(id) {
   openShipForm({ targetName: q.client, items: (q.items || []).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' })) });
   toast('견적 품목을 출고 등록 폼에 불러왔습니다 · 확인 후 등록하세요');
 }
+/* ── 견적 기본설정: 비고 양식 · 거래처 유형 · 자재별 유형단가 ── */
+function openQuoteSettings() { filters.quoteSettings = true; renderQuote(); }
+function quoteSettingsClose() { filters.quoteSettings = false; renderQuote(); }
+async function saveQuoteMemo() {
+  const t = (el('qs-memo') && el('qs-memo').value || '');
+  const ex = (state.appmeta || []).find(x => x.key === 'quoteMemo');
+  if (ex) await Store.update('appmeta', ex.id, { text: t }); else await Store.add('appmeta', { key: 'quoteMemo', text: t });
+  toast('비고 기본 양식 저장됨');
+}
+async function setClientTypeSetting(id, type) { try { await Store.update('clients', id, { ctype: type }); } catch (e) { } }
+async function savePriceRow(itemName) {
+  const row = document.querySelector(`.qs-prow[data-nm="${CSS.escape(itemName)}"]`); if (!row) return;
+  const dist = _numv(row.querySelector('.qsp-dist').value), interior = _numv(row.querySelector('.qsp-int').value), consumer = _numv(row.querySelector('.qsp-con').value);
+  const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(itemName));
+  if (pl) await Store.update('priceList', pl.id, { dist, interior, consumer }); else await Store.add('priceList', { itemName, dist, interior, consumer });
+  const ok = row.querySelector('.qsp-ok'); if (ok) { ok.style.opacity = 1; setTimeout(() => { ok.style.opacity = 0; }, 1200); }
+}
+function _qsClientRowsHtml() {
+  const clSearch = (filters.qsClientSearch || '').trim().toLowerCase();
+  let clients = (state.clients || []).slice().sort((a, b) => (a.value || '').localeCompare(b.value || ''));
+  if (clSearch) clients = clients.filter(c => (c.value || '').toLowerCase().includes(clSearch));
+  return clients.slice(0, 300).map(c => `<div class="mem"><div class="info"><div class="nm">${esc(c.value)}</div></div>
+    <select onchange="setClientTypeSetting('${c.id}',this.value)" style="font-size:13px;padding:6px 8px;border:1.5px solid var(--bd2);border-radius:8px">${CTYPES.map(t => `<option ${((c.ctype) || '소비자') === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>`).join('') || '<div style="font-size:12.5px;color:var(--t3);padding:8px">거래처가 없습니다.</div>';
+}
+function _qsPriceRowsHtml() {
+  const matSearch = (filters.qsMatSearch || '').trim().toLowerCase();
+  let mats = (state.inventory || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  if (matSearch) mats = mats.filter(i => (i.name || '').toLowerCase().includes(matSearch) || (i.spec || '').toLowerCase().includes(matSearch));
+  const inp = 'width:100%;font-size:13px;padding:7px 6px;border:1.5px solid var(--bd2);border-radius:8px;text-align:right';
+  return mats.slice(0, 120).map(i => { const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(i.name)) || {}; const nm = esc(i.name).replace(/'/g, "\\'");
+    return `<tr class="qs-prow" data-nm="${esc(i.name)}"><td style="text-align:left"><b>${esc(i.name)}</b>${i.spec ? `<div style="font-size:10.5px;color:var(--t3)">${esc(i.spec)}</div>` : ''}</td>
+      <td><input class="qsp-dist" inputmode="numeric" value="${esc(pl.dist || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
+      <td><input class="qsp-int" inputmode="numeric" value="${esc(pl.interior || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
+      <td><input class="qsp-con" inputmode="numeric" value="${esc(pl.consumer || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
+      <td style="width:22px"><i class="ti ti-check qsp-ok" style="color:var(--gd);opacity:0;transition:opacity .2s"></i></td></tr>`; }).join('') || '<tr><td colspan="5"><div class="empty" style="padding:14px">자재가 없습니다</div></td></tr>';
+}
+function qsFilterClients(v) { filters.qsClientSearch = v; const c = el('qs-clients'); if (c) c.innerHTML = _qsClientRowsHtml(); }
+function qsFilterPrices(v) { filters.qsMatSearch = v; const b = document.querySelector('#qs-prices tbody'); if (b) b.innerHTML = _qsPriceRowsHtml(); }
+function renderQuoteSettings() {
+  const memo = quoteMemoTemplate();
+  el('pg-quote').innerHTML = `
+    <div class="ph"><div><h2><i class="ti ti-settings"></i>견적 기본설정</h2><p>비고 양식 · 거래처 유형 · 자재별 유형단가</p></div>
+      <button class="btn btn-sm" onclick="quoteSettingsClose()"><i class="ti ti-arrow-left"></i> 견적 목록</button></div>
+    <div id="qset-root">
+      <div class="card" style="margin-bottom:12px;padding:13px 15px">
+        <div class="card-h"><h3><i class="ti ti-note"></i>비고 기본 양식</h3></div>
+        <div style="font-size:11.5px;color:var(--t3);margin-bottom:7px">새 견적을 작성할 때 비고란에 자동으로 채워집니다.</div>
+        <textarea id="qs-memo" lang="ko" placeholder="예) · 부가세 별도\n· 결제: 계약금 50%, 잔금 납품 시\n· 납기: 발주 후 7일\n· 유효기간: 견적일로부터 15일" style="width:100%;min-height:110px;font-size:14px;padding:10px;border:1.5px solid var(--bd2);border-radius:10px">${esc(memo)}</textarea>
+        <button class="btn btn-pri btn-sm btn-block" style="margin-top:8px" onclick="saveQuoteMemo()"><i class="ti ti-check"></i>비고 양식 저장</button>
+      </div>
+      <div class="card" style="margin-bottom:12px;padding:13px 15px">
+        <div class="card-h"><h3><i class="ti ti-users"></i>거래처 유형</h3><span class="more" style="font-size:11px;color:var(--t3)">유통 · 인테리어 · 소비자</span></div>
+        <div class="search-box" style="margin-bottom:8px"><i class="ti ti-search"></i><input placeholder="거래처 검색" value="${esc(filters.qsClientSearch || '')}" oninput="qsFilterClients(this.value)" autocomplete="off" lang="ko"></div>
+        <div data-keepscroll id="qs-clients" style="max-height:300px;overflow:auto;border:0.5px solid var(--bd);border-radius:10px;padding:2px 8px">${_qsClientRowsHtml()}</div>
+      </div>
+      <div class="card" style="padding:13px 15px">
+        <div class="card-h"><h3><i class="ti ti-currency-won"></i>자재별 유형단가</h3><span class="more" style="font-size:11px;color:var(--t3)">칸에 입력하면 자동 저장</span></div>
+        <div class="search-box" style="margin-bottom:8px"><i class="ti ti-search"></i><input placeholder="자재명·규격 검색" value="${esc(filters.qsMatSearch || '')}" oninput="qsFilterPrices(this.value)" autocomplete="off" lang="ko"></div>
+        <div data-keepscroll id="qs-prices" style="max-height:52vh;overflow:auto">
+          <table class="tbl"><thead><tr><th style="text-align:left">자재</th><th>유통</th><th>인테리어</th><th>소비자</th><th></th></tr></thead><tbody>${_qsPriceRowsHtml()}</tbody></table>
+        </div>
+        <div style="font-size:11px;color:var(--t3);margin-top:6px">단가는 칸을 벗어나면(Tab/클릭) 자동 저장됩니다. 상위 120개 표시 — 검색으로 좁혀주세요.</div>
+      </div>
+    </div>`;
+}
 function renderQuote() {
+  if (filters.quoteSettings) { if (!document.getElementById('qset-root')) renderQuoteSettings(); return; }   // 설정 화면
   if (filters.quoteEdit) { if (!document.getElementById('qform-root')) renderQuoteForm(); return; }   // 편집 중엔 실시간 재렌더로 폼을 덮어쓰지 않음
   const qy = (filters.quoteSearch || '').trim().toLowerCase();
   const all = (state.quotes || []);
@@ -3519,7 +3607,7 @@ function renderQuote() {
   }).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${qy ? '검색 결과가 없습니다' : '작성한 견적이 없습니다. 견적 작성으로 시작하세요.'}</div>`;
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
-      <button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div>
+      <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
       <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(unpaid)}</div><div class="l">미수금(미결제)</div></div>
       <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행</div></div>
