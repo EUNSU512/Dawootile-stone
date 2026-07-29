@@ -3283,6 +3283,10 @@ function renderShip() {
     <div class="card ship-sec" data-tab="stats" style="${shd('stats')}">
       <div class="card-h"><h3><i class="ti ti-chart-bar"></i>월별 출고 현황</h3><span class="more" style="font-size:11.5px;color:var(--t3)">${year}년 · 월 클릭 시 아래 분석 필터${selM ? ` <a onclick="filters.shipStatMonth='';renderShip()" style="color:#2f6fed;cursor:pointer">전체보기</a>` : ''}</span></div>
       <div class="mchart">${monthly.map((v, i) => { const mk = year + '-' + String(i + 1).padStart(2, '0'); const on = selM === mk; return `<div class="mcol" onclick="shipPickStatMonth(${i})" style="cursor:pointer"><div class="val">${v ? v.toFixed(0) : ''}</div><div class="bb ${i === now.getMonth() ? 'cur' : ''}" style="height:${Math.max(2, v / maxM * 100)}%;${on ? 'background:#2f6fed;box-shadow:0 0 0 2px #2f6fed inset' : ''}"></div><div class="lb" style="${on ? 'color:#2f6fed;font-weight:800' : ''}">${i + 1}월</div></div>`; }).join('')}</div>
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+        <button class="btn btn-sm" onclick="downloadMonthlyChart()"><i class="ti ti-photo"></i> 그래프 이미지</button>
+        <button class="btn btn-sm btn-pri" onclick="downloadMonthlyXls()"><i class="ti ti-file-spreadsheet"></i> 엑셀 다운로드</button>
+      </div>
     </div>
     <div class="card ship-sec" data-tab="stats" style="${shd('stats')}">
       <div class="card-h"><h3><i class="ti ti-trophy"></i>출고 상위 제품 <span style="font-size:11.5px;font-weight:600;color:${selM ? '#2f6fed' : 'var(--t3)'}">· ${selMLabel}</span></h3>${top.length ? `<span class="more tap" onclick="openTopProducts()" style="cursor:pointer">더보기 <i class="ti ti-chevron-right"></i></span>` : ''}</div>
@@ -3341,6 +3345,79 @@ function openTopClients() {
     ${list.length ? list.map((x, i) => `<tr><td>${i + 1}</td><td><b>${esc(x.name)}</b></td><td>${x.cnt}</td><td>${x.jang}장</td><td><b style="color:var(--gd)">${x.hebe.toFixed(1)}㎡</b></td></tr>`).join('') : `<tr><td colspan="5"><div class="empty" style="padding:16px">출고 내역이 없습니다</div></td></tr>`}
     </tbody></table></div>
     <div class="frm-foot"><button class="btn btn-pri" style="flex:1" onclick="closeModal()">닫기</button></div>`);
+}
+/* 연도별 월별 출고 집계 (헤베·장수·두께별) */
+function shipMonthlyStats(yr) {
+  const mHebe = Array(12).fill(0), mJang = Array(12).fill(0);
+  const thick = {};   // { '12T': [12 months], ... }
+  state.transactions.forEach(t => {
+    if (t.type !== 'out') return; const d = t.date || ''; if (!d.startsWith(yr + '-')) return;
+    const mi = parseInt(d.slice(5, 7), 10) - 1; if (mi < 0 || mi > 11) return; const j = +t.jang || 0;
+    mHebe[mi] += (+t.hebe || 0); mJang[mi] += j;
+    const it = (state.inventory || []).find(i => _normName(i.name) === _normName(t.itemName));
+    let spec = t.spec || (it ? it.spec : '');
+    const isB = /세면대/.test(t.itemName || '') || (it && itemCat(it) === '세면대');
+    const key = isB ? '세면대' : (parseThick(t.itemName, spec) || '기타');
+    (thick[key] = thick[key] || Array(12).fill(0))[mi] += j;
+  });
+  return { mHebe, mJang, thick };
+}
+/* 월별 분석 엑셀 다운로드 (.xls) — 월별 출고 + 두께별 + 상위 제품/업체(선택월 반영) */
+function downloadMonthlyXls() {
+  const yr = new Date().getFullYear();
+  const { mHebe, mJang, thick } = shipMonthlyStats(yr);
+  const prods = shipTopProducts(), clients = shipTopClients();
+  const label = shipStatLabel();
+  const TH = (t, w) => `<th style="background:#0F6E56;color:#fff;font-weight:bold;border:0.5pt solid #0a4f3e;padding:6px 9px;text-align:center" ${w ? 'width="' + w + '"' : ''}>${t}</th>`;
+  const TD = (t, st) => `<td style="border:0.5pt solid #cfd8d4;padding:5px 9px;${st || ''}">${t}</td>`;
+  const R = 'text-align:right';
+  const thickKeys = Object.keys(thick).sort((a, b) => { const rk = k => k === '세면대' ? -2 : (k === '기타' ? -3 : (parseInt(k) || 0)); return rk(b) - rk(a); });
+  let html = `<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body>`;
+  html += `<table><tr><td colspan="14" style="font-size:15pt;font-weight:bold;color:#0F6E56;padding:6px 4px">다우세라믹앤석재 · ${yr}년 월별 출고 분석</td></tr></table>`;
+  // 월별 출고
+  html += `<table style="border-collapse:collapse;margin-top:6px"><tr><td colspan="14" style="font-weight:bold;padding:4px">■ 월별 출고 (${yr}년)</td></tr>`;
+  html += `<tr>${TH('구분', 90)}${Array.from({ length: 12 }, (_, i) => TH((i + 1) + '월', 55)).join('')}${TH('합계', 70)}</tr>`;
+  html += `<tr>${TD('<b>장수(장)</b>')}${mJang.map(v => TD(v, R + ';mso-number-format:\\#\\,\\#\\#0')).join('')}${TD('<b>' + mJang.reduce((a, b) => a + b, 0) + '</b>', R)}</tr>`;
+  html += `<tr>${TD('<b>헤베(㎡)</b>')}${mHebe.map(v => TD(v.toFixed(1), R)).join('')}${TD('<b>' + mHebe.reduce((a, b) => a + b, 0).toFixed(1) + '</b>', R)}</tr>`;
+  thickKeys.forEach(k => { const arr = thick[k]; const unit = k === '세면대' ? '개' : '장'; const lab = k === '세면대' ? '세면대' : (k === '기타' ? '기타' : k.replace('T', '티')); html += `<tr>${TD(lab + '(' + unit + ')')}${arr.map(v => TD(v || '', R)).join('')}${TD('<b>' + arr.reduce((a, b) => a + b, 0) + '</b>', R)}</tr>`; });
+  html += `</table>`;
+  // 상위 제품
+  html += `<table style="border-collapse:collapse;margin-top:12px"><tr><td colspan="6" style="font-weight:bold;padding:4px">■ 출고 상위 제품 (${label})</td></tr>`;
+  html += `<tr>${TH('#', 40)}${TH('자재', 200)}${TH('규격', 150)}${TH('건수', 60)}${TH('장수', 70)}${TH('헤베(㎡)', 80)}</tr>`;
+  html += prods.map((x, i) => `<tr>${TD(i + 1, 'text-align:center')}${TD('<b>' + esc(x.name) + '</b>')}${TD(esc(x.spec || ''))}${TD(x.cnt, R)}${TD(x.jang, R)}${TD(x.hebe.toFixed(1), R)}</tr>`).join('');
+  html += `</table>`;
+  // 상위 업체
+  html += `<table style="border-collapse:collapse;margin-top:12px"><tr><td colspan="5" style="font-weight:bold;padding:4px">■ 거래량 많은 업체 (${label})</td></tr>`;
+  html += `<tr>${TH('#', 40)}${TH('거래처', 200)}${TH('건수', 60)}${TH('장수', 70)}${TH('헤베(㎡)', 80)}</tr>`;
+  html += clients.map((x, i) => `<tr>${TD(i + 1, 'text-align:center')}${TD('<b>' + esc(x.name) + '</b>')}${TD(x.cnt, R)}${TD(x.jang, R)}${TD(x.hebe.toFixed(1), R)}</tr>`).join('');
+  html += `</table></body></html>`;
+  const blob = new Blob(['﻿', html], { type: 'application/vnd.ms-excel' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '월별출고분석_' + yr + '_' + todayStr() + '.xls'; document.body.appendChild(a); a.click(); a.remove();
+  toast('엑셀 다운로드');
+}
+/* 월별 출고 그래프(장수) PNG 다운로드 */
+function downloadMonthlyChart() {
+  const yr = new Date().getFullYear();
+  const { mJang } = shipMonthlyStats(yr);
+  const dpr = 2, W = 900, H = 440;
+  const cv = document.createElement('canvas'); cv.width = W * dpr; cv.height = H * dpr;
+  const g = cv.getContext('2d'); g.scale(dpr, dpr);
+  g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
+  g.fillStyle = '#0F6E56'; g.font = 'bold 20px "Malgun Gothic",sans-serif'; g.fillText(`${yr}년 월별 출고 (장수)`, 24, 34);
+  const padL = 56, padR = 24, padT = 58, padB = 42; const cw = W - padL - padR, ch = H - padT - padB;
+  const max = Math.max(1, ...mJang);
+  // y grid
+  g.strokeStyle = '#e5e7eb'; g.fillStyle = '#9ca3af'; g.font = '11px sans-serif'; g.textAlign = 'right';
+  for (let s = 0; s <= 4; s++) { const y = padT + ch - ch * s / 4; const val = Math.round(max * s / 4); g.beginPath(); g.moveTo(padL, y); g.lineTo(W - padR, y); g.stroke(); g.fillText(val.toLocaleString(), padL - 6, y + 4); }
+  const bw = cw / 12 * 0.62, gap = cw / 12;
+  g.textAlign = 'center';
+  mJang.forEach((v, i) => {
+    const x = padL + gap * i + (gap - bw) / 2; const bh = ch * v / max; const y = padT + ch - bh;
+    g.fillStyle = (i === new Date().getMonth()) ? '#2f6fed' : '#5DCAA5'; g.fillRect(x, y, bw, bh);
+    if (v) { g.fillStyle = '#374151'; g.font = 'bold 11px sans-serif'; g.fillText(v.toLocaleString(), x + bw / 2, y - 5); }
+    g.fillStyle = '#6b7280'; g.font = '12px sans-serif'; g.fillText((i + 1) + '월', x + bw / 2, H - padB + 20);
+  });
+  cv.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = '월별출고그래프_' + yr + '_' + todayStr() + '.png'; document.body.appendChild(a); a.click(); a.remove(); toast('그래프 이미지 저장'); }, 'image/png');
 }
 /* 출고 화면 탭 전환 — 재렌더 없이 섹션만 표시/숨김 (검색·필터·스크롤 유지) */
 function goShipTab(v) {
