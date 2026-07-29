@@ -5085,8 +5085,8 @@ function chulgoStartAlarmLoop() {
   if (_chulgoAlarmTimer) return;
   _chulgoAlarmTimer = setInterval(() => {
     if (!_chulgoArmed) return;
-    if (chulgoHasNewDispatch()) { chulgoBeep(1); try { if (navigator.vibrate) navigator.vibrate(180); } catch (e) { } }   // 접수 전까지 반복
-  }, 4000);
+    if (chulgoHasNewDispatch()) { chulgoBeep(2); try { if (navigator.vibrate) navigator.vibrate([250, 120, 250]); } catch (e) { } }   // 접수(확인) 전까지 계속 반복
+  }, 3000);
 }
 function chulgoPrimeAudio() {
   try { _chAudio = _chAudio || new (window.AudioContext || window.webkitAudioContext)(); if (_chAudio.state === 'suspended') _chAudio.resume(); } catch (e) { }
@@ -5110,6 +5110,7 @@ function chulgoAlertNew() {
   const fresh = dispatched.filter(r => !_chulgoDispSeen.has(r.id) && (now - (+r.dispatchedAt || +r.createdAt || 0) < 120000) && _normName(r.dispatchedBy || r.sender) !== _normName((me && me.name) || ''));
   dispatched.forEach(r => _chulgoDispSeen.add(r.id));
   if (!fresh.length) return;
+  if (_chAudio) { _chulgoArmed = true; chulgoStartAlarmLoop(); try { renderChulgo(); } catch (e) { } }   // 새 지시 오면 자동으로 알림 켜고 접수 전까지 반복
   const urgent = fresh.some(f => f.urgent);
   chulgoBeep(urgent ? 4 : 2);
   try { if (navigator.vibrate) navigator.vibrate(urgent ? [200, 100, 200, 100, 200] : [200, 100, 200]); } catch (e) { }
