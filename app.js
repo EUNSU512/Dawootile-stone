@@ -3399,32 +3399,41 @@ function quoteRecalc() {
   if (el('q-total')) el('q-total').textContent = fmtWon(total);
 }
 function addQRow() { const c = el('q-rows'); if (c) { c.insertAdjacentHTML('beforeend', qRowHtml({})); } }
-function openQuoteForm(id, copy) {
+function openQuoteInline(id, copy) { filters.quoteEdit = id || 'new'; filters.quoteCopy = !!copy; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
+function quoteCancel() { filters.quoteEdit = ''; filters.quoteCopy = false; renderQuote(); }
+function renderQuoteForm() {
+  const id = filters.quoteEdit === 'new' ? '' : filters.quoteEdit;
+  const copy = !!filters.quoteCopy;
   const q = id ? (state.quotes || []).find(x => x.id === id) : null; const v = q || {};
   _qN = 0;
   const rows = ((v.items && v.items.length) ? v.items : [{}]).map(qRowHtml).join('');
   const matOpts = [...new Set((state.inventory || []).map(i => i.name).filter(Boolean))].sort((a, b) => a.localeCompare(b)).map(n => `<option value="${esc(n)}">`).join('');
   const editing = q && !copy;
-  openModal(`
-    <div class="sheet-h"><h3><i class="ti ti-file-invoice"></i>${editing ? '견적 수정' : (copy ? '견적 복사' : '견적 작성')}</h3><button class="x" onclick="closeModal()">×</button></div>
-    <div class="frm">
-      <div class="fld full"><label>거래처 <span class="req">*</span></label>${searchBox('q-client', '업체명 검색·입력', v.client || '', 'companyNames', 'quoteClientChanged')}</div>
-      <div class="fld"><label>견적일</label><input type="date" id="q-date" value="${esc((editing && v.date) || todayStr())}"></div>
-      <div class="fld"><label>유효기간</label><input id="q-valid" lang="ko" value="${esc(v.valid || '견적일로부터 15일')}"></div>
-      <div class="fld full"><label>수신·참조 <span style="color:var(--t3);font-weight:500">(담당자·현장 등, 선택)</span></label><input id="q-attn" lang="ko" placeholder="예: 홍길동 과장 / OO현장" value="${esc(v.attn || '')}"></div>
-      <div class="fld full"><label>견적 품목 <span class="req">*</span> <span style="color:var(--t3);font-weight:500">(자재 선택 시 규격·단가 자동 · 단가는 수정 가능)</span></label>
-        <div id="q-rows">${rows}</div>
-        <datalist id="q-mat-list">${matOpts}</datalist>
-        <button type="button" class="btn btn-ghost btn-sm btn-block" onclick="addQRow()"><i class="ti ti-plus"></i>품목 추가</button>
+  el('pg-quote').innerHTML = `
+    <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>${editing ? '견적 수정' : (copy ? '견적 복사' : '견적 작성')}</h2><p>거래처·품목을 입력하면 합계가 자동 계산됩니다</p></div>
+      <button class="btn btn-sm" onclick="quoteCancel()"><i class="ti ti-arrow-left"></i> 목록</button></div>
+    <div id="qform-root" class="card" style="padding:15px 17px">
+      <div class="frm" style="display:block">
+        <div class="fld full" style="margin-bottom:10px"><label>거래처 <span class="req">*</span></label>${searchBox('q-client', '업체명 검색·입력', v.client || '', 'companyNames', 'quoteClientChanged')}</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+          <div class="fld" style="flex:1;min-width:150px;margin:0"><label>견적일</label><input type="date" id="q-date" value="${esc((editing && v.date) || todayStr())}"></div>
+          <div class="fld" style="flex:1;min-width:150px;margin:0"><label>유효기간</label><input id="q-valid" lang="ko" value="${esc(v.valid || '견적일로부터 15일')}"></div>
+        </div>
+        <div class="fld full" style="margin-bottom:10px"><label>수신·참조 <span style="color:var(--t3);font-weight:500">(담당자·현장 등, 선택)</span></label><input id="q-attn" lang="ko" placeholder="예: 홍길동 과장 / OO현장" value="${esc(v.attn || '')}"></div>
+        <div class="fld full" style="margin-bottom:10px"><label>견적 품목 <span class="req">*</span> <span style="color:var(--t3);font-weight:500">(자재 선택 시 규격·단가 자동 · 단가 수정 가능)</span></label>
+          <div id="q-rows">${rows}</div>
+          <datalist id="q-mat-list">${matOpts}</datalist>
+          <button type="button" class="btn btn-ghost btn-sm btn-block" onclick="addQRow()"><i class="ti ti-plus"></i>품목 추가</button>
+        </div>
+        <div class="fld full" style="margin-bottom:10px"><label>비고</label><textarea id="q-memo" lang="ko" placeholder="결제조건·납기 등 (선택)" style="min-height:52px">${esc(v.memo || '')}</textarea></div>
+        <div style="background:var(--soft);border-radius:11px;padding:12px 14px;max-width:360px;margin-left:auto">
+          <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:5px"><span style="color:var(--t2)">공급가액</span><b id="q-supply">0</b></div>
+          <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:7px"><span style="color:var(--t2)">부가세 (10%)</span><b id="q-vat">0</b></div>
+          <div style="display:flex;justify-content:space-between;font-size:17px;border-top:1px solid var(--bd2);padding-top:8px"><span style="font-weight:700">합계금액</span><b id="q-total" style="color:var(--gd)">0</b></div>
+        </div>
       </div>
-      <div class="fld full"><label>비고</label><textarea id="q-memo" lang="ko" placeholder="결제조건·납기 등 (선택)" style="min-height:52px">${esc(v.memo || '')}</textarea></div>
-      <div style="background:var(--soft);border-radius:11px;padding:11px 13px;margin-top:2px">
-        <div style="display:flex;justify-content:space-between;font-size:13.5px;margin-bottom:4px"><span style="color:var(--t2)">공급가액</span><b id="q-supply">0</b></div>
-        <div style="display:flex;justify-content:space-between;font-size:13.5px;margin-bottom:6px"><span style="color:var(--t2)">부가세 (10%)</span><b id="q-vat">0</b></div>
-        <div style="display:flex;justify-content:space-between;font-size:16px;border-top:1px solid var(--bd2);padding-top:7px"><span style="font-weight:700">합계금액</span><b id="q-total" style="color:var(--gd)">0</b></div>
-      </div>
-    </div>
-    <div class="frm-foot">${editing ? `<button class="btn" style="color:var(--red-t);border-color:#e6a9a9" onclick="delQuote('${q.id}')"><i class="ti ti-trash"></i></button>` : ''}<button class="btn" style="flex:1" onclick="closeModal()">취소</button><button class="btn btn-pri" style="flex:2" onclick="submitQuote('${editing ? q.id : ''}')"><i class="ti ti-check"></i>${editing ? '저장' : '견적 저장'}</button></div>`);
+      <div class="frm-foot" style="margin-top:13px">${editing ? `<button class="btn" style="color:var(--red-t);border-color:#e6a9a9" onclick="delQuote('${q.id}')"><i class="ti ti-trash"></i></button>` : ''}<button class="btn" style="flex:1" onclick="quoteCancel()">취소</button><button class="btn btn-pri" style="flex:2" onclick="submitQuote('${editing ? q.id : ''}')"><i class="ti ti-check"></i>${editing ? '저장' : '견적 저장'}</button></div>
+    </div>`;
   quoteRecalc();
 }
 function collectQItems() {
@@ -3460,20 +3469,38 @@ async function submitQuote(id) {
     const data = { docNo, client, date, valid, attn, items, supply, vat, total, memo, by: (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
     if (id) await Store.update('quotes', id, data); else await Store.add('quotes', data);
     for (const it of items) { try { await quoteSavePrice(client, it.name, +it.price || 0); } catch (e) { } }   // 단가 기억(거래처·기본)
-    closeModal(); toast(id ? '견적 저장됨' : '견적 저장 · 단가 기억됨'); go('quote');
+    filters.quoteEdit = ''; filters.quoteCopy = false; toast(id ? '견적 저장됨' : '견적 저장 · 단가 기억됨'); renderQuote();
   } finally { setTimeout(() => { _busy = false; }, 500); }
 }
 async function delQuote(id) {
   if (!confirm('이 견적을 삭제할까요?')) return;
-  await Store.remove('quotes', id); closeModal(); toast('삭제됨'); go('quote');
+  await Store.remove('quotes', id); filters.quoteEdit = ''; toast('삭제됨'); renderQuote();
+}
+/* ── 견적 ERP: 결제·세금계산서 상태, 견적→출고 ── */
+async function quoteMarkPaid(id) { const q = (state.quotes || []).find(x => x.id === id); if (!q) return; const paid = !q.paid; await Store.update('quotes', id, { paid, paidDate: paid ? todayStr() : '', paidAmount: paid ? (+q.total || 0) : 0 }); toast(paid ? '결제 완료 표시' : '결제 표시 해제'); }
+async function quoteMarkTax(id) { const q = (state.quotes || []).find(x => x.id === id); if (!q) return; const t = !q.taxInvoice; await Store.update('quotes', id, { taxInvoice: t, taxDate: t ? todayStr() : '' }); toast(t ? '세금계산서 발행 표시' : '표시 해제'); }
+function quoteToShip(id) {
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
+  try { Store.update('quotes', id, { shipped: true, shipStartedAt: Date.now() }); } catch (e) { }
+  openShipForm({ targetName: q.client, items: (q.items || []).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' })) });
+  toast('견적 품목을 출고 등록 폼에 불러왔습니다 · 확인 후 등록하세요');
 }
 function renderQuote() {
+  if (filters.quoteEdit) { if (!document.getElementById('qform-root')) renderQuoteForm(); return; }   // 편집 중엔 실시간 재렌더로 폼을 덮어쓰지 않음
   const qy = (filters.quoteSearch || '').trim().toLowerCase();
-  let list = (state.quotes || []).slice().sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
+  const all = (state.quotes || []);
+  const ym = todayStr().slice(0, 7);
+  const unpaid = all.filter(q => !q.paid).reduce((a, b) => a + (+b.total || 0), 0);
+  const noTax = all.filter(q => !q.taxInvoice).length;
+  const monthSum = all.filter(q => (q.date || '').startsWith(ym)).reduce((a, b) => a + (+b.total || 0), 0);
+  let list = all.slice().sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
   if (qy) list = list.filter(q => (q.client || '').toLowerCase().includes(qy) || (q.docNo || '').toLowerCase().includes(qy) || (q.items || []).some(it => (it.name || '').toLowerCase().includes(qy)));
   const cards = list.length ? list.map(q => {
     const when = q.date || (q.createdAt ? new Date(+q.createdAt).toISOString().slice(0, 10) : '');
     const names = (q.items || []).map(it => it.name).filter(Boolean).slice(0, 3).join(', ') + ((q.items || []).length > 3 ? ` 외 ${q.items.length - 3}` : '');
+    const paidPill = q.paid ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="클릭 시 해제"><i class="ti ti-cash"></i> 결제완료${q.paidDate ? ' ' + esc(q.paidDate.slice(5)) : ''}</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="결제 완료로 표시"><i class="ti ti-cash"></i> 미결제</button>`;
+    const taxPill = q.taxInvoice ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="클릭 시 해제"><i class="ti ti-file-check"></i> 계산서 발행${q.taxDate ? ' ' + esc(q.taxDate.slice(5)) : ''}</button>` : `<button class="pill p-gray" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="발행으로 표시"><i class="ti ti-file-off"></i> 계산서 미발행</button>`;
+    const shipPill = q.shipped ? `<span class="pill p-hold"><i class="ti ti-truck-delivery"></i> 출고 진행</span>` : '';
     return `<div class="card" style="margin-bottom:10px;padding:12px 14px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="min-width:0"><div style="font-weight:700;font-size:14.5px">${esc(q.client || '-')}</div>
@@ -3481,16 +3508,23 @@ function renderQuote() {
           <div style="font-size:12px;color:var(--t2);margin-top:3px">${esc(names)}</div></div>
         <div style="text-align:right;flex:none"><div style="font-size:17px;font-weight:800;color:var(--gd)">${fmtWon(q.total)}<span style="font-size:12px;font-weight:600">원</span></div><div style="font-size:10.5px;color:var(--t3)">VAT 포함</div></div>
       </div>
-      <div class="frm-foot" style="margin-top:9px">
-        <button class="btn btn-sm btn-pri" style="flex:1.3" onclick="printQuote('${q.id}')"><i class="ti ti-printer"></i>인쇄</button>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${shipPill}</div>
+      <div class="frm-foot" style="margin-top:9px;flex-wrap:wrap">
+        <button class="btn btn-sm" style="color:var(--blue)" onclick="quoteToShip('${q.id}')"><i class="ti ti-truck-delivery"></i>출고로</button>
+        <button class="btn btn-sm btn-pri" onclick="printQuote('${q.id}')"><i class="ti ti-printer"></i>인쇄</button>
         <button class="btn btn-sm" onclick="downloadQuoteXls('${q.id}')"><i class="ti ti-file-spreadsheet"></i>엑셀</button>
-        <button class="btn btn-sm" onclick="openQuoteForm('${q.id}')"><i class="ti ti-edit"></i>수정</button>
-        <button class="btn btn-sm" onclick="openQuoteForm('${q.id}',true)" title="이 견적을 복사해 새 견적"><i class="ti ti-copy"></i></button>
+        <button class="btn btn-sm" onclick="openQuoteInline('${q.id}')"><i class="ti ti-edit"></i>수정</button>
+        <button class="btn btn-sm" onclick="openQuoteInline('${q.id}',true)" title="복사해 새 견적"><i class="ti ti-copy"></i></button>
       </div></div>`;
-  }).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${qy ? '검색 결과가 없습니다' : '작성한 견적이 없습니다. + 견적 작성으로 시작하세요.'}</div>`;
+  }).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${qy ? '검색 결과가 없습니다' : '작성한 견적이 없습니다. 견적 작성으로 시작하세요.'}</div>`;
   el('pg-quote').innerHTML = `
-    <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>거래처 견적 작성 · 저장 · 인쇄</p></div>
-      <button class="btn btn-pri btn-sm" onclick="openQuoteForm()"><i class="ti ti-plus"></i>견적 작성</button></div>
+    <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
+      <button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div>
+    <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
+      <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(unpaid)}</div><div class="l">미수금(미결제)</div></div>
+      <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행</div></div>
+      <div class="stat"><div class="ic g"><i class="ti ti-calendar-stats"></i></div><div class="v" style="font-size:19px">${fmtWon(monthSum)}</div><div class="l">이번 달 견적</div></div>
+    </div>
     <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i>
       <input id="q-search" placeholder="거래처·견적번호·자재 검색" value="${esc(filters.quoteSearch || '')}" oninput="filters.quoteSearch=this.value;renderQuote()" autocomplete="off" lang="ko">
       ${(filters.quoteSearch || '').trim() ? `<button class="search-x" onclick="filters.quoteSearch='';el('q-search').value='';renderQuote()"><i class="ti ti-x"></i></button>` : ''}
@@ -4420,7 +4454,7 @@ function openShipForm(pre) {
   openModal(`
     <div class="sheet-h"><h3><i class="ti ti-logout"></i>출고 등록</h3><button class="x" onclick="closeModal()">×</button></div>
     <div class="frm">
-      <div class="fld full"><label>업체명<span class="req">*</span></label>${searchBox('o-targetName', '업체명 검색·입력', '', 'companyNames', '')}</div>
+      <div class="fld full"><label>업체명<span class="req">*</span></label>${searchBox('o-targetName', '업체명 검색·입력', (pre && pre.targetName) || '', 'companyNames', '')}</div>
       <div class="fld full"><label>출고 자재 / 장수 / 롯트 / 패턴<span class="req">*</span> <span style="color:var(--t3);font-weight:500">(여러 자재는 '자재 추가')</span></label>${matRowsHtml(pre && pre.items && pre.items.length ? pre.items : (pre && pre.material ? [{ name: pre.material, qty: pre.jang, lot: pre.lot, pattern: pre.pattern }] : [{}]), '장수')}</div>
       <div class="fld"><label>출고일<span class="req">*</span></label><input type="date" id="o-date" value="${todayStr()}"></div>
       <div class="fld"><label>출고 창고 <span style="color:var(--t3);font-weight:500">(창고 여러 곳일 때만)</span></label><input id="o-depot" list="o-depot-list" placeholder="창고(선택)"><datalist id="o-depot-list">${depotOptions().map(d => `<option value="${esc(d)}">`).join('')}</datalist></div>
