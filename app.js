@@ -29,7 +29,7 @@ function prefillEmail() {
 }
 function cref(name) { return db.collection('teams').doc(TEAM).collection(name); }
 
-const COLLS = ['members', 'sites', 'inventory', 'holdings', 'transactions', 'specs', 'factories', 'teams', 'suppliers', 'clients', 'issues', 'restocks', 'basins', 'holdRequests', 'shipments', 'chulgoReqs', 'chulgoHandlers'];
+const COLLS = ['members', 'sites', 'inventory', 'holdings', 'transactions', 'specs', 'factories', 'teams', 'suppliers', 'clients', 'issues', 'restocks', 'basins', 'holdRequests', 'shipments', 'chulgoReqs', 'chulgoHandlers', 'quotes', 'clientPrices'];
 
 // 로컬(미리보기) 모드용 - 같은 기기의 다른 탭끼리 실시간 반영
 const bc = ('BroadcastChannel' in window) ? new BroadcastChannel('dws') : null;
@@ -747,6 +747,7 @@ function render() {
   else if (tab === 'hold') renderHold();
   else if (tab === 'basin') renderBasin();
   else if (tab === 'chulgo') renderChulgo();
+  else if (tab === 'quote') renderQuote();
   else if (tab === 'settings') renderSettings();
 }
 /* ---------- 고객(거래처) 재고 조회 전용 화면 (읽기 전용) ---------- */
@@ -3346,6 +3347,218 @@ function openTopClients() {
     ${list.length ? list.map((x, i) => `<tr><td>${i + 1}</td><td><b>${esc(x.name)}</b></td><td>${x.cnt}</td><td>${x.jang}장</td><td><b style="color:var(--gd)">${x.hebe.toFixed(1)}㎡</b></td></tr>`).join('') : `<tr><td colspan="5"><div class="empty" style="padding:16px">출고 내역이 없습니다</div></td></tr>`}
     </tbody></table></div>
     <div class="frm-foot"><button class="btn btn-pri" style="flex:1" onclick="closeModal()">닫기</button></div>`);
+}
+/* ===================================================================
+   견적서 — 품목 기본단가 + 거래처별 단가 자동입력, 공급가+VAT10%, 저장·목록·A4·엑셀
+   =================================================================== */
+function fmtWon(n) { return Math.round(+n || 0).toLocaleString('ko-KR'); }
+function _numv(v) { return parseFloat(String(v == null ? '' : v).replace(/,/g, '')) || 0; }
+/* 단가 조회: 거래처별 단가 우선 → 기본단가(client='') → 품목 price */
+function quoteGetPrice(client, name) {
+  const cn = _normName(client || ''), nm = _normName(name || ''); const cps = state.clientPrices || [];
+  if (client && client.trim()) { const hit = cps.find(p => (p.client || '').trim() && _normName(p.client) === cn && _normName(p.itemName) === nm); if (hit) return +hit.price || 0; }
+  const base = cps.find(p => !(p.client || '').trim() && _normName(p.itemName) === nm); if (base) return +base.price || 0;
+  const it = (state.inventory || []).find(i => _normName(i.name) === nm); return it ? (+it.price || 0) : 0;
+}
+function quoteNextDocNo() { const d = todayStr().replace(/-/g, ''); const n = (state.quotes || []).filter(q => (q.docNo || '').startsWith('Q' + d)).length; return 'Q' + d + '-' + (n + 1); }
+let _qN = 0;
+function qRowHtml(d) {
+  d = d || {}; const i = _qN++; const inp = 'font-size:14px;padding:8px;border:1.5px solid var(--bd2);border-radius:8px';
+  return `<div class="q-row" style="border:1px solid var(--bd2);border-radius:10px;padding:8px 9px;margin-bottom:8px">
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+      <input class="q-mat" list="q-mat-list" lang="ko" placeholder="자재명 (선택/입력)" value="${esc(d.name || '')}" onchange="quoteMatPick(this)" style="flex:2.4;min-width:0;${inp}">
+      <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.q-row').remove();quoteRecalc()" aria-label="삭제"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center">
+      <input class="q-spec" lang="en" placeholder="규격" value="${esc(d.spec || '')}" style="flex:1.7;min-width:0;${inp}">
+      <input class="q-qty" inputmode="numeric" placeholder="수량" value="${esc(d.qty || '')}" oninput="quoteRecalc()" style="flex:1;min-width:44px;${inp};text-align:right">
+      <input class="q-price" inputmode="numeric" placeholder="단가" value="${esc(d.price || '')}" oninput="quoteRecalc()" style="flex:1.3;min-width:56px;${inp};text-align:right">
+      <div class="q-amt" style="flex:1.4;min-width:62px;text-align:right;font-weight:700;padding:8px 2px;color:var(--t1);font-size:14px">0</div>
+    </div>
+  </div>`;
+}
+function quoteMatPick(inp) {
+  const row = inp.closest('.q-row'); if (!row) return; const name = (inp.value || '').trim();
+  const it = (state.inventory || []).find(x => _normName(x.name) === _normName(name));
+  const specEl = row.querySelector('.q-spec'); if (it && specEl && !specEl.value.trim()) specEl.value = it.spec || '';
+  const client = (el('q-client') && el('q-client').value || '').trim();
+  const priceEl = row.querySelector('.q-price'); const p = quoteGetPrice(client, name); if (p && !_numv(priceEl.value)) priceEl.value = p;
+  quoteRecalc();
+}
+function quoteClientChanged() {
+  const client = (el('q-client') && el('q-client').value || '').trim();
+  document.querySelectorAll('#q-rows .q-row').forEach(r => { const name = (r.querySelector('.q-mat').value || '').trim(); if (!name) return; const p = quoteGetPrice(client, name); if (p) r.querySelector('.q-price').value = p; });
+  quoteRecalc();
+}
+function quoteRecalc() {
+  let supply = 0;
+  document.querySelectorAll('#q-rows .q-row').forEach(r => { const qty = _numv(r.querySelector('.q-qty').value); const price = _numv(r.querySelector('.q-price').value); const amt = Math.round(qty * price); r.querySelector('.q-amt').textContent = fmtWon(amt); supply += amt; });
+  const vat = Math.round(supply * 0.1), total = supply + vat;
+  if (el('q-supply')) el('q-supply').textContent = fmtWon(supply);
+  if (el('q-vat')) el('q-vat').textContent = fmtWon(vat);
+  if (el('q-total')) el('q-total').textContent = fmtWon(total);
+}
+function addQRow() { const c = el('q-rows'); if (c) { c.insertAdjacentHTML('beforeend', qRowHtml({})); } }
+function openQuoteForm(id, copy) {
+  const q = id ? (state.quotes || []).find(x => x.id === id) : null; const v = q || {};
+  _qN = 0;
+  const rows = ((v.items && v.items.length) ? v.items : [{}]).map(qRowHtml).join('');
+  const matOpts = [...new Set((state.inventory || []).map(i => i.name).filter(Boolean))].sort((a, b) => a.localeCompare(b)).map(n => `<option value="${esc(n)}">`).join('');
+  const editing = q && !copy;
+  openModal(`
+    <div class="sheet-h"><h3><i class="ti ti-file-invoice"></i>${editing ? '견적 수정' : (copy ? '견적 복사' : '견적 작성')}</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div class="frm">
+      <div class="fld full"><label>거래처 <span class="req">*</span></label>${searchBox('q-client', '업체명 검색·입력', v.client || '', 'companyNames', 'quoteClientChanged')}</div>
+      <div class="fld"><label>견적일</label><input type="date" id="q-date" value="${esc((editing && v.date) || todayStr())}"></div>
+      <div class="fld"><label>유효기간</label><input id="q-valid" lang="ko" value="${esc(v.valid || '견적일로부터 15일')}"></div>
+      <div class="fld full"><label>수신·참조 <span style="color:var(--t3);font-weight:500">(담당자·현장 등, 선택)</span></label><input id="q-attn" lang="ko" placeholder="예: 홍길동 과장 / OO현장" value="${esc(v.attn || '')}"></div>
+      <div class="fld full"><label>견적 품목 <span class="req">*</span> <span style="color:var(--t3);font-weight:500">(자재 선택 시 규격·단가 자동 · 단가는 수정 가능)</span></label>
+        <div id="q-rows">${rows}</div>
+        <datalist id="q-mat-list">${matOpts}</datalist>
+        <button type="button" class="btn btn-ghost btn-sm btn-block" onclick="addQRow()"><i class="ti ti-plus"></i>품목 추가</button>
+      </div>
+      <div class="fld full"><label>비고</label><textarea id="q-memo" lang="ko" placeholder="결제조건·납기 등 (선택)" style="min-height:52px">${esc(v.memo || '')}</textarea></div>
+      <div style="background:var(--soft);border-radius:11px;padding:11px 13px;margin-top:2px">
+        <div style="display:flex;justify-content:space-between;font-size:13.5px;margin-bottom:4px"><span style="color:var(--t2)">공급가액</span><b id="q-supply">0</b></div>
+        <div style="display:flex;justify-content:space-between;font-size:13.5px;margin-bottom:6px"><span style="color:var(--t2)">부가세 (10%)</span><b id="q-vat">0</b></div>
+        <div style="display:flex;justify-content:space-between;font-size:16px;border-top:1px solid var(--bd2);padding-top:7px"><span style="font-weight:700">합계금액</span><b id="q-total" style="color:var(--gd)">0</b></div>
+      </div>
+    </div>
+    <div class="frm-foot">${editing ? `<button class="btn" style="color:var(--red-t);border-color:#e6a9a9" onclick="delQuote('${q.id}')"><i class="ti ti-trash"></i></button>` : ''}<button class="btn" style="flex:1" onclick="closeModal()">취소</button><button class="btn btn-pri" style="flex:2" onclick="submitQuote('${editing ? q.id : ''}')"><i class="ti ti-check"></i>${editing ? '저장' : '견적 저장'}</button></div>`);
+  quoteRecalc();
+}
+function collectQItems() {
+  const items = [];
+  document.querySelectorAll('#q-rows .q-row').forEach(r => {
+    const name = (r.querySelector('.q-mat').value || '').trim(); const spec = (r.querySelector('.q-spec').value || '').trim();
+    const qty = _numv(r.querySelector('.q-qty').value); const price = _numv(r.querySelector('.q-price').value);
+    if (name && qty > 0) items.push({ name, spec, unit: '', qty, price, amt: Math.round(qty * price) });
+  });
+  return items;
+}
+async function quoteSavePrice(client, name, price) {
+  if (!name || !(price > 0)) return; const cps = state.clientPrices || [];
+  const cn = (client || '').trim();
+  if (cn) { const ex = cps.find(p => (p.client || '').trim() && _normName(p.client) === _normName(cn) && _normName(p.itemName) === _normName(name)); if (ex) { if ((+ex.price || 0) !== price) await Store.update('clientPrices', ex.id, { price }); } else await Store.add('clientPrices', { client: cn, itemName: name, price }); }
+  const base = cps.find(p => !(p.client || '').trim() && _normName(p.itemName) === _normName(name)); if (!base) await Store.add('clientPrices', { client: '', itemName: name, price });
+}
+async function submitQuote(id) {
+  const client = (el('q-client') && el('q-client').value || '').trim();
+  if (!client) { toast('거래처를 입력하세요'); return; }
+  const items = collectQItems();
+  if (!items.length) { toast('견적 품목과 수량을 입력하세요'); return; }
+  const date = (el('q-date') && el('q-date').value) || todayStr();
+  const valid = (el('q-valid') && el('q-valid').value || '').trim();
+  const attn = (el('q-attn') && el('q-attn').value || '').trim();
+  const memo = (el('q-memo') && el('q-memo').value || '').trim();
+  const supply = items.reduce((a, b) => a + (+b.amt || 0), 0); const vat = Math.round(supply * 0.1); const total = supply + vat;
+  if (_busy) return; _busy = true;
+  try {
+    await ensureClient(client);
+    const q = id ? (state.quotes || []).find(x => x.id === id) : null;
+    const docNo = (q && q.docNo) || quoteNextDocNo();
+    const data = { docNo, client, date, valid, attn, items, supply, vat, total, memo, by: (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
+    if (id) await Store.update('quotes', id, data); else await Store.add('quotes', data);
+    for (const it of items) { try { await quoteSavePrice(client, it.name, +it.price || 0); } catch (e) { } }   // 단가 기억(거래처·기본)
+    closeModal(); toast(id ? '견적 저장됨' : '견적 저장 · 단가 기억됨'); go('quote');
+  } finally { setTimeout(() => { _busy = false; }, 500); }
+}
+async function delQuote(id) {
+  if (!confirm('이 견적을 삭제할까요?')) return;
+  await Store.remove('quotes', id); closeModal(); toast('삭제됨'); go('quote');
+}
+function renderQuote() {
+  const qy = (filters.quoteSearch || '').trim().toLowerCase();
+  let list = (state.quotes || []).slice().sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
+  if (qy) list = list.filter(q => (q.client || '').toLowerCase().includes(qy) || (q.docNo || '').toLowerCase().includes(qy) || (q.items || []).some(it => (it.name || '').toLowerCase().includes(qy)));
+  const cards = list.length ? list.map(q => {
+    const when = q.date || (q.createdAt ? new Date(+q.createdAt).toISOString().slice(0, 10) : '');
+    const names = (q.items || []).map(it => it.name).filter(Boolean).slice(0, 3).join(', ') + ((q.items || []).length > 3 ? ` 외 ${q.items.length - 3}` : '');
+    return `<div class="card" style="margin-bottom:10px;padding:12px 14px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+        <div style="min-width:0"><div style="font-weight:700;font-size:14.5px">${esc(q.client || '-')}</div>
+          <div style="font-size:11.5px;color:var(--t3);margin-top:2px">${esc(q.docNo || '')} · ${esc(when)} · ${(q.items || []).length}품목</div>
+          <div style="font-size:12px;color:var(--t2);margin-top:3px">${esc(names)}</div></div>
+        <div style="text-align:right;flex:none"><div style="font-size:17px;font-weight:800;color:var(--gd)">${fmtWon(q.total)}<span style="font-size:12px;font-weight:600">원</span></div><div style="font-size:10.5px;color:var(--t3)">VAT 포함</div></div>
+      </div>
+      <div class="frm-foot" style="margin-top:9px">
+        <button class="btn btn-sm btn-pri" style="flex:1.3" onclick="printQuote('${q.id}')"><i class="ti ti-printer"></i>인쇄</button>
+        <button class="btn btn-sm" onclick="downloadQuoteXls('${q.id}')"><i class="ti ti-file-spreadsheet"></i>엑셀</button>
+        <button class="btn btn-sm" onclick="openQuoteForm('${q.id}')"><i class="ti ti-edit"></i>수정</button>
+        <button class="btn btn-sm" onclick="openQuoteForm('${q.id}',true)" title="이 견적을 복사해 새 견적"><i class="ti ti-copy"></i></button>
+      </div></div>`;
+  }).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${qy ? '검색 결과가 없습니다' : '작성한 견적이 없습니다. + 견적 작성으로 시작하세요.'}</div>`;
+  el('pg-quote').innerHTML = `
+    <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>거래처 견적 작성 · 저장 · 인쇄</p></div>
+      <button class="btn btn-pri btn-sm" onclick="openQuoteForm()"><i class="ti ti-plus"></i>견적 작성</button></div>
+    <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i>
+      <input id="q-search" placeholder="거래처·견적번호·자재 검색" value="${esc(filters.quoteSearch || '')}" oninput="filters.quoteSearch=this.value;renderQuote()" autocomplete="off" lang="ko">
+      ${(filters.quoteSearch || '').trim() ? `<button class="search-x" onclick="filters.quoteSearch='';el('q-search').value='';renderQuote()"><i class="ti ti-x"></i></button>` : ''}
+    </div>
+    ${cards}`;
+}
+function printQuote(id) {
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
+  const e = s => esc(s == null ? '' : String(s));
+  const items = q.items || []; const MIN = Math.max(8, items.length);
+  let rows = items.map((it, i) => `<tr><td class="c">${i + 1}</td><td class="l">${e(it.name)}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`).join('');
+  for (let i = items.length; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
+  const co = DAWOO_CO;
+  const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>견적서 ${e(q.client)} ${e(q.docNo)}</title>
+<style>*{box-sizing:border-box}body{font-family:'맑은 고딕','Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#111;margin:0;padding:22px 26px;position:relative}
+h1{text-align:center;font-size:30px;font-weight:800;letter-spacing:18px;margin:2px 0 2px}
+.sub{text-align:center;font-size:12.5px;color:#666;margin-bottom:16px;letter-spacing:.5px}
+.docno{position:absolute;top:22px;right:26px;font-size:13px;font-weight:700}
+table{border-collapse:collapse;width:100%}
+.top{table-layout:fixed;margin-bottom:12px}.top td{border:1px solid #333;padding:7px 9px;font-size:12.5px;vertical-align:top}
+.top .k{background:#f2f2f2;font-weight:700;text-align:center;white-space:nowrap;width:12%}
+.recip{font-size:15px;font-weight:800}
+.supplier .sr{font-size:11.5px;line-height:1.55}
+.stamp{position:absolute;right:8px;top:6px;width:52px;height:52px;border:2px solid #c0341d;border-radius:50%;color:#c0341d;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center;transform:rotate(-8deg)}
+.items{table-layout:fixed}.items th{border:1px solid #333;background:#efefef;padding:8px 6px;font-size:12.5px}.items td{border:1px solid #333;padding:7px 6px;font-size:12.5px;height:30px}
+.items td.c{text-align:center}.items td.l{text-align:left;padding-left:9px}.items td.r{text-align:right;padding-right:9px}
+.sum{margin-top:12px;width:52%;margin-left:auto}.sum td{border:1px solid #333;padding:8px 11px;font-size:13px}.sum .k{background:#f2f2f2;font-weight:700;width:45%}.sum .v{text-align:right;font-weight:700}.sum .tot .k,.sum .tot .v{background:#0F6E56;color:#fff;font-size:15px}
+.memo{margin-top:12px;border:1px solid #333}.memo .mh{background:#f2f2f2;font-weight:700;font-size:12.5px;padding:6px 9px;border-bottom:1px solid #333}.memo .mb{padding:9px;min-height:44px;font-size:12.5px;white-space:pre-wrap}
+.note{margin-top:10px;font-size:11.5px;color:#555}
+@media print{body{padding:10px 12px}}</style></head><body>
+  <div class="docno">견적번호 ${e(q.docNo)}</div>
+  <h1>견 적 서</h1>
+  <div class="sub">Quotation</div>
+  <table class="top"><tr>
+    <td class="k">수 신</td><td style="width:38%"><div class="recip">${e(q.client)} 귀중</div>${q.attn ? `<div style="font-size:12px;color:#555;margin-top:3px">${e(q.attn)}</div>` : ''}<div style="font-size:12px;margin-top:8px">견적일 : ${e(q.date)}</div><div style="font-size:12px">유효기간 : ${e(q.valid) || '-'}</div><div style="font-size:12px;margin-top:6px">아래와 같이 견적합니다.</div></td>
+    <td class="k">공급자</td><td class="supplier"><div class="sr" style="position:relative"><div class="stamp">DAWOO<br>(인)</div><b style="font-size:13.5px">${co.name}</b><br>대표 : ${e(co.ceo)}　등록번호 : ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}</div></td>
+  </tr></table>
+  <table class="items"><colgroup><col style="width:7%"><col style="width:33%"><col style="width:22%"><col style="width:10%"><col style="width:14%"><col style="width:14%"></colgroup>
+    <thead><tr><th>No</th><th>품목</th><th>규격</th><th>수량</th><th>단가</th><th>금액</th></tr></thead><tbody>${rows}</tbody></table>
+  <table class="sum">
+    <tr><td class="k">공급가액</td><td class="v">${fmtWon(q.supply)} 원</td></tr>
+    <tr><td class="k">부가세 (10%)</td><td class="v">${fmtWon(q.vat)} 원</td></tr>
+    <tr class="tot"><td class="k">합계금액</td><td class="v">${fmtWon(q.total)} 원</td></tr>
+  </table>
+  ${q.memo ? `<div class="memo"><div class="mh">비 고</div><div class="mb">${e(q.memo)}</div></div>` : ''}
+  <div class="note">※ 본 견적은 유효기간 내에서만 유효하며, 부가세 별도(공급가액 기준) 산정되었습니다.</div>
+</body></html>`;
+  const w = window.open('', '_blank'); if (!w) { toast('팝업이 차단되었습니다. 팝업 허용 후 다시'); return; }
+  w.document.write(html); w.document.close(); w.focus(); setTimeout(() => { try { w.print(); } catch (e) { } }, 350);
+}
+function downloadQuoteXls(id) {
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
+  const TH = (t, w) => `<th style="background:#0F6E56;color:#fff;font-weight:bold;border:0.5pt solid #0a4f3e;padding:6px 9px;text-align:center" ${w ? 'width="' + w + '"' : ''}>${t}</th>`;
+  const TD = (t, st) => `<td style="border:0.5pt solid #cfd8d4;padding:5px 9px;${st || ''}">${t}</td>`;
+  const R = 'text-align:right;mso-number-format:\\#\\,\\#\\#0';
+  const body = (q.items || []).map((it, i) => `<tr>${TD(i + 1, 'text-align:center')}${TD('<b>' + esc(it.name) + '</b>')}${TD(esc(it.spec || ''))}${TD(it.qty, R)}${TD(it.price, R)}${TD(it.amt, R)}</tr>`).join('');
+  let html = `<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body>`;
+  html += `<table><tr><td colspan="6" style="font-size:15pt;font-weight:bold;color:#0F6E56;padding:6px 4px">견적서 · ${esc(q.client)}</td></tr>`;
+  html += `<tr><td colspan="6" style="font-size:10pt;color:#555;padding:2px 4px">견적번호 ${esc(q.docNo)} · 견적일 ${esc(q.date)} · 유효기간 ${esc(q.valid || '-')}</td></tr></table>`;
+  html += `<table style="border-collapse:collapse;margin-top:6px"><tr>${TH('No', 40)}${TH('품목', 200)}${TH('규격', 150)}${TH('수량', 60)}${TH('단가', 90)}${TH('금액', 100)}</tr>${body}`;
+  html += `<tr><td colspan="5" style="border:0.5pt solid #cfd8d4;text-align:right;font-weight:bold;padding:6px 9px">공급가액</td>${TD('<b>' + fmtWon(q.supply) + '</b>', R)}</tr>`;
+  html += `<tr><td colspan="5" style="border:0.5pt solid #cfd8d4;text-align:right;font-weight:bold;padding:6px 9px">부가세(10%)</td>${TD('<b>' + fmtWon(q.vat) + '</b>', R)}</tr>`;
+  html += `<tr><td colspan="5" style="border:0.5pt solid #cfd8d4;background:#e1f5ee;text-align:right;font-weight:bold;padding:6px 9px">합계금액</td><td style="border:0.5pt solid #cfd8d4;background:#e1f5ee;text-align:right;font-weight:bold;padding:5px 9px">${fmtWon(q.total)}</td></tr></table>`;
+  if (q.memo) html += `<table style="margin-top:8px"><tr><td style="font-weight:bold">비고 : ${esc(q.memo)}</td></tr></table>`;
+  html += `</body></html>`;
+  const blob = new Blob(['﻿', html], { type: 'application/vnd.ms-excel' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '견적서_' + (q.client || '') + '_' + (q.date || todayStr()) + '.xls'; document.body.appendChild(a); a.click(); a.remove();
+  toast('엑셀 다운로드');
 }
 /* 연도별 월별 출고 집계 (헤베·장수·두께별) */
 function shipMonthlyStats(yr) {
