@@ -1272,10 +1272,15 @@ function damagedStock(name) {
   return n;
 }
 function patternSelectHtml(name, current) {
-  const ps = patternList(name);
+  // 품목에 정의된 패턴 + 입고 이력 패턴을 모두 표시 (입고에 패턴이 없어도 지정 가능)
+  const qtyMap = {}; patternStock(name).forEach(p => { qtyMap[p.pattern] = p.remain; });
+  patternList(name).forEach(p => { if (qtyMap[p.pattern] == null) qtyMap[p.pattern] = p.qty; });
+  const names = []; const seen = new Set();
+  matPatternDefs(name).forEach(pn => { pn = (pn || '').trim(); if (pn && pn !== '-' && !seen.has(pn)) { seen.add(pn); names.push(pn); } });
+  Object.keys(qtyMap).forEach(pn => { if (pn && pn !== '-' && !seen.has(pn)) { seen.add(pn); names.push(pn); } });
   let html = '<option value="">패턴 선택 (선택)</option>';
-  ps.forEach(p => { html += `<option value="${esc(p.pattern)}" ${current === p.pattern ? 'selected' : ''}>${esc(p.pattern)} · ${p.qty}장</option>`; });
-  if (current && !ps.some(p => p.pattern === current)) html += `<option value="${esc(current)}" selected>${esc(current)}</option>`;
+  names.forEach(pn => { const q = qtyMap[pn]; html += `<option value="${esc(pn)}" ${current === pn ? 'selected' : ''}>${esc(pn)}${q != null ? ` · ${q}장` : ''}</option>`; });
+  if (current && !seen.has(current)) html += `<option value="${esc(current)}" selected>${esc(current)}</option>`;
   return html;
 }
 /* ===== 예정 입고(재입고 예정) ===== */
