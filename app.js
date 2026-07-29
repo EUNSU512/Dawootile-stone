@@ -1415,6 +1415,48 @@ async function preemptForUrgent() {
   try { toast('홀딩 자동조정 ' + moves.length + '건: 임박 건에 재고 배정, 먼 건은 예정으로'); } catch (e) { }
   return changed.size;
 }
+/* 수동 당겨오기: 이 홀딩의 부족분(예정)을 다른 홀딩(가장 먼 일정부터)에서 강제로 당겨온다.
+   3일/21일 조건 무관 — 직원이 직접 판단해 재배치. 물리 재고 총량 불변. */
+async function pullStockForHold(id) {
+  const target = state.holdings.find(h => h.id === id); if (!target) return;
+  const tItems = holdItems(target).map(x => ({ materialName: x.materialName, jang: +x.jang || 0, lot: x.lot || '', pattern: x.pattern || '', planned: !!x.planned }));
+  const needs = tItems.filter(x => x.planned && x.jang > 0 && x.materialName);
+  if (!needs.length) { toast('이 홀딩은 부족분(예정)이 없습니다'); return; }
+  const donors = state.holdings.filter(h => h.id !== id && !['확정', '해제'].includes(h.status || '홀딩'))
+    .map(h => ({ h, items: holdItems(h).map(x => ({ materialName: x.materialName, jang: +x.jang || 0, lot: x.lot || '', pattern: x.pattern || '', planned: !!x.planned })) }));
+  const moves = []; const changedDonors = new Set();
+  for (const need of needs) {
+    let remaining = need.jang; const key = _normName(need.materialName);
+    const sorted = donors.slice().sort((a, b) => (b.h.useDate || '0000-00-00').localeCompare(a.h.useDate || '0000-00-00'));   // 먼 일정 우선
+    for (const d of sorted) {
+      if (remaining <= 0) break;
+      const di = d.items.find(x => _normName(x.materialName) === key && !x.planned && x.jang > 0);
+      if (!di) continue;
+      const x = Math.min(remaining, di.jang);
+      di.jang -= x;
+      const dPl = d.items.find(y => _normName(y.materialName) === key && y.planned);
+      if (dPl) dPl.jang += x; else d.items.push({ materialName: di.materialName, jang: x, lot: di.lot, pattern: di.pattern, planned: true });
+      remaining -= x; changedDonors.add(d); moves.push({ donor: d.h.vendor || '', x });
+    }
+    const got = need.jang - remaining;
+    if (got > 0) { need.jang -= got; const tAct = tItems.find(x => _normName(x.materialName) === key && !x.planned); if (tAct) tAct.jang += got; else tItems.push({ materialName: need.materialName, jang: got, lot: need.lot, pattern: need.pattern, planned: false }); }
+  }
+  const total = moves.reduce((a, b) => a + b.x, 0);
+  if (!total) { toast('당겨올 다른 홀딩 재고가 없습니다 (전부 부족·예정 상태)'); return; }
+  if (!confirm(`다른 홀딩에서 ${total}장을 이 홀딩으로 당겨올까요?\n· 먼 일정 홀딩이 그만큼 '예정'으로 내려갑니다\n· 실물 재고 총량은 그대로입니다`)) return;
+  const writeHold = (h, items) => {
+    const clean = items.filter(x => x.jang > 0).map(x => { const inv = state.inventory.find(i => _normName(i.name) === _normName(x.materialName)); return { materialName: x.materialName, jang: x.jang, hebe: inv ? +((x.jang) * (+inv.hebePerJang || 0)).toFixed(2) : 0, lot: x.lot || '', pattern: x.pattern || '', planned: !!x.planned }; });
+    if (!clean.length) return null;
+    const status = clean.every(x => x.planned) ? '예정' : '홀딩'; const first = clean[0];
+    return { items: clean, status, materialName: first.materialName, jang: first.jang, hebe: first.hebe, lot: first.lot || '' };
+  };
+  try {
+    const tp = writeHold(target, tItems);
+    if (tp) { if (!tp.items.some(x => x.planned) && target.autoDemoted) tp.autoDemoted = false; await Store.update('holdings', target.id, tp); }
+    for (const d of changedDonors) { const dp = writeHold(d.h, d.items); if (dp) { const hadPlanned = holdItems(d.h).some(x => x.planned); if (!hadPlanned && dp.items.some(x => x.planned)) { dp.autoDemoted = true; dp.autoDemotedAt = Date.now(); } await Store.update('holdings', d.h.id, dp); } }
+    toast('당겨오기 완료 · ' + total + '장 재배정 (먼 일정은 예정으로)');
+  } catch (e) { toast('당겨오기 실패'); }
+}
 /* ===== 자재 여러 줄 입력 컴포넌트 (현장/홀딩 공용) ===== */
 let _mrowN = 0, _mrowPattern = false, _mrowDepot = false;   // _mrowPattern: 패턴 선택칸 표시 / _mrowDepot: 출고 폼에서 true → 창고별 재고 선택칸 표시
 function matRowHtml(d, qtyPh) {
@@ -4222,6 +4264,7 @@ function holdCardHtml(h) {
         ${plan ? `<div style="font-size:12px;color:var(--amber-t);margin-top:4px"><i class="ti ti-clock-pause"></i> 입고되면 자동으로 홀딩으로 전환됩니다</div>` : ''}
         ${rel && h.releasedAuto ? `<div style="font-size:12px;color:var(--t3);margin-top:4px"><i class="ti ti-history"></i> 사용예정일 경과로 자동 해제됨 (${esc(h.releasedDate || '')})</div>` : ''}
         ${h.note ? `<div style="font-size:12px;color:var(--t3);margin-top:6px">${esc(h.note)}</div>` : ''}
+        ${!conf && !rel && holdItems(h).some(x => x.planned) ? `<button class="btn btn-sm btn-block" style="margin-top:8px;color:#7a5b2e;border-color:#e0c088;background:#fdf6ea" onclick="pullStockForHold('${h.id}')"><i class="ti ti-transfer-in"></i> 다른 홀딩에서 재고 당겨오기</button>` : ''}
         </div>
         <div class="hold-card-foot" style="margin-top:10px">${foot}</div>
       </div>`;
