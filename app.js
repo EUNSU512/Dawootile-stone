@@ -4761,12 +4761,23 @@ function chulgoDispatchCard(g, forWarehouse) {
     </div>
   </div>`;
 }
+function _chulgoDoneTs(g) { return (g.reqs.find(r => r.doneAt) || {}).doneAt || g.dispatchedAt || 0; }
+function _chulgoDoneDay(g) { const ts = _chulgoDoneTs(g); if (!ts) return '(날짜미상)'; const d = new Date(+ts); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 function chulgoCompletedSection() {
-  const done = chulgoDispatchGroups().filter(g => g.status === '완료')
-    .sort((a, b) => (((b.reqs.find(r => r.doneAt) || {}).doneAt || b.dispatchedAt || 0) - ((a.reqs.find(r => r.doneAt) || {}).doneAt || a.dispatchedAt || 0))).slice(0, 60);
+  const done = chulgoDispatchGroups().filter(g => g.status === '완료').sort((a, b) => _chulgoDoneTs(b) - _chulgoDoneTs(a));
   if (!done.length) return '';
-  return `<details style="margin-top:14px"><summary style="font-size:13px;color:var(--t2);cursor:pointer;padding:6px 2px;font-weight:600"><i class="ti ti-checks"></i> 완료 내역 <span style="color:var(--t3);font-weight:400">(${done.length}건 · 최근순 · 요청서 재인쇄/되돌리기 가능)</span></summary>
-    <div data-keepscroll style="border:0.5px solid var(--bd);border-radius:12px;padding:8px 9px 1px;background:#fff;margin-top:6px;max-height:48vh;overflow:auto">${done.map(chulgoCompletedRow).join('')}</div></details>`;
+  const wd = ['일', '월', '화', '수', '목', '금', '토'];
+  const dayLbl = day => { const p = String(day).split('-'); if (p.length !== 3) return esc(day); const dt = new Date(+p[0], +p[1] - 1, +p[2]); return `${+p[1]}/${+p[2]} <span style="color:var(--t3);font-weight:500">(${wd[dt.getDay()]})</span>`; };
+  const groupsByDay = {}; const order = [];
+  done.forEach(g => { const day = _chulgoDoneDay(g); if (!groupsByDay[day]) { groupsByDay[day] = []; order.push(day); } groupsByDay[day].push(g); });
+  const body = order.map(day => {
+    const gs = groupsByDay[day];
+    const cnt = gs.reduce((a, g) => a + g.reqs.length, 0);
+    return `<details ${order[0] === day ? 'open' : ''} style="margin-bottom:6px"><summary style="cursor:pointer;font-size:12.5px;font-weight:700;color:var(--t1);padding:7px 9px;background:var(--soft);border-radius:8px"><i class="ti ti-calendar" style="font-size:13px"></i> ${dayLbl(day)} <span style="color:var(--t3);font-weight:500">· 지시 ${gs.length}건 · 품목 ${cnt}건</span></summary>
+      <div style="padding:7px 2px 1px">${gs.map(chulgoCompletedRow).join('')}</div></details>`;
+  }).join('');
+  return `<details style="margin-top:14px"><summary style="font-size:13px;color:var(--t2);cursor:pointer;padding:6px 2px;font-weight:600"><i class="ti ti-checks"></i> 완료 내역 <span style="color:var(--t3);font-weight:400">(${done.length}건 · 일별 · 요청서 재인쇄/되돌리기 가능)</span></summary>
+    <div data-keepscroll style="margin-top:6px;max-height:52vh;overflow:auto">${body}</div></details>`;
 }
 function chulgoCompletedRow(g) {
   const doneAt = (g.reqs.find(r => r.doneAt) || {}).doneAt;
