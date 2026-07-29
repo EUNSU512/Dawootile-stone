@@ -3167,12 +3167,27 @@ function filterShipSlips() {
   if (el('slip-list')) el('slip-list').innerHTML = shipSlipListHtml();
   const x = el('slip-search-x'); if (x) x.style.display = (filters.slipSearch || '').trim() ? '' : 'none';
 }
+/* 자재명에서 두께(티) 추출: "…12T","…6티" → "12T" / 없으면 '' */
+function parseThick(name) { const m = String(name || '').match(/(\d{1,3})\s*(?:T|t|티)(?![a-zA-Z가-힣])/); return m ? m[1] + 'T' : ''; }
+/* 출고 두께별 장수 집계 (조건: 날짜 predicate) */
+function shipThickAgg(pred) {
+  const m = {}; let total = 0;
+  (state.transactions || []).forEach(t => { if (t.type !== 'out') return; if (!pred(t.date || '')) return; const j = +t.jang || 0; if (j <= 0) return; const key = parseThick(t.itemName) || '기타'; m[key] = (m[key] || 0) + j; total += j; });
+  return { total, m };
+}
+function thickChipsHtml(agg) {
+  const keys = Object.keys(agg.m).sort((a, b) => { const na = parseInt(a); const nb = parseInt(b); if (isNaN(na)) return 1; if (isNaN(nb)) return -1; return nb - na; });
+  if (!keys.length) return '<span style="color:var(--t3)">출고 없음</span>';
+  return keys.map(k => `<span style="display:inline-block;background:#eaf1ff;color:#1b4fb0;border-radius:7px;padding:2px 8px;font-size:12.5px;font-weight:700;margin:2px 4px 2px 0">${esc(k.replace('T', '티'))} <b>${agg.m[k]}</b>장</span>`).join('');
+}
 function renderShip() {
   const _shipSY = window.scrollY, _shipTW = el('r-wrap') ? el('r-wrap').scrollTop : 0;   // 재렌더 후 스크롤 위치 유지
   const outs = state.transactions.filter(t => t.type === 'out').sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const now = new Date(); const ym = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
   const monthOut = outs.filter(t => (t.date || '').startsWith(ym));
   const monthHebe = monthOut.reduce((a, b) => a + (+b.hebe || 0), 0);
+  const _today = todayStr();
+  const todayAgg = shipThickAgg(d => d === _today), monthAgg = shipThickAgg(d => d.startsWith(ym));
   const year = now.getFullYear();
   const monthly = Array.from({ length: 12 }, (_, m) => outs.filter(t => (t.date || '').startsWith(year + '-' + String(m + 1).padStart(2, '0'))).reduce((a, b) => a + (+b.hebe || 0), 0));
   const maxM = Math.max(1, ...monthly);
@@ -3189,9 +3204,20 @@ function renderShip() {
   el('pg-ship').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-truck-delivery"></i>출고 현황</h2><p>현장·공장·거래처 출고 + 월별 분석</p></div>
       <button class="btn btn-pri btn-sm" onclick="openShipForm()"><i class="ti ti-plus"></i>출고 등록</button></div>
-    <div class="stat-grid" style="grid-template-columns:repeat(2,1fr)">
-      <div class="stat"><div class="ic b"><i class="ti ti-calendar-stats"></i></div><div class="v">${monthHebe.toFixed(0)}<span style="font-size:14px">㎡</span></div><div class="l">이번 달 출고</div><div class="s">${monthOut.length}건</div></div>
-      <div class="stat"><div class="ic g"><i class="ti ti-package-export"></i></div><div class="v">${outs.length}</div><div class="l">총 출고 건수</div><div class="s">전체 누적</div></div>
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-h"><h3><i class="ti ti-package-export"></i>출고 현황</h3><span class="more" style="font-size:11.5px;color:var(--t3)">두께(티)별 장수</span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div style="background:var(--soft);border-radius:11px;padding:11px 12px">
+          <div style="font-size:12px;color:var(--t3);font-weight:600"><i class="ti ti-calendar-event" style="font-size:12px"></i> 오늘 출고</div>
+          <div style="font-size:23px;font-weight:800;margin:1px 0 5px">${todayAgg.total}<span style="font-size:13px;font-weight:600;color:var(--t2)">장</span></div>
+          <div style="line-height:1.7">${thickChipsHtml(todayAgg)}</div>
+        </div>
+        <div style="background:var(--soft);border-radius:11px;padding:11px 12px">
+          <div style="font-size:12px;color:var(--t3);font-weight:600"><i class="ti ti-calendar-stats" style="font-size:12px"></i> 이번 달 출고 <span style="color:var(--t3);font-weight:400">(${monthOut.length}건)</span></div>
+          <div style="font-size:23px;font-weight:800;margin:1px 0 5px">${monthAgg.total}<span style="font-size:13px;font-weight:600;color:var(--t2)">장</span></div>
+          <div style="line-height:1.7">${thickChipsHtml(monthAgg)}</div>
+        </div>
+      </div>
     </div>
     <div class="seg" id="ship-seg" style="margin:2px 0 12px">
       <button type="button" data-t="slip" class="${shipTab === 'slip' ? 'on' : ''}" onclick="goShipTab('slip')"><i class="ti ti-printer" style="font-size:14px"></i> 출고증</button>
