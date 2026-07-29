@@ -88,6 +88,24 @@ body.cust-mode .wrap{padding-bottom:24px}
 .nav-i.active{color:var(--gd);font-weight:700}
 .nav-i.active i{color:var(--g)}
 .nav-i.active::before{content:"";position:absolute;top:0;width:30px;height:3px;border-radius:0 0 3px 3px;background:var(--g)}
+.sidebar{display:none}
+.side-i{background:none;border:none;font-family:inherit;cursor:pointer}
+@media(min-width:1024px){
+  #app{padding-left:214px;padding-bottom:12px}
+  .sidebar{display:flex;flex-direction:column;position:fixed;top:0;left:0;bottom:0;width:214px;background:#20242e;z-index:55;overflow-y:auto;padding:6px 0}
+  .side-logo{display:flex;align-items:center;gap:9px;padding:16px 16px 12px;color:#fff;font-weight:800;font-size:15.5px;letter-spacing:.2px}
+  .side-logo i{color:#5DCAA5;font-size:22px}
+  .side-i{display:flex;align-items:center;gap:11px;margin:2px 9px;padding:10px 13px;border-radius:9px;color:#c2ccda;font-size:13.5px;font-weight:600;text-align:left;position:relative;transition:background .12s}
+  .side-i i{font-size:19px;width:20px;text-align:center}
+  .side-i:hover{background:#2a303c;color:#fff}
+  .side-i.active{background:#2f6fed;color:#fff}
+  .side-sep{flex:1;min-height:8px}
+  .side-lo{color:#f0a3a3;border-top:1px solid #333a47;border-radius:0;margin:6px 0 0}
+  .side-lo:hover{background:#3a2626;color:#fff}
+  .botnav{display:none}
+  .tb-menu{display:none}
+  .fab{right:24px;bottom:24px}
+}
 
 .page{display:none;animation:fade .2s}
 .page.active{display:block}
@@ -432,6 +450,20 @@ body.cust-mode .wrap{padding-bottom:24px}
       <button class="drawer-i" data-tab="settings" onclick="goD('settings')"><i class="ti ti-settings"></i>설정</button>
       <button class="drawer-i lo" onclick="logout()"><i class="ti ti-logout"></i>로그아웃</button>
     </nav>
+  </aside>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="side-logo"><i class="ti ti-building-warehouse"></i>다우세라믹</div>
+    <button class="side-i active" data-tab="home" onclick="go('home')"><i class="ti ti-home-2"></i>홈</button>
+    <button class="side-i" data-tab="sites" onclick="go('sites')"><i class="ti ti-building-community"></i>현장</button>
+    <button class="side-i" data-tab="stock" onclick="go('stock')"><i class="ti ti-packages"></i>재고 · 입고</button>
+    <button class="side-i" data-tab="ship" onclick="go('ship')"><i class="ti ti-truck-delivery"></i>출고</button>
+    <button class="side-i" data-tab="hold" onclick="go('hold')"><i class="ti ti-lock-square-rounded"></i>홀딩</button>
+    <button class="side-i" data-tab="basin" onclick="go('basin')"><i class="ti ti-bath"></i>세면대 발주</button>
+    <button class="side-i" data-tab="chulgo" onclick="go('chulgo')"><i class="ti ti-clipboard-list"></i>출고관리</button>
+    <button class="side-i" data-tab="settings" onclick="go('settings')"><i class="ti ti-settings"></i>설정</button>
+    <div class="side-sep"></div>
+    <button class="side-i side-lo" onclick="logout()"><i class="ti ti-logout"></i>로그아웃</button>
   </aside>
 
   <div class="wrap">

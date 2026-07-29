@@ -711,6 +711,7 @@ function go(t) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-i').forEach(n => n.classList.toggle('active', n.dataset.tab === t));
   document.querySelectorAll('.drawer-i[data-tab]').forEach(n => n.classList.toggle('active', n.dataset.tab === t));
+  document.querySelectorAll('.side-i[data-tab]').forEach(n => n.classList.toggle('active', n.dataset.tab === t));
   el('pg-' + t).classList.add('active');
   el('fab').style.display = (!isRestrictedRole() && (t === 'sites' || t === 'stock' || t === 'hold' || t === 'basin')) ? 'flex' : 'none';
   render();
