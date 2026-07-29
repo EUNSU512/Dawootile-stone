@@ -4692,6 +4692,8 @@ function chulgoDispatchCard(g, forWarehouse) {
     </div>`).join('');
   const when = g.dispatchedAt ? new Date(+g.dispatchedAt).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
   const veh = [g.companyDispatch ? '🚚 업체 배차' : (g.driver ? '기사 ' + g.driver : ''), g.loadTime ? '상차 ' + g.loadTime : '', multiStop ? '하차지 ' + g.stops.length + '곳' : ''].filter(Boolean).join(' · ');
+  const chatRep = g.reqs[0]; const chatUnread = chatRep ? chulgoUnread(chatRep) : 0;
+  const chatBtn = chatRep ? `<button class="btn btn-sm" style="position:relative" onclick="openChulgoChat('${chatRep.id}')"><i class="ti ti-messages"></i>채팅${chatUnread ? ` <span style="background:#e23b3b;color:#fff;border-radius:9px;padding:0 5px;font-size:10px;font-weight:700">${chatUnread}</span>` : ''}</button>` : '';
   return `<div class="card" style="margin-bottom:9px;padding:12px 14px;border-left:4px solid ${g.urgent ? '#e23b3b' : '#2f6fed'}">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
       <div style="min-width:0"><div style="font-weight:700;font-size:14px">${urgBadge}${packBadge}출고 지시 · ${esc(g.clients.join(', ') || '-')}${g.reqs.length > 1 ? ` <span style="font-size:11px;color:var(--t3)">(${g.reqs.length}건 묶음)</span>` : ''}</div>
@@ -4703,6 +4705,7 @@ function chulgoDispatchCard(g, forWarehouse) {
     <div class="frm-foot" style="margin-top:9px">
       ${forWarehouse && st === '지시' ? `<button class="btn btn-pri btn-sm" style="flex:1.4" onclick="chulgoAckDispatch('${g.dispatchId}')"><i class="ti ti-check"></i>접수 (요청서 인쇄)</button>` : ''}
       ${forWarehouse && (st === '지시' || st === '확인') ? `<button class="btn btn-sm" style="flex:1" onclick="chulgoDoneDispatch('${g.dispatchId}')"><i class="ti ti-circle-check"></i>완료</button>` : ''}
+      ${chatBtn}
       <button class="btn btn-sm" onclick="chulgoPrintDispatch('${g.dispatchId}')"><i class="ti ti-printer"></i>요청서${forWarehouse ? ' 재인쇄' : ''}</button>
       ${!forWarehouse && st !== '완료' ? `<button class="btn btn-sm" style="color:var(--red-t)" onclick="cancelDispatch('${g.dispatchId}')" title="출고 지시 취소 · 대기열로 되돌림"><i class="ti ti-arrow-back-up"></i></button>` : ''}
     </div>
