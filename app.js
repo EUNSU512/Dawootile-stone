@@ -4812,40 +4812,57 @@ function chulgoPrintDispatch(dispatchId) {
   const e = s => esc(s == null ? '' : String(s));
   const urg = g.urgent ? '긴급' : '보통';
   const stops = g.stops || [{ client: g.clients.join(', '), dest: g.dispatchDest, items: g.items }];
-  const multiStop = stops.length > 1;
-  const COLS = 5;
+  const kdate = ds => { const p = String(ds || '').split('-'); if (p.length !== 3) return e(ds || todayStr()); const dt = new Date(+p[0], +p[1] - 1, +p[2]); const w = ['일', '월', '화', '수', '목', '금', '토'][dt.getDay()]; return `${+p[0]}년 ${+p[1]}월 ${+p[2]}일 (${w})`; };
+  const ktime = tm => { const m = String(tm || '').match(/^(\d{1,2}):(\d{2})/); if (!m) return e(tm) || '-'; let h = +m[1]; const mm = m[2]; const ap = h < 12 ? '오전' : '오후'; let hh = h % 12; if (hh === 0) hh = 12; return `${ap} ${hh}시${mm !== '00' ? ' ' + (+mm) + '분' : ''}`; };
+  const ackAt = (g.reqs.find(r => r.ackedAt) || {}).ackedAt;
+  const ackTime = ackAt ? new Date(+ackAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', hour12: false }) : '';
+  const isBasin = g.reqs.some(r => r.sourceBasinId);
+  const banner = isBasin ? '🛁　세 면 대　출 고 · 주 문 제 작' : (g.packing ? '📦　포 장 건' + (g.dispatchNote ? '　·　' + g.dispatchNote : '') : '');
+  const driverTxt = g.companyDispatch ? '업체 직접 상차' : (e(g.driver) || '-');
   let rows = ''; let no = 0;
   stops.forEach(s => {
-    if (multiStop) rows += `<tr><td class="l" colspan="${COLS}" style="background:#eef4ff;font-weight:800">🏭 ${e(s.client)}${s.dest ? '　·　하차: ' + e(s.dest) : ''}</td></tr>`;
-    (s.items || []).forEach(it => { no++; rows += `<tr><td class="c">${no}</td><td class="l">${e(it.name)}</td><td class="l">${e(it.spec)}</td><td class="r">${e(it.qty)}</td><td class="c">${e(it.unit)}</td></tr>`; });
+    rows += `<tr><td class="grp" colspan="6">◼&nbsp; 거래처 : <b>${e(s.client)}</b> <span style="font-weight:600;color:#555">(${(s.items || []).length}품목)</span></td></tr>`;
+    (s.items || []).forEach(it => { no++; rows += `<tr><td class="c">${no}</td><td class="l">${e(it.name)}</td><td class="c">${e(it.spec)}</td><td class="c">${e(it.qty)}</td><td class="c">${e(it.unit)}</td><td class="l">${g.companyDispatch ? '업체 직접 수령' : e(s.dest)}</td></tr>`; });
   });
-  const MIN = Math.max(8, no);
-  for (let i = no; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td></tr>`;
+  const MIN = Math.max(6, no);
+  for (let i = no; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
   const memoTxt = [g.dispatchNote || '', ...(g.memos || [])].filter(Boolean).join('  /  ');
-  const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>출고 요청서 ${e(g.clients.join(','))}</title>
-<style>*{box-sizing:border-box}body{font-family:'맑은 고딕','Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#111;margin:0;padding:22px 26px;position:relative}
-h1{text-align:center;font-size:26px;font-weight:800;letter-spacing:12px;margin:0 0 4px}.co{text-align:center;font-size:13px;color:#333;margin-bottom:14px}
-.pstamp{position:absolute;top:14px;right:20px;border:5px solid #d11;color:#d11;font-size:34px;font-weight:900;letter-spacing:8px;padding:8px 20px 10px;border-radius:12px;transform:rotate(-13deg);opacity:.92}
-table{border-collapse:collapse;width:100%}.info td{border:1px solid #444;padding:7px 9px;font-size:13px}.info .k{background:#f2f2f2;font-weight:700;text-align:center;white-space:nowrap;width:14%}
-.urg{color:#c0341d;font-weight:800}.items{margin-top:12px;table-layout:fixed}.items th{border:1px solid #444;background:#eee;padding:7px 6px;font-size:13px}.items td{border:1px solid #444;padding:6px;font-size:12.5px;height:30px}
-.items td.c{text-align:center}.items td.r{text-align:right;padding-right:9px}.items td.l{text-align:left;padding-left:9px}
-.memo{margin-top:12px;border:1px solid #444}.memo .mh{background:#f2f2f2;font-weight:700;font-size:12.5px;padding:6px 9px;border-bottom:1px solid #444}.memo .mb{padding:10px;min-height:56px;font-size:12.5px;white-space:pre-wrap}
-.foot{margin-top:12px}.foot td{border:1px solid #444;padding:14px 10px;font-size:12.5px}.foot .k{background:#f2f2f2;font-weight:700;text-align:center;width:16%}
-@media print{body{padding:8px 10px}}</style></head><body>
-  ${g.packing ? '<div class="pstamp">포 장</div>' : ''}
+  const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>출고 요청서 ${e(g.clients.join(','))} ${e(g.docNos[0] || '')}</title>
+<style>*{box-sizing:border-box}body{font-family:'맑은 고딕','Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#111;margin:0;padding:20px 28px;position:relative}
+h1{text-align:center;font-size:30px;font-weight:800;letter-spacing:16px;margin:2px 0 2px}
+.sub{text-align:center;font-size:12.5px;color:#666;margin-bottom:14px;letter-spacing:.5px}
+.docno{position:absolute;top:20px;right:28px;font-size:13px;font-weight:700}
+table{border-collapse:collapse;width:100%}
+.info td{border:1px solid #333;padding:8px 10px;font-size:13px}.info .k{background:#f2f2f2;font-weight:700;text-align:center;white-space:nowrap;width:15%}
+.banner{border:2px solid #111;border-radius:10px;text-align:center;font-size:19px;font-weight:800;letter-spacing:3px;padding:11px;margin:0 0 12px}
+.urg{color:#c0341d;font-weight:800}
+.items{margin-top:0}.items th{border:1px solid #333;background:#efefef;padding:8px 6px;font-size:13px;color:#333}.items td{border:1px solid #333;padding:7px 6px;font-size:13px;height:32px}
+.items td.c{text-align:center}.items td.l{text-align:left;padding-left:10px}.items td.grp{background:#eaf1ff;font-size:13px;text-align:left;padding-left:10px}
+.detail{margin-top:12px}.detail td{border:1px solid #333;padding:11px 10px;font-size:13px}.detail .k{background:#f2f2f2;font-weight:700;text-align:center;white-space:nowrap;width:15%}
+.sign{margin-top:14px}.sign td{border:1px solid #333;font-size:12.5px;text-align:center}.sign .k{background:#f2f2f2;font-weight:700;padding:9px 6px;width:12%}.sign .v{padding:9px 6px;height:48px;vertical-align:top;width:21.3%}
+.co{text-align:center;font-size:15px;font-weight:800;margin-top:14px}
+@media print{body{padding:10px 12px}}</style></head><body>
+  <div class="docno">No. ${e(g.docNos[0] || '')}${g.docNos.length > 1 ? ' 외 ' + (g.docNos.length - 1) : ''}</div>
   <h1>출 고 요 청 서</h1>
-  <div class="co">${DAWOO_CO.name}</div>
+  <div class="sub">${DAWOO_CO.name}　|　Material Dispatch Order</div>
+  ${banner ? `<div class="banner">${e(banner)}</div>` : ''}
   <table class="info">
-    <tr><td class="k">문서번호</td><td>${e(g.docNos.join(', '))}</td><td class="k">발행일자</td><td>${e(todayStr())}</td></tr>
-    <tr><td class="k">거래처</td><td>${e(g.clients.join(', '))}</td><td class="k">묶음</td><td>${g.reqs.length}건</td></tr>
-    <tr><td class="k">긴급도</td><td class="${urg !== '보통' ? 'urg' : ''}">${e(urg)}</td><td class="k">요청자</td><td>${e(g.dispatchedBy)}</td></tr>
-    <tr><td class="k">기사 / 배차</td><td>${g.companyDispatch ? '업체 배차' : (e(g.driver) || '-')}</td><td class="k">상차 예정</td><td>${e(g.loadTime) || '-'}</td></tr>
-    <tr><td class="k">하차지</td><td>${g.companyDispatch ? '업체 배차 · 직접 수령' : (multiStop ? '업체별 (아래 표 참조)' : (e(g.dispatchDest) || '-'))}</td><td class="k">포장</td><td class="${g.packing ? 'urg' : ''}">${g.packing ? '○ 포장 건' : '-'}</td></tr>
+    <tr><td class="k">문서번호</td><td>${e(g.docNos.join(', '))}</td><td class="k">발행일자</td><td>${kdate(todayStr())}</td></tr>
+    <tr><td class="k">출고예정일</td><td><b>${kdate(todayStr())}</b></td><td class="k">긴급도</td><td class="${urg !== '보통' ? 'urg' : ''}">${e(urg)}</td></tr>
+    <tr><td class="k">요청자</td><td colspan="3">${e(g.dispatchedBy) || '-'}</td></tr>
   </table>
-  <table class="items"><colgroup><col style="width:8%"><col style="width:40%"><col style="width:28%"><col style="width:14%"><col style="width:10%"></colgroup>
-    <thead><tr><th>No</th><th>품목명</th><th>규격 / 롯트·패턴</th><th>수량</th><th>단위</th></tr></thead><tbody>${rows}</tbody></table>
-  <div class="memo"><div class="mh">특이사항 및 비고</div><div class="mb">${e(memoTxt)}</div></div>
-  <table class="foot"><tr><td class="k">출고 담당</td><td>${e(g.handler)}</td><td class="k">인수인 (서명)</td><td></td></tr></table>
+  <table class="items" style="margin-top:12px"><colgroup><col style="width:7%"><col style="width:30%"><col style="width:20%"><col style="width:9%"><col style="width:9%"><col style="width:25%"></colgroup>
+    <thead><tr><th>No</th><th>품목명</th><th>규격</th><th>수량</th><th>단위</th><th>출고지</th></tr></thead><tbody>${rows}</tbody></table>
+  <table class="detail">
+    <tr><td class="k">배송차량</td><td>${e(g.vehicle) || '-'}</td><td class="k">기사명</td><td>${driverTxt}</td></tr>
+    <tr><td class="k">상차예정</td><td>${ktime(g.loadTime)}</td><td class="k">출고확인시각</td><td>${ackTime || '<span style="color:#aaa">　　　:　　</span>'}</td></tr>
+    <tr><td class="k">비 고</td><td colspan="3">${e(memoTxt)}</td></tr>
+    <tr><td class="k">창고 코멘트</td><td colspan="3" style="height:40px"></td></tr>
+  </table>
+  <table class="sign">
+    <tr><td class="k">요청</td><td class="v">${e(g.dispatchedBy) || ''}</td><td class="k">출고담당<br>(확인자)</td><td class="v">${e(g.handler) || ''}</td><td class="k">차량인수</td><td class="v"></td></tr>
+  </table>
+  <div class="co">${DAWOO_CO.name}</div>
 </body></html>`;
   const w = window.open('', '_blank');
   if (!w) { toast('팝업이 차단되었습니다. 팝업 허용 후 다시'); return; }
