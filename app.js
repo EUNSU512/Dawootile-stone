@@ -4672,6 +4672,7 @@ function chulgoDispatchGroups() {
       dispatchDest: [...new Set(reqs.map(r => (r.dispatchDest || '').trim()).filter(Boolean))].join(' / '),
       stops,
       handler: (reqs.find(r => r.handler) || {}).handler || '', memos: reqs.map(r => (r.memo || '').trim()).filter(Boolean),
+      dispatchNote: (reqs.find(r => (r.dispatchNote || '').trim()) || {}).dispatchNote || '',
       dispatchedAt: rep.dispatchedAt || 0, dispatchedBy: rep.dispatchedBy || '',
       urgent: reqs.some(r => r.urgent),
       clients: [...new Set(reqs.map(r => r.client).filter(Boolean))],
@@ -4701,6 +4702,7 @@ function chulgoDispatchCard(g, forWarehouse) {
       <span class="pill ${cls}" style="flex:none">${esc(st)}</span></div>
     ${veh ? `<div style="margin-top:5px;font-size:12.5px;color:#2f6fed;font-weight:600">${esc(veh)}</div>` : ''}
     ${packBar}
+    ${g.dispatchNote ? `<div style="margin-top:6px;font-size:12.5px;background:#fffbe6;border:1px solid #f0d98a;border-radius:8px;padding:6px 9px;color:#7a5a00"><i class="ti ti-note"></i> <b>비고</b> · ${esc(g.dispatchNote)}</div>` : ''}
     <div style="margin-top:7px">${items}</div>
     <div class="frm-foot" style="margin-top:9px">
       ${forWarehouse && st === '지시' ? `<button class="btn btn-pri btn-sm" style="flex:1.4" onclick="chulgoAckDispatch('${g.dispatchId}')"><i class="ti ti-check"></i>접수 (요청서 인쇄)</button>` : ''}
@@ -4771,7 +4773,7 @@ function chulgoPrintDispatch(dispatchId) {
   });
   const MIN = Math.max(8, no);
   for (let i = no; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td></tr>`;
-  const memoTxt = (g.memos || []).join('  /  ');
+  const memoTxt = [g.dispatchNote || '', ...(g.memos || [])].filter(Boolean).join('  /  ');
   const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>출고 요청서 ${e(g.clients.join(','))}</title>
 <style>*{box-sizing:border-box}body{font-family:'맑은 고딕','Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#111;margin:0;padding:22px 26px;position:relative}
 h1{text-align:center;font-size:26px;font-weight:800;letter-spacing:12px;margin:0 0 4px}.co{text-align:center;font-size:13px;color:#333;margin-bottom:14px}
@@ -4869,6 +4871,7 @@ function chulgoOfficeSection() {
       <input id="dsp-dest" lang="ko" list="dsp-dest-list" placeholder="공통 하차지(선택) · 비우면 각 건 하차지 사용" style="width:100%;font-size:15px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:10px;margin-bottom:10px">
       <datalist id="dsp-dest-list">${dests.map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist>
       <button type="button" id="dsp-pack" data-on="0" onclick="chulgoTogglePack()" class="btn btn-sm" style="width:100%;justify-content:center;margin-bottom:10px"><i class="ti ti-package"></i> 포장 건 — 누르면 표시</button>
+      <textarea id="dsp-memo" lang="ko" placeholder="비고 · 특이사항 (창고 전달사항 · 요청서에 기재)" style="width:100%;font-size:15px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:10px;margin-bottom:10px;min-height:52px;resize:vertical"></textarea>
       <button class="btn btn-pri btn-block" onclick="issueDispatch()"><i class="ti ti-truck-delivery"></i>선택 항목 묶어 출고 지시 내리기 (창고 알림)</button>
     </div>
     <div style="font-size:12px;font-weight:600;color:var(--t2);margin:2px 2px 6px">진행 중 지시</div>
@@ -4931,6 +4934,7 @@ async function issueDispatch() {
   const loadTime = (el('dsp-time') && el('dsp-time').value || '').trim();
   const overrideDest = (el('dsp-dest') && el('dsp-dest').value || '').trim();   // 공통 하차지(선택) — 비우면 각 건의 하차지 유지
   const packing = !!(el('dsp-pack') && el('dsp-pack').dataset.on === '1');
+  const dispatchNote = (el('dsp-memo') && el('dsp-memo').value || '').trim();   // 비고·특이사항
   const selReqs = (state.chulgoReqs || []).filter(r => ids.includes(r.id));
   if (sel === '__other' && !driver) { toast('기사명을 입력하세요'); return; }
   if (!company && selReqs.some(r => !(overrideDest || (r.dispatchDest || '').trim()))) { toast('하차지가 없는 건이 있습니다. 공통 출고지를 입력하거나 출고 등록 시 하차지를 지정하세요'); return; }
@@ -4943,7 +4947,7 @@ async function issueDispatch() {
       const r = selReqs.find(x => x.id === id) || {};
       const itemDest = company ? '' : (overrideDest || (r.dispatchDest || '').trim());   // 업체별 하차지 유지(공통 입력 시 덮어씀)
       if (itemDest) dests.add(itemDest);
-      await Store.update('chulgoReqs', id, { status: '지시', dispatchId, vehicle: '', driver, companyDispatch: company, loadTime, packing, dispatchDest: itemDest, dispatchedAt: Date.now(), dispatchedBy: (me && me.name) || '' });
+      await Store.update('chulgoReqs', id, { status: '지시', dispatchId, vehicle: '', driver, companyDispatch: company, loadTime, packing, dispatchNote, dispatchDest: itemDest, dispatchedAt: Date.now(), dispatchedBy: (me && me.name) || '' });
     }
     const destTxt = company ? '' : [...dests].join(' / ');
     const summary = (clients.join(', ') || '출고') + (ids.length > 1 ? ` 외 ${ids.length}건` : '') + (packing ? ' · 📦포장' : '') + (destTxt ? ' → ' + destTxt : '');
