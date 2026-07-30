@@ -733,21 +733,23 @@ let _renderTimer = null;
 function clientStats(name) {
   const qs = (state.quotes || []).filter(q => _normName(q.client) === _normName(name));
   const total = qs.reduce((a, b) => a + (+b.total || 0), 0);
-  const unpaid = qs.filter(q => !q.paid).reduce((a, b) => a + (+b.total || 0), 0);
+  const unpaid = qs.reduce((a, b) => a + Math.max(0, (+b.total || 0) - (+b.paidAmount || 0)), 0);
+  const paidSum = qs.reduce((a, b) => a + Math.min(+b.total || 0, +b.paidAmount || 0), 0);
   const noTax = qs.filter(q => !q.taxInvoice).length;
-  return { count: qs.length, total: total, unpaid: unpaid, noTax: noTax };
+  return { count: qs.length, total: total, unpaid: unpaid, paidSum: paidSum, noTax: noTax };
 }
 function downloadClientLedger(id) {
   const c = (state.clients || []).find(x => x.id === id); if (!c) return;
   if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후 다시'); return; }
   const qs = (state.quotes || []).filter(x => _normName(x.client) === _normName(c.value)).sort((a, b) => (+a.createdAt || 0) - (+b.createdAt || 0));
-  const head = ['날짜', '견적번호', '품목', '공급가액', '부가세', '합계', '결제', '결제일', '세금계산서', '승인번호'];
-  const rows = qs.map(q => { const names = (q.items || []).map(it => it.name).filter(Boolean).slice(0, 3).join(', ') + ((q.items || []).length > 3 ? (' 외 ' + ((q.items || []).length - 3)) : ''); return [qDate(q), q.docNo || '', names, +q.supply || 0, +q.vat || 0, +q.total || 0, q.paid ? '완료' : '미결제', q.paidDate || '', q.taxInvoice ? '발행' : '미발행', q.ntsConfirmNum || '']; });
+  const head = ['날짜', '견적번호', '품목', '공급가액', '부가세', '합계', '입금액', '미수', '결제', '결제일', '세금계산서', '승인번호'];
+  const rows = qs.map(q => { const names = (q.items || []).map(it => it.name).filter(Boolean).slice(0, 3).join(', ') + ((q.items || []).length > 3 ? (' 외 ' + ((q.items || []).length - 3)) : ''); const _t = +q.total || 0; const _p = Math.min(_t, +q.paidAmount || 0); return [qDate(q), q.docNo || '', names, +q.supply || 0, +q.vat || 0, _t, _p, Math.max(0, _t - _p), (_t > 0 && _p >= _t) ? '완료' : (_p > 0 ? '일부' : '미결제'), q.paidDate || '', q.taxInvoice ? '발행' : '미발행', q.ntsConfirmNum || '']; });
   const supplySum = qs.reduce((a, b) => a + (+b.supply || 0), 0); const vatSum = qs.reduce((a, b) => a + (+b.vat || 0), 0); const total = qs.reduce((a, b) => a + (+b.total || 0), 0); const unpaid = qs.filter(q => !q.paid).reduce((a, b) => a + (+b.total || 0), 0);
   const ti = c.taxInfo || {};
   const aoa = [['거래처 원장 · ' + c.value], ['출력일 ' + todayStr() + (ti.bizNo ? (' · 사업자 ' + ti.bizNo) : '') + (c.ctype ? (' · 유형 ' + c.ctype) : '')], [], head].concat(rows);
-  aoa.push([]); aoa.push(['', '', '합계', supplySum, vatSum, total, '', '', '', '']); aoa.push(['', '', '미수금', '', '', unpaid, '', '', '', '']);
-  const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 12 }, { wch: 16 }, { wch: 32 }, { wch: 12 }, { wch: 11 }, { wch: 13 }, { wch: 8 }, { wch: 12 }, { wch: 11 }, { wch: 22 }];
+  const paidSum = qs.reduce((a, b) => a + Math.min(+b.total || 0, +b.paidAmount || 0), 0);
+  aoa.push([]); aoa.push(['', '', '합계', supplySum, vatSum, total, paidSum, unpaid, '', '', '', '']);
+  const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 12 }, { wch: 16 }, { wch: 32 }, { wch: 12 }, { wch: 11 }, { wch: 13 }, { wch: 12 }, { wch: 12 }, { wch: 8 }, { wch: 12 }, { wch: 11 }, { wch: 22 }];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '원장');
   XLSX.writeFile(wb, '거래처원장_' + (c.value || '').replace(/\s/g, '') + '_' + todayStr() + '.xlsx');
   toast('원장 엑셀 다운로드');
@@ -860,7 +862,8 @@ function renderClientDetail() {
   const qs = (state.quotes || []).filter(x => _normName(x.client) === _normName(c.value)).sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
   const ledger = qs.length ? qs.map(qq => {
     const when = qDate(qq);
-    const paidPill = qq.paid ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${qq.id}')">결제완료</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${qq.id}')">미결제</button>`;
+    const _p = +qq.paidAmount || 0; const _t = +qq.total || 0;
+    const paidPill = (_t > 0 && _p >= _t) ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${qq.id}')">결제완료</button>` : (_p > 0 ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${qq.id}')">입금 ${fmtWon(_p)}·미수 ${fmtWon(_t - _p)}</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${qq.id}')">미결제</button>`);
     const taxPill = qq.taxInvoice ? `<span class="pill p-prog">계산서발행</span>` : `<span class="pill p-gray">계산서미발행</span>`;
     return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 2px;border-bottom:1px solid var(--bd)">
       <div style="min-width:0"><div style="font-size:12.5px;font-weight:600">${esc(qq.docNo || '')} <span style="color:var(--t3);font-weight:400">· ${esc(when)}</span></div>
@@ -872,8 +875,9 @@ function renderClientDetail() {
   el('pg-clients').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-user"></i>${esc(c.value)}</h2><p>거래처 상세</p></div>
       <button class="btn btn-sm" onclick="clientsBack()"><i class="ti ti-arrow-left"></i> 목록</button></div>
-    <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
+    <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
       <div class="stat"><div class="v" style="font-size:18px">${fmtWon(st.total)}</div><div class="l">총 매출</div></div>
+      <div class="stat"><div class="v" style="font-size:18px;color:var(--gd)">${fmtWon(st.paidSum)}</div><div class="l">입금액</div></div>
       <div class="stat"><div class="v" style="font-size:18px;color:${st.unpaid > 0 ? 'var(--red-t)' : ''}">${fmtWon(st.unpaid)}</div><div class="l">미수금</div></div>
       <div class="stat"><div class="v">${st.noTax}</div><div class="l">계산서 미발행</div></div>
     </div>
@@ -3769,13 +3773,31 @@ async function delQuote(id) {
   await Store.remove('quotes', id); filters.quoteEdit = ''; toast('삭제됨'); renderQuote();
 }
 /* ── 견적 ERP: 결제·세금계산서 상태, 견적→출고 ── */
-async function quoteMarkPaid(id) { const q = (state.quotes || []).find(x => x.id === id); if (!q) return; const paid = !q.paid; await Store.update('quotes', id, { paid, paidDate: paid ? todayStr() : '', paidAmount: paid ? (+q.total || 0) : 0 }); toast(paid ? '결제 완료 표시' : '결제 표시 해제'); }
+async function quoteMarkPaid(id) {
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
+  const total = +q.total || 0; const cur = +q.paidAmount || 0;
+  const inp = prompt('입금 받은 누적 금액을 입력하세요.\n합계 ' + fmtWon(total) + '원 · 현재 입금 ' + fmtWon(cur) + '원\n(전액 입금: ' + total + ')', String(cur || ''));
+  if (inp === null) return;
+  let amt = Math.max(0, Math.round(_numv(inp))); if (total > 0 && amt > total) amt = total;
+  const paid = total > 0 && amt >= total;
+  await Store.update('quotes', id, { paidAmount: amt, paid: paid, paidDate: amt > 0 ? todayStr() : '' });
+  toast(paid ? '결제완료' : (amt > 0 ? ('입금 ' + fmtWon(amt) + ' · 미수 ' + fmtWon(total - amt)) : '미결제'));
+}
 async function quoteMarkTax(id) { const q = (state.quotes || []).find(x => x.id === id); if (!q) return; const t = !q.taxInvoice; await Store.update('quotes', id, { taxInvoice: t, taxDate: t ? todayStr() : '' }); toast(t ? '세금계산서 발행 표시' : '표시 해제'); }
 function quoteToShip(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
   try { Store.update('quotes', id, { shipped: true, shipStartedAt: Date.now() }); } catch (e) { }
   openShipForm({ targetName: q.client, items: (q.items || []).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' })) });
   toast('견적 품목을 출고 등록 폼에 불러왔습니다 · 확인 후 등록하세요');
+}
+function quoteToOrder(id) {
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
+  try { Store.update('quotes', id, { ordered: true, orderedAt: Date.now(), shipped: true, shipStartedAt: q.shipStartedAt || Date.now() }); } catch (e) { }
+  const items = (q.items || []).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' }));
+  const hasBasin = (q.items || []).some(it => (it.name || '').includes('세면대'));
+  if (hasBasin) { go('basin'); toast('확정 · 세면대 발주로 이동 — ' + (q.client || '') + ' / ' + items.map(x => x.name).join(', ')); }
+  else if ((q.siteAddr || '').trim()) { go('sites'); toast('확정 · 현장으로 이동 — ' + (q.client || '') + ' (' + q.siteAddr + ')'); }
+  else { openShipForm({ targetName: q.client, items: items }); toast('확정 · 출고 등록으로 불러왔습니다 · 확인 후 등록'); }
 }
 /* ── 세금계산서 발행 (팝빌 Popbill · CF action=taxinvoice) ── */
 function clientTaxInfo(name) { const c = (state.clients || []).find(x => _normName(x.value) === _normName(name)); return (c && c.taxInfo) || {}; }
@@ -4102,9 +4124,10 @@ function quoteMonthNav(delta) { const cur = filters.quoteMonth || todayStr().sli
 function quoteCardHtml(q) {
   const when = qDate(q);
   const names = (q.items || []).map(it => it.name).filter(Boolean).slice(0, 3).join(', ') + ((q.items || []).length > 3 ? ` 외 ${q.items.length - 3}` : '');
-  const paidPill = q.paid ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="클릭 시 해제"><i class="ti ti-cash"></i> 결제완료${q.paidDate ? ' ' + esc(q.paidDate.slice(5)) : ''}</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="결제 완료로 표시"><i class="ti ti-cash"></i> 미결제</button>`;
+  const _pa = +q.paidAmount || 0; const _tt = +q.total || 0; const _rem = Math.max(0, _tt - _pa);
+  const paidPill = (_tt > 0 && _pa >= _tt) ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 수정"><i class="ti ti-cash"></i> 결제완료</button>` : (_pa > 0 ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 수정"><i class="ti ti-cash"></i> 입금 ${fmtWon(_pa)} · 미수 ${fmtWon(_rem)}</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 입력"><i class="ti ti-cash"></i> 미결제</button>`);
   const taxPill = q.taxInvoice ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="클릭 시 해제"><i class="ti ti-file-check"></i> 계산서 발행${q.taxDate ? ' ' + esc(q.taxDate.slice(5)) : ''}</button>` : `<button class="pill p-gray" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="발행으로 표시"><i class="ti ti-file-off"></i> 계산서 미발행</button>`;
-  const shipPill = q.shipped ? `<span class="pill p-hold"><i class="ti ti-truck-delivery"></i> 출고 진행</span>` : '';
+  const shipPill = q.ordered ? `<span class="pill p-prog"><i class="ti ti-clipboard-check"></i> 진행중 발주</span>` : (q.shipped ? `<span class="pill p-hold"><i class="ti ti-truck-delivery"></i> 출고 진행</span>` : '');
   return `<div class="card" style="margin-bottom:10px;padding:12px 14px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="min-width:0"><div style="font-weight:700;font-size:14.5px">${esc(q.client || '-')}</div>
@@ -4114,7 +4137,7 @@ function quoteCardHtml(q) {
       </div>
       <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${shipPill}</div>
       <div class="frm-foot" style="margin-top:9px;flex-wrap:wrap">
-        <button class="btn btn-sm" style="color:var(--blue)" onclick="quoteToShip('${q.id}')"><i class="ti ti-truck-delivery"></i>출고로</button>
+        <button class="btn btn-sm" style="color:var(--blue)" onclick="quoteToOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>
         <button class="btn btn-sm btn-pri" onclick="printQuote('${q.id}')"><i class="ti ti-printer"></i>인쇄</button>
         <button class="btn btn-sm" onclick="downloadQuoteXls('${q.id}')"><i class="ti ti-file-spreadsheet"></i>엑셀</button>
         <button class="btn btn-sm" onclick="downloadQuotePng('${q.id}')"><i class="ti ti-photo"></i>PNG</button>
@@ -4132,7 +4155,7 @@ function renderQuote() {
   const qy = (filters.quoteSearch || '').trim().toLowerCase();
   const all = (state.quotes || []);
   const ym = todayStr().slice(0, 7);
-  const unpaid = all.filter(q => !q.paid).reduce((a, b) => a + (+b.total || 0), 0);
+  const unpaid = all.reduce((a, b) => a + Math.max(0, (+b.total || 0) - (+b.paidAmount || 0)), 0);
   const noTax = all.filter(q => !q.taxInvoice).length;
   const monthSum = all.filter(q => (q.date || '').startsWith(ym)).reduce((a, b) => a + (+b.total || 0), 0);
   let list = all.slice().sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
