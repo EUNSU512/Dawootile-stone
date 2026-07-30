@@ -29,7 +29,7 @@ function prefillEmail() {
 }
 function cref(name) { return db.collection('teams').doc(TEAM).collection(name); }
 
-const COLLS = ['members', 'sites', 'inventory', 'holdings', 'transactions', 'specs', 'factories', 'teams', 'suppliers', 'clients', 'issues', 'restocks', 'basins', 'holdRequests', 'shipments', 'chulgoReqs', 'chulgoHandlers', 'quotes', 'clientPrices', 'priceList', 'appmeta'];
+const COLLS = ['members', 'sites', 'inventory', 'holdings', 'transactions', 'specs', 'factories', 'teams', 'suppliers', 'clients', 'issues', 'restocks', 'basins', 'holdRequests', 'shipments', 'chulgoReqs', 'chulgoHandlers', 'quotes', 'clientPrices', 'priceList', 'appmeta', 'expenses'];
 const CTYPES = ['유통', '대리점', '인테리어', '소비자', '별도'];   // 거래처 유형 (별도 = 예외 업체 단가)
 function ctypeKey(t) { return t === '유통' ? 'dist' : (t === '대리점' ? 'agency' : (t === '인테리어' ? 'interior' : (t === '별도' ? 'special' : 'consumer'))); }
 const QCATS = ['세라믹+세면대', '석재', '통관비용'];
@@ -939,6 +939,7 @@ function render() {
   else if (tab === 'chulgo') renderChulgo();
   else if (tab === 'quote') renderQuote();
   else if (tab === 'clients') renderClients();
+  else if (tab === 'settle') renderSettle();
   else if (tab === 'settings') renderSettings();
 }
 /* ---------- 고객(거래처) 재고 조회 전용 화면 (읽기 전용) ---------- */
@@ -4384,6 +4385,110 @@ function downloadCostLedger() {
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '원가원장'); XLSX.writeFile(wb, '원가원장_' + todayStr() + '.xlsx');
   toast('원가 원장 엑셀 다운로드');
 }
+/* ================= 정산: 원가 원장 · 회사지출 · 영업이익(마진) ================= */
+const EXP_CATS = ['급여', '공용부분', '운반비', '복리후생', '공과금', '기타'];
+function settleMonthNav(d) {
+  const ym = filters.settleMonth || todayStr().slice(0, 7);
+  const [y, m] = ym.split('-').map(Number); const dt = new Date(y, m - 1 + d, 1);
+  filters.settleMonth = dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0'); renderSettle();
+}
+async function addExpense() {
+  if (!isAdmin()) { toast('관리자만'); return; }
+  const date = (el('exp-date').value || todayStr()), cat = el('exp-cat').value, name = (el('exp-name').value || '').trim(),
+    mgr = (el('exp-mgr').value || '').trim(), amt = Math.round(+el('exp-amt').value || 0), status = el('exp-status').value, note = (el('exp-note').value || '').trim();
+  if (!name) { toast('항목명을 입력하세요'); return; }
+  if (!amt) { toast('금액을 입력하세요'); return; }
+  await Store.add('expenses', { date, cat, name, manager: mgr, amount: amt, status, note, createdAt: Date.now() });
+  toast('지출 등록됨'); renderSettle();
+}
+async function delExpense(id) { if (!isAdmin()) { toast('관리자만'); return; } if (!confirm('이 지출 항목을 삭제할까요?')) return; await Store.remove('expenses', id); toast('삭제됨'); renderSettle(); }
+function downloadExpenses() {
+  if (!isAdmin()) { toast('관리자만'); return; }
+  if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후'); return; }
+  const ym = filters.settleMonth || todayStr().slice(0, 7);
+  const rows = (state.expenses || []).filter(e => (e.date || '').startsWith(ym)).sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+  if (!rows.length) { toast(ym + ' 지출 내역이 없습니다'); return; }
+  const head = ['결재일', '분류', '항목', '담당자', '금액', '상태', '설명'];
+  const aoa = [['회사지출 내역 · ' + ym], ['출력일 ' + todayStr()], [], head];
+  let tot = 0; rows.forEach(e => { tot += +e.amount || 0; aoa.push([e.date || '', e.cat || '', e.name || '', e.manager || '', +e.amount || 0, e.status || '', e.note || '']); });
+  aoa.push([]); aoa.push(['', '', '', '합계', tot, '', '']);
+  const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 12 }, { wch: 10 }, { wch: 20 }, { wch: 12 }, { wch: 13 }, { wch: 9 }, { wch: 24 }];
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '회사지출'); XLSX.writeFile(wb, '회사지출_' + ym + '.xlsx');
+  toast('회사지출 엑셀 다운로드');
+}
+function renderSettle() {
+  const root = el('pg-settle'); if (!root) return;
+  if (!isAdmin()) { root.innerHTML = `<div class="ph"><div><h2><i class="ti ti-report-money"></i>정산</h2></div></div><div class="empty"><i class="ti ti-lock"></i>원가·마진 정산은 관리자만 열람할 수 있습니다.</div>`; return; }
+  const ym = filters.settleMonth || todayStr().slice(0, 7);
+  const WD = ['일', '월', '화', '수', '목', '금', '토'];
+  const monthQuotes = (state.quotes || []).filter(q => qDate(q).startsWith(ym));
+  const salesAll = monthQuotes.reduce((a, q) => a + (+q.supply || 0), 0);
+  const costed = monthQuotes.filter(q => (+q.costTotal || 0) > 0 || (q.costLines && q.costLines.length));
+  const salesCosted = costed.reduce((a, q) => a + (+q.supply || 0), 0);
+  const costSum = costed.reduce((a, q) => a + ((+q.costTotal) || (q.costLines || []).reduce((x, l) => x + (+l.cost || 0), 0)), 0);
+  const grossProfit = salesCosted - costSum;
+  const expMonth = (state.expenses || []).filter(e => (e.date || '').startsWith(ym));
+  const expSum = expMonth.reduce((a, e) => a + (+e.amount || 0), 0);
+  const opProfit = grossProfit - expSum;
+  const noCost = monthQuotes.length - costed.length;
+  const grossRate = salesCosted > 0 ? Math.round(grossProfit / salesCosted * 100) : 0;
+  const opRate = salesAll > 0 ? Math.round(opProfit / salesAll * 100) : 0;
+  // 회사지출 분류별
+  const expByCat = {}; EXP_CATS.forEach(c => expByCat[c] = 0); expMonth.forEach(e => { const c = EXP_CATS.includes(e.cat) ? e.cat : '기타'; expByCat[c] += +e.amount || 0; });
+  const monthBar = `<div style="display:flex;align-items:center;justify-content:space-between;background:var(--soft);border-radius:11px;padding:8px 12px;margin-bottom:12px">
+    <button class="btn btn-sm" onclick="settleMonthNav(-1)"><i class="ti ti-chevron-left"></i></button>
+    <div style="text-align:center"><div style="font-weight:800;font-size:15.5px">${esc(ym.replace('-', '. '))} 정산</div><div style="font-size:11.5px;color:var(--t3)">견적 ${monthQuotes.length}건 · 지출 ${expMonth.length}건</div></div>
+    <button class="btn btn-sm" onclick="settleMonthNav(1)"><i class="ti ti-chevron-right"></i></button></div>`;
+  const pnlCell = (lab, val, color, sub) => `<div style="padding:10px 8px;background:var(--soft);border-radius:10px;text-align:center"><div style="font-size:10.5px;color:var(--t2);margin-bottom:3px">${lab}</div><div style="font-size:15px;font-weight:800;color:${color}">${fmtWon(val)}</div>${sub ? `<div style="font-size:10px;color:var(--t3);margin-top:1px">${sub}</div>` : ''}</div>`;
+  const pnl = `<div class="card" style="margin-bottom:12px;padding:13px 14px">
+    <div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:9px"><i class="ti ti-chart-bar"></i> 영업이익 요약 (${esc(ym)})</div>
+    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px">
+      ${pnlCell('매출(공급가)', salesAll, 'var(--gd)', monthQuotes.length + '건')}
+      ${pnlCell('원가', costSum, '#b45309', '원가입력 ' + costed.length + '건')}
+      ${pnlCell('매출총이익', grossProfit, grossProfit >= 0 ? '#0f766e' : '#dc2626', '마진율 ' + grossRate + '%')}
+      ${pnlCell('회사지출', expSum, '#7c3aed', expMonth.length + '건')}
+      ${pnlCell('영업이익', opProfit, opProfit >= 0 ? '#0f766e' : '#dc2626', '이익률 ' + opRate + '%')}
+    </div>
+    <div style="font-size:11px;color:var(--t3);margin-top:8px;line-height:1.5">· 매출총이익 = 원가 입력된 견적의 (매출 − 원가) 기준 · 영업이익 = 매출총이익 − 회사지출${noCost > 0 ? `<br>· <b style="color:#dc2626">원가 미입력 견적 ${noCost}건</b> — 견적서 화면의 <b>원가</b> 버튼으로 입력하면 마진에 반영됩니다` : ''}</div>
+  </div>`;
+  const expCatBar = `<div class="card" style="margin-bottom:12px;padding:11px 14px"><div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:8px"><i class="ti ti-wallet"></i> 회사지출 분류별</div>
+    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px">${EXP_CATS.map(c => `<div style="text-align:center;padding:6px 3px;background:var(--soft);border-radius:8px"><div style="font-size:10px;color:var(--t2);margin-bottom:2px">${c}</div><div style="font-size:12.5px;font-weight:800;color:#7c3aed">${fmtWon(expByCat[c])}</div></div>`).join('')}</div></div>`;
+  // 원가·마진 전표별
+  const cq = costed.slice().sort((a, b) => (qDate(b) || '').localeCompare(qDate(a) || ''));
+  const cRows = cq.length ? cq.map(q => { const sup = +q.supply || 0; const ct = (+q.costTotal) || (q.costLines || []).reduce((x, l) => x + (+l.cost || 0), 0); const mg = sup - ct; const r = sup > 0 ? Math.round(mg / sup * 100) : 0;
+    return `<tr><td style="padding:6px 8px">${esc(qDate(q).slice(5))}</td><td style="padding:6px 8px">${esc(q.client || '')}</td><td style="padding:6px 8px;font-size:11px;color:var(--t3)">${esc(q.docNo || '')}</td><td style="padding:6px 8px;text-align:right">${fmtWon(sup)}</td><td style="padding:6px 8px;text-align:right;color:#b45309">${fmtWon(ct)}</td><td style="padding:6px 8px;text-align:right;font-weight:700;color:${mg >= 0 ? '#0f766e' : '#dc2626'}">${fmtWon(mg)}</td><td style="padding:6px 8px;text-align:right;color:var(--t2)">${r}%</td></tr>`; }).join('')
+    : `<tr><td colspan="7" style="padding:16px;text-align:center;color:var(--t3)">원가 입력된 견적이 없습니다</td></tr>`;
+  const costLedger = `<div class="card" style="margin-bottom:12px;padding:13px 14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px"><div style="font-size:11.5px;color:var(--t3);font-weight:700"><i class="ti ti-report-money"></i> 원가 원장 (전표별 매출·원가·마진)</div>
+      <button class="btn btn-sm" onclick="downloadCostLedger()"><i class="ti ti-download"></i>원가원장 엑셀</button></div>
+    <div data-keepscroll id="settle-cost-list" style="max-height:40vh;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">
+      <thead><tr style="border-bottom:1.5px solid var(--bd);color:var(--t2);font-size:11px"><th style="padding:6px 8px;text-align:left">날짜</th><th style="padding:6px 8px;text-align:left">거래처</th><th style="padding:6px 8px;text-align:left">전표</th><th style="padding:6px 8px;text-align:right">매출</th><th style="padding:6px 8px;text-align:right">원가</th><th style="padding:6px 8px;text-align:right">마진</th><th style="padding:6px 8px;text-align:right">마진율</th></tr></thead>
+      <tbody>${cRows}</tbody></table></div></div>`;
+  // 회사지출 입력 + 목록
+  const expRows = expMonth.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || 0) - (a.createdAt || 0));
+  const expList = expRows.length ? expRows.map(e => `<tr><td style="padding:6px 8px;font-size:11px;color:var(--t3)">${esc((e.date || '').slice(5))}</td><td style="padding:6px 8px">${esc(e.cat || '')}</td><td style="padding:6px 8px">${esc(e.name || '')}${e.manager ? ` <span style="color:var(--t3);font-size:11px">· ${esc(e.manager)}</span>` : ''}${e.note ? `<div style="font-size:10.5px;color:var(--t3)">${esc(e.note)}</div>` : ''}</td><td style="padding:6px 8px;text-align:right;font-weight:700">${fmtWon(e.amount)}</td><td style="padding:6px 8px;text-align:center"><span style="font-size:10.5px;color:${e.status === '완료' ? '#0f766e' : '#b45309'}">${esc(e.status || '')}</span></td><td style="padding:6px 8px;text-align:center"><button class="btn btn-sm" style="padding:2px 6px" onclick="delExpense('${e.id}')"><i class="ti ti-trash"></i></button></td></tr>`).join('')
+    : `<tr><td colspan="6" style="padding:16px;text-align:center;color:var(--t3)">${esc(ym)} 지출 내역이 없습니다</td></tr>`;
+  const expForm = `<div class="card" style="padding:13px 14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px"><div style="font-size:11.5px;color:var(--t3);font-weight:700"><i class="ti ti-receipt-2"></i> 회사지출 관리</div>
+      <button class="btn btn-sm" onclick="downloadExpenses()"><i class="ti ti-download"></i>지출 엑셀</button></div>
+    <div style="display:grid;grid-template-columns:1.1fr 1fr 1.6fr 1.1fr;gap:6px;margin-bottom:6px">
+      <input id="exp-date" type="date" class="inp" value="${todayStr()}">
+      <select id="exp-cat" class="inp">${EXP_CATS.map(c => `<option value="${c}">${c}</option>`).join('')}</select>
+      <input id="exp-name" class="inp" placeholder="항목 (예: 창고임대, 임창걸 지사장)">
+      <input id="exp-mgr" class="inp" placeholder="담당자(선택)">
+    </div>
+    <div style="display:grid;grid-template-columns:1.1fr 1fr 1.6fr 1.1fr;gap:6px;margin-bottom:8px">
+      <input id="exp-amt" type="number" class="inp" placeholder="금액">
+      <select id="exp-status" class="inp"><option value="정산중">정산중</option><option value="완료">완료</option></select>
+      <input id="exp-note" class="inp" placeholder="설명(선택)">
+      <button class="btn btn-pri btn-sm" onclick="addExpense()"><i class="ti ti-plus"></i>지출 등록</button>
+    </div>
+    <div data-keepscroll id="settle-exp-list" style="max-height:38vh;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">
+      <thead><tr style="border-bottom:1.5px solid var(--bd);color:var(--t2);font-size:11px"><th style="padding:6px 8px;text-align:left">일자</th><th style="padding:6px 8px;text-align:left">분류</th><th style="padding:6px 8px;text-align:left">항목</th><th style="padding:6px 8px;text-align:right">금액</th><th style="padding:6px 8px;text-align:center">상태</th><th style="padding:6px 8px;text-align:center"></th></tr></thead>
+      <tbody>${expList}</tbody></table></div></div>`;
+  root.innerHTML = `<div class="ph"><div><h2><i class="ti ti-report-money"></i>정산</h2><p>원가 원장 · 회사지출 · 영업이익(마진)</p></div></div>${monthBar}${pnl}${expCatBar}${costLedger}${expForm}`;
+}
+
 function renderQuote() {
   if (filters.quoteSettings) { if (!document.getElementById('qset-root')) renderQuoteSettings(); return; }   // 설정 화면
   if (filters.quoteEdit) { if (!document.getElementById('qform-root')) renderQuoteForm(); return; }   // 편집 중엔 실시간 재렌더로 폼을 덮어쓰지 않음
@@ -4427,7 +4532,7 @@ function renderQuote() {
     <button class="btn btn-sm ${view === 'month' ? 'btn-pri' : ''}" onclick="filters.quoteView='month';renderQuote()"><i class="ti ti-calendar-month"></i> 월별</button></div>`;
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
-      <div style="display:flex;gap:6px">${isAdmin() ? `<button class="btn btn-sm" onclick="downloadCostLedger()"><i class="ti ti-report-money"></i>원가원장</button>` : ''}<button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
+      <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
       <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(unpaid)}</div><div class="l">미수금(미결제)</div></div>
       <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행</div></div>
