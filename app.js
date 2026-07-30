@@ -3929,10 +3929,10 @@ function quoteDocHtml(q) {
 .info{display:flex;gap:13px;margin-bottom:16px}
 .info .box{flex:1;border:1px solid #e6ddcf;border-radius:2px;overflow:hidden}
 .info .bh{background:#f6f1e8;color:#8a7350;font-weight:700;font-size:10px;padding:7px 13px;border-bottom:1px solid #e6ddcf;letter-spacing:2px}
-.info .bb{padding:12px 14px;font-size:11.5px;line-height:1.65;position:relative;min-height:86px;color:#4a443c}
+.info .bb{padding:12px 14px;font-size:11.5px;line-height:1.65;position:relative;min-height:114px;color:#4a443c}
 .info .recip-name{font-size:16px;font-weight:700;margin-bottom:6px;color:#201c17}
-.stamp{position:absolute;right:12px;top:11px;width:50px;height:50px;border:1.5px solid #c2a06a;border-radius:50%;color:#c2a06a;font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center;text-align:center;line-height:1.2;transform:rotate(-7deg)}
-.stampimg{position:absolute;right:10px;top:6px;width:62px;height:62px;object-fit:contain}
+.stamp{position:absolute;right:20px;top:20px;width:76px;height:76px;border:2px solid #c2a06a;border-radius:50%;color:#c2a06a;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;text-align:center;line-height:1.2;transform:rotate(-9deg);opacity:.9}
+.stampimg{position:absolute;right:18px;top:22px;width:98px;height:98px;object-fit:contain;opacity:.9;mix-blend-mode:multiply}
 .items{border-collapse:collapse;width:100%;table-layout:fixed;border-top:2px solid #201c17;border-bottom:2px solid #201c17}
 .items th{background:#201c17;color:#f3ece0;font-weight:600;font-size:11px;padding:10px 6px;letter-spacing:2px}
 .items td{border-bottom:1px solid #ece4d6;padding:9px 7px;font-size:12px;height:31px;color:#332f28}
