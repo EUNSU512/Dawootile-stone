@@ -710,6 +710,7 @@ function goD(t) { closeDrawer(); go(t); }
 function go(t) {
   if (isRestrictedRole()) t = 'stock';   // 고객·시공팀은 전용 화면만
   if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; }   // 견적 화면 상태 초기화
+  if (t !== 'clients') filters.clientDetail = '';
   tab = t;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-i').forEach(n => n.classList.toggle('active', n.dataset.tab === t));
@@ -728,6 +729,130 @@ function fabAction() {
   else if (tab === 'basin') openBasinForm();
 }
 let _renderTimer = null;
+/* ================= 거래처 관리 (유형 · 사업자정보 · 미수/매출 장부) ================= */
+function clientStats(name) {
+  const qs = (state.quotes || []).filter(q => _normName(q.client) === _normName(name));
+  const total = qs.reduce((a, b) => a + (+b.total || 0), 0);
+  const unpaid = qs.filter(q => !q.paid).reduce((a, b) => a + (+b.total || 0), 0);
+  const noTax = qs.filter(q => !q.taxInvoice).length;
+  return { count: qs.length, total: total, unpaid: unpaid, noTax: noTax };
+}
+function openClientDetail(id) { filters.clientDetail = id; renderClients(); if (el('pg-clients')) el('pg-clients').scrollIntoView({ block: 'start' }); }
+function clientsBack() { filters.clientDetail = ''; renderClients(); }
+function clientsFilter(v) { filters.clientSearch = v; renderClients(); }
+async function addClientQuick() { const inpEl = el('cl-new'); const v = (inpEl && inpEl.value || '').trim(); if (!v) return; if ((state.clients || []).some(c => _normName(c.value) === _normName(v))) { toast('이미 있는 거래처'); return; } await Store.add('clients', { value: v }); if (inpEl) inpEl.value = ''; toast('거래처 등록됨'); setTimeout(renderClients, 300); }
+async function saveClientBizInfo(id) {
+  const c = (state.clients || []).find(x => x.id === id); if (!c) return;
+  const g = k => { const e = el('cb-' + k); return e ? e.value.trim() : ''; };
+  const taxInfo = { bizNo: g('bizno'), corpName: g('corp') || c.value, ceo: g('ceo'), addr: g('addr'), bizType: g('biztype'), bizClass: g('bizclass'), contact: g('contact'), email: g('email') };
+  const patch = { taxInfo: taxInfo };
+  const ct = classifyCtype(taxInfo.bizType, taxInfo.bizClass, taxInfo.corpName);
+  if ((c.ctype || '') !== ct && (taxInfo.bizType || taxInfo.bizClass)) patch.ctype = ct;
+  await Store.update('clients', id, patch); toast('거래처 정보 저장됨'); setTimeout(renderClients, 300);
+}
+async function lookupClientBiz(id) {
+  const c = (state.clients || []).find(x => x.id === id); if (!c) return;
+  const corpNum = (el('cb-bizno') ? el('cb-bizno').value : '').replace(/[^0-9]/g, '');
+  if (corpNum.length !== 10) { toast('사업자번호 10자리를 입력하세요'); return; }
+  const co = companyInfo(); toast('사업자 정보 조회 중…');
+  try {
+    const token = await auth.currentUser.getIdToken();
+    const r = await fetch(PUSH_FN + '?action=bizinfo', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ corpNum: corpNum, memberCorpNum: co.bizno }) });
+    const j = await r.json().catch(() => ({}));
+    if (!(r.ok && j.ok)) { toast('조회 실패: ' + ((j && j.error) || ('HTTP ' + r.status))); return; }
+    if (j.corpName && el('cb-corp')) el('cb-corp').value = j.corpName;
+    if (j.ceo && el('cb-ceo')) el('cb-ceo').value = j.ceo;
+    if (j.addr && el('cb-addr')) el('cb-addr').value = j.addr;
+    if (j.bizType && el('cb-biztype')) el('cb-biztype').value = j.bizType;
+    if (j.bizClass && el('cb-bizclass')) el('cb-bizclass').value = j.bizClass;
+    const ct = classifyCtype(j.bizType, j.bizClass, j.corpName);
+    const warn = (+j.closeDownState === 2) ? ' · ⚠폐업' : ((+j.closeDownState === 3) ? ' · ⚠휴업' : '');
+    toast('조회완료 · 유형: ' + ct + warn + ' — 저장을 눌러 반영하세요');
+  } catch (e) { toast('조회 오류: ' + ((e && e.message) || e)); }
+}
+async function delClientC(id) { if (!isAdmin()) { toast('관리자만 삭제할 수 있습니다'); return; } const c = (state.clients || []).find(x => x.id === id); if (!c) return; if (!confirm((c.value || '') + ' 거래처를 삭제할까요?')) return; await Store.remove('clients', id); filters.clientDetail = ''; toast('삭제됨'); setTimeout(renderClients, 300); }
+function renderClients() {
+  if (filters.clientDetail) { renderClientDetail(); return; }
+  const q = (filters.clientSearch || '').trim().toLowerCase();
+  let list = (state.clients || []).slice().sort((a, b) => (a.value || '').localeCompare(b.value || ''));
+  if (q) list = list.filter(c => (c.value || '').toLowerCase().includes(q));
+  const allUnpaid = (state.clients || []).reduce((a, c) => a + clientStats(c.value).unpaid, 0);
+  const rows = list.length ? list.map(c => {
+    const st = clientStats(c.value); const ti = c.taxInfo || {};
+    return `<div class="card" style="margin-bottom:8px;padding:11px 13px;cursor:pointer" onclick="openClientDetail('${c.id}')">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <div style="min-width:0"><div style="font-weight:700;font-size:14.5px">${esc(c.value)}</div>
+          <div style="font-size:11px;color:var(--t3);margin-top:2px">${ti.bizNo ? esc(ti.bizNo) + ' · ' : '<span style="color:#c0341d">사업자정보 미등록 · </span>'}${st.count}건 · 매출 ${fmtWon(st.total)}</div></div>
+        <div style="display:flex;align-items:center;gap:8px;flex:none" onclick="event.stopPropagation()">
+          <select onchange="setClientTypeSetting('${c.id}',this.value)" style="font-size:12.5px;padding:5px 7px;border:1.5px solid var(--bd2);border-radius:8px">${CTYPES.map(t => `<option ${((c.ctype) || '소비자') === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
+          <div style="text-align:right;min-width:74px"><div style="font-size:14px;font-weight:800;color:${st.unpaid > 0 ? 'var(--red-t)' : 'var(--t3)'}">${fmtWon(st.unpaid)}</div><div style="font-size:9.5px;color:var(--t3)">미수금</div></div>
+          <i class="ti ti-chevron-right" style="color:var(--t3)"></i>
+        </div>
+      </div></div>`;
+  }).join('') : `<div class="empty"><i class="ti ti-users"></i>${q ? '검색 결과가 없습니다' : '거래처가 없습니다'}</div>`;
+  el('pg-clients').innerHTML = `
+    <div class="ph"><div><h2><i class="ti ti-users"></i>거래처 관리</h2><p>유형 · 사업자정보 · 미수/매출</p></div></div>
+    <div class="stat-grid" style="grid-template-columns:repeat(2,1fr);margin-bottom:12px">
+      <div class="stat"><div class="ic b"><i class="ti ti-users"></i></div><div class="v">${(state.clients || []).length}</div><div class="l">거래처</div></div>
+      <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(allUnpaid)}</div><div class="l">총 미수금</div></div>
+    </div>
+    <div style="display:flex;gap:6px;margin-bottom:8px">
+      <input id="cl-new" lang="ko" placeholder="새 거래처명" autocomplete="off" style="flex:1;font-size:14px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:9px">
+      <button class="btn btn-sm btn-pri" onclick="addClientQuick()"><i class="ti ti-plus"></i>추가</button>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      <button class="btn btn-sm" onclick="el('ct-file2').click()"><i class="ti ti-upload"></i> 유형 엑셀 업로드</button>
+      <button class="btn btn-sm" onclick="clientTypeTemplate()"><i class="ti ti-download"></i> 양식</button>
+      <input type="file" id="ct-file2" accept=".xlsx,.xls,.csv" style="display:none" onchange="clientTypeImport(this)">
+    </div>
+    <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i><input id="cl-search" placeholder="거래처 검색" value="${esc(filters.clientSearch || '')}" oninput="clientsFilter(this.value)" autocomplete="off" lang="ko"></div>
+    ${rows}`;
+}
+function renderClientDetail() {
+  const c = (state.clients || []).find(x => x.id === filters.clientDetail); if (!c) { filters.clientDetail = ''; renderClients(); return; }
+  const ti = c.taxInfo || {}; const st = clientStats(c.value);
+  const inp = 'width:100%;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px';
+  const fld = (k, label, val, ph) => `<div class="fld" style="flex:1;min-width:150px;margin:0"><label>${label}</label><input id="cb-${k}" lang="ko" value="${esc(val || '')}" placeholder="${ph || ''}" style="${inp}"></div>`;
+  const qs = (state.quotes || []).filter(x => _normName(x.client) === _normName(c.value)).sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
+  const ledger = qs.length ? qs.map(qq => {
+    const when = qDate(qq);
+    const paidPill = qq.paid ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${qq.id}')">결제완료</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${qq.id}')">미결제</button>`;
+    const taxPill = qq.taxInvoice ? `<span class="pill p-prog">계산서발행</span>` : `<span class="pill p-gray">계산서미발행</span>`;
+    return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 2px;border-bottom:1px solid var(--bd)">
+      <div style="min-width:0"><div style="font-size:12.5px;font-weight:600">${esc(qq.docNo || '')} <span style="color:var(--t3);font-weight:400">· ${esc(when)}</span></div>
+        <div style="display:flex;gap:4px;margin-top:3px">${paidPill}${taxPill}</div></div>
+      <div style="text-align:right;flex:none"><div style="font-weight:800;font-size:14px;color:${qq.paid ? 'var(--t2)' : 'var(--red-t)'}">${fmtWon(qq.total)}</div>
+        <button class="btn btn-sm" style="padding:2px 8px;font-size:11px;margin-top:2px" onclick="filters.quoteEdit='';filters.taxEdit='';go('quote');setTimeout(()=>openQuoteInline('${qq.id}'),50)">견적보기</button></div>
+    </div>`;
+  }).join('') : '<div class="empty" style="padding:16px">견적 내역이 없습니다</div>';
+  el('pg-clients').innerHTML = `
+    <div class="ph"><div><h2><i class="ti ti-user"></i>${esc(c.value)}</h2><p>거래처 상세</p></div>
+      <button class="btn btn-sm" onclick="clientsBack()"><i class="ti ti-arrow-left"></i> 목록</button></div>
+    <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
+      <div class="stat"><div class="v" style="font-size:18px">${fmtWon(st.total)}</div><div class="l">총 매출</div></div>
+      <div class="stat"><div class="v" style="font-size:18px;color:${st.unpaid > 0 ? 'var(--red-t)' : ''}">${fmtWon(st.unpaid)}</div><div class="l">미수금</div></div>
+      <div class="stat"><div class="v">${st.noTax}</div><div class="l">계산서 미발행</div></div>
+    </div>
+    <div class="card" style="margin-bottom:12px;padding:14px 16px">
+      <div class="card-h"><h3><i class="ti ti-id-badge-2"></i>사업자 정보 · 유형</h3></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><label style="font-size:12.5px;color:var(--t2)">거래처 유형</label>
+        <select onchange="setClientTypeSetting('${c.id}',this.value)" style="font-size:13px;padding:6px 9px;border:1.5px solid var(--bd2);border-radius:8px">${CTYPES.map(t => `<option ${((c.ctype) || '소비자') === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
+        <span style="font-size:11px;color:var(--t3)">사업자정보 조회 시 자동 분류됩니다</span></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        <div class="fld" style="flex:1;min-width:180px;margin:0"><label>사업자등록번호</label><div style="display:flex;gap:6px"><input id="cb-bizno" inputmode="numeric" value="${esc(ti.bizNo || '')}" placeholder="000-00-00000" style="${inp}"><button class="btn btn-sm btn-pri" style="flex:none;white-space:nowrap" onclick="lookupClientBiz('${c.id}')"><i class="ti ti-search"></i>조회</button></div></div>
+        ${fld('corp', '상호', ti.corpName || c.value)}
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">${fld('ceo', '대표자', ti.ceo)}${fld('contact', '담당자', ti.contact)}</div>
+      <div class="fld full" style="margin-bottom:8px"><label>주소</label><input id="cb-addr" lang="ko" value="${esc(ti.addr || '')}" style="${inp}"></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">${fld('biztype', '업태', ti.bizType)}${fld('bizclass', '종목', ti.bizClass)}</div>
+      <div class="fld full" style="margin-bottom:11px"><label>담당자 이메일 <span style="color:var(--t3);font-weight:500">(세금계산서 발행 메일)</span></label><input id="cb-email" lang="en" value="${esc(ti.email || '')}" placeholder="name@company.com" style="${inp}"></div>
+      <div class="frm-foot">${isAdmin() ? `<button class="btn" style="color:var(--red-t);flex:none" onclick="delClientC('${c.id}')"><i class="ti ti-trash"></i></button>` : ''}<button class="btn btn-pri" style="flex:1" onclick="saveClientBizInfo('${c.id}')"><i class="ti ti-check"></i>저장</button></div>
+    </div>
+    <div class="card" style="padding:14px 16px">
+      <div class="card-h"><h3><i class="ti ti-book"></i>거래 장부</h3><span class="more" style="font-size:11px;color:var(--t3)">미수 ${fmtWon(st.unpaid)}원</span></div>
+      <div style="max-height:52vh;overflow:auto">${ledger}</div>
+    </div>`;
+}
 function render() {
   if (!me) return;
   // 입력 중(검색창·폼 포커스)에는 전체 재렌더를 미뤄 한글 입력·검색 끊김 방지
@@ -751,6 +876,7 @@ function render() {
   else if (tab === 'basin') renderBasin();
   else if (tab === 'chulgo') renderChulgo();
   else if (tab === 'quote') renderQuote();
+  else if (tab === 'clients') renderClients();
   else if (tab === 'settings') renderSettings();
 }
 /* ---------- 고객(거래처) 재고 조회 전용 화면 (읽기 전용) ---------- */
@@ -3748,7 +3874,7 @@ function clientTypeImport(input) {
         n++;
       }
       toast(n ? (n + '개 거래처 유형 반영' + (added ? ' (신규 ' + added + ')' : '') + (skipped ? ' · 유형없음 ' + skipped + '건 건너뜀' : '')) : '반영된 행이 없습니다 (유형 열 확인)'); input.value = '';
-      setTimeout(() => { if (filters.quoteSettings) renderQuoteSettings(); }, 400);
+      setTimeout(() => { if (tab === 'clients') renderClients(); else if (filters.quoteSettings) renderQuoteSettings(); }, 400);
     } catch (err) { toast('파일을 읽지 못했습니다'); input.value = ''; }
   };
   rd.readAsArrayBuffer(f);
@@ -3898,17 +4024,7 @@ function renderQuoteSettings() {
         <textarea id="qs-memo" lang="ko" placeholder="예) · 부가세 별도\n· 결제: 계약금 50%, 잔금 납품 시\n· 납기: 발주 후 7일\n· 유효기간: 견적일로부터 15일" style="width:100%;min-height:110px;font-size:14px;padding:10px;border:1.5px solid var(--bd2);border-radius:10px">${esc(memo)}</textarea>
         <button class="btn btn-pri btn-sm btn-block" style="margin-top:8px" onclick="saveQuoteMemo()"><i class="ti ti-check"></i>비고 양식 저장</button>
       </div>
-      <div class="card" style="margin-bottom:12px;padding:13px 15px">
-        <div class="card-h"><h3><i class="ti ti-users"></i>거래처 유형</h3><span class="more" style="font-size:11px;color:var(--t3)">유통 · 대리점 · 인테리어 · 소비자</span></div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
-          <button class="btn btn-sm btn-pri" onclick="el('ct-file').click()"><i class="ti ti-upload"></i> 엑셀 업로드</button>
-          <button class="btn btn-sm" onclick="clientTypeTemplate()"><i class="ti ti-download"></i> 양식 다운로드</button>
-          <input type="file" id="ct-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="clientTypeImport(this)">
-        </div>
-        <div style="font-size:11px;color:var(--t3);margin-bottom:8px">엑셀/CSV 열: <b>거래처명 · 유형</b> (유형 = 유통/대리점/인테리어/소비자). 없는 거래처는 자동 등록됩니다.</div>
-        <div class="search-box" style="margin-bottom:8px"><i class="ti ti-search"></i><input placeholder="거래처 검색" value="${esc(filters.qsClientSearch || '')}" oninput="qsFilterClients(this.value)" autocomplete="off" lang="ko"></div>
-        <div data-keepscroll id="qs-clients" style="max-height:300px;overflow:auto;border:0.5px solid var(--bd);border-radius:10px;padding:2px 8px">${_qsClientRowsHtml()}</div>
-      </div>
+
       <div class="card" style="margin-bottom:12px;padding:13px 15px">
         <div class="card-h"><h3><i class="ti ti-tools"></i>부대비용 · 가공 단가</h3><span class="more" style="font-size:11px;color:var(--t3)">견적 작성 시 자동 표시</span></div>
         <div style="font-size:11.5px;color:var(--t3);margin-bottom:8px">기본 단가를 미리 저장하면 견적 작성 시 자동으로 채워집니다. 항목을 추가·삭제할 수 있습니다.</div>
