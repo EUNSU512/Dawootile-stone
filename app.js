@@ -3436,8 +3436,7 @@ const QUOTE_EXTRAS = [
   { name: '인덕션 타공', unit: 'EA' }, { name: '싱크볼 타공', unit: 'EA' },
   { name: '콘센트 타공', unit: 'EA' }, { name: '수전 타공', unit: 'EA' }, { name: '사각 타공', unit: 'EA' },
   { name: '운송비 (창고-공장)', unit: '회' }, { name: '운송비 (공장-현장)', unit: '회' },
-  { name: '실측비', unit: '회' }, { name: '시공비', unit: '식' },
-  { name: '세면대 비규격 주문제작', unit: 'EA' }
+  { name: '실측비', unit: '회' }, { name: '시공비', unit: '식' }
 ];
 /* 세면대 주문제작 견적 특이사항 (세면대 항목 포함 시 견적서에 강조 표기) */
 const BASIN_NOTICE = [
