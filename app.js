@@ -32,6 +32,16 @@ function cref(name) { return db.collection('teams').doc(TEAM).collection(name); 
 const COLLS = ['members', 'sites', 'inventory', 'holdings', 'transactions', 'specs', 'factories', 'teams', 'suppliers', 'clients', 'issues', 'restocks', 'basins', 'holdRequests', 'shipments', 'chulgoReqs', 'chulgoHandlers', 'quotes', 'clientPrices', 'priceList', 'appmeta'];
 const CTYPES = ['유통', '대리점', '인테리어', '소비자', '별도'];   // 거래처 유형 (별도 = 예외 업체 단가)
 function ctypeKey(t) { return t === '유통' ? 'dist' : (t === '대리점' ? 'agency' : (t === '인테리어' ? 'interior' : (t === '별도' ? 'special' : 'consumer'))); }
+const QCATS = ['세라믹+세면대', '석재', '통관비용'];
+function itemCategory(name) {
+  const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(name));
+  if (pl && pl.cat) return pl.cat;
+  const t = (name || '').replace(/\s/g, '');
+  if (/통관|관세|clearance/i.test(t)) return '통관비용';
+  if (/석재|대리석|화강|천연석|현무암|점판암/i.test(t)) return '석재';
+  return '세라믹+세면대';
+}
+async function saveItemCat(name, cat) { const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(name)); if (pl) await Store.update('priceList', pl.id, { cat: cat }); else await Store.add('priceList', { itemName: name, cat: cat, dist: 0, agency: 0, interior: 0, consumer: 0 }); }
 
 // 로컬(미리보기) 모드용 - 같은 기기의 다른 탭끼리 실시간 반영
 const bc = ('BroadcastChannel' in window) ? new BroadcastChannel('dws') : null;
@@ -4058,7 +4068,7 @@ function _qsPriceRowsHtml() {
   const inp = 'width:100%;font-size:13px;padding:7px 4px;border:1.5px solid var(--bd2);border-radius:8px;text-align:right';
   const cols = adm ? 8 : 7;
   return mats.slice(0, 150).map(i => { const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(i.name)) || {}; const nm = esc(i.name).replace(/'/g, "\\'");
-    return `<tr class="qs-prow" data-nm="${esc(i.name)}"><td style="text-align:left"><b>${esc(i.name)}</b>${i.spec ? `<div style="font-size:10.5px;color:var(--t3)">${esc(i.spec)}</div>` : ''}</td>
+    const _cat = itemCategory(i.name); return `<tr class="qs-prow" data-nm="${esc(i.name)}"><td style="text-align:left"><b>${esc(i.name)}</b>${i.spec ? `<div style="font-size:10.5px;color:var(--t3)">${esc(i.spec)}</div>` : ''}<select onchange="saveItemCat('${nm}',this.value)" style="margin-top:3px;font-size:10.5px;padding:2px 4px;border:1px solid var(--bd2);border-radius:6px;color:var(--t2)">${QCATS.map(cc => `<option ${_cat === cc ? 'selected' : ''}>${cc}</option>`).join('')}</select></td>
       <td><input class="qsp-dist" inputmode="numeric" value="${esc(pl.dist || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
       <td><input class="qsp-agy" inputmode="numeric" value="${esc(pl.agency || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
       <td><input class="qsp-int" inputmode="numeric" value="${esc(pl.interior || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
@@ -4164,6 +4174,9 @@ function renderQuote() {
   const unpaid = all.reduce((a, b) => a + Math.max(0, (+b.total || 0) - (+b.paidAmount || 0)), 0);
   const noTax = all.filter(q => !q.taxInvoice).length;
   const monthSum = all.filter(q => (q.date || '').startsWith(ym)).reduce((a, b) => a + (+b.total || 0), 0);
+  const catAgg = {}; QCATS.forEach(c => catAgg[c] = { sum: 0, cnt: 0 });
+  all.forEach(q => { const cs = {}; (q.items || []).forEach(it => { const c = itemCategory(it.name); if (catAgg[c]) { catAgg[c].sum += Math.round(+it.amt || 0); cs[c] = 1; } }); Object.keys(cs).forEach(c => catAgg[c].cnt++); });
+  const catBreak = `<div class="card" style="margin-bottom:12px;padding:11px 14px"><div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:8px"><i class="ti ti-chart-pie"></i> 분류별 매출 · 견적건</div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${QCATS.map(c => `<div style="text-align:center;padding:7px 4px;background:var(--soft);border-radius:9px"><div style="font-size:10.5px;color:var(--t2);margin-bottom:2px">${c}</div><div style="font-size:14.5px;font-weight:800;color:var(--gd)">${fmtWon(catAgg[c].sum)}</div><div style="font-size:10px;color:var(--t3)">${catAgg[c].cnt}건</div></div>`).join('')}</div></div>`;
   let list = all.slice().sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
   if (qy) list = list.filter(q => (q.client || '').toLowerCase().includes(qy) || (q.docNo || '').toLowerCase().includes(qy) || (q.items || []).some(it => (it.name || '').toLowerCase().includes(qy)));
   const view = filters.quoteView || 'all';
@@ -4199,6 +4212,7 @@ function renderQuote() {
       <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행</div></div>
       <div class="stat"><div class="ic g"><i class="ti ti-calendar-stats"></i></div><div class="v" style="font-size:19px">${fmtWon(monthSum)}</div><div class="l">이번 달 견적</div></div>
     </div>
+    ${catBreak}
     ${toggle}
     <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i>
       <input id="q-search" placeholder="거래처·견적번호·자재 검색" value="${esc(filters.quoteSearch || '')}" oninput="filters.quoteSearch=this.value;renderQuote()" autocomplete="off" lang="ko">
