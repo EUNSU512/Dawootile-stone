@@ -3696,6 +3696,7 @@ function renderQuoteForm() {
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
           <div class="fld" style="flex:2;min-width:180px;margin:0"><label>거래처 <span class="req">*</span></label>${searchBox('q-client', '업체명 검색·입력', v.client || '', 'companyNames', 'quoteClientChanged')}</div>
           <div class="fld" style="flex:1;min-width:130px;margin:0"><label>단가 유형</label><select id="q-ctype" onchange="quoteTypeChanged()" style="width:100%;font-size:15px;padding:9px 10px;border:1.5px solid var(--bd2);border-radius:10px">${CTYPES.map(t => `<option ${((editing && v.ctype) || clientType(v.client || '')) === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+          <div class="fld" style="flex:1;min-width:130px;margin:0"><label>분류</label><select id="q-cat" style="width:100%;font-size:15px;padding:9px 10px;border:1.5px solid var(--bd2);border-radius:10px">${QCATS.map(cc => `<option ${((editing && v.category) || '세라믹+세면대') === cc ? 'selected' : ''}>${cc}</option>`).join('')}</select></div>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
           <div class="fld" style="flex:1;min-width:150px;margin:0"><label>견적일</label><input type="date" id="q-date" value="${esc((editing && v.date) || todayStr())}"></div>
@@ -3759,6 +3760,7 @@ async function submitQuote(id) {
   const valid = (el('q-valid') && el('q-valid').value || '').trim();
   const attn = (el('q-attn') && el('q-attn').value || '').trim();
   const siteAddr = (el('q-site') && el('q-site').value || '').trim();
+  const category = (el('q-cat') && el('q-cat').value) || '세라믹+세면대';
   const memo = (el('q-memo') && el('q-memo').value || '').trim();
   const supply = items.reduce((a, b) => a + (+b.amt || 0), 0); const vat = Math.round(supply * 0.1); const total = supply + vat;
   if (_busy) return; _busy = true;
@@ -3766,7 +3768,7 @@ async function submitQuote(id) {
     await ensureClient(client);
     const q = id ? (state.quotes || []).find(x => x.id === id) : null;
     const docNo = (q && q.docNo) || quoteNextDocNo();
-    const data = { docNo, client, ctype, date, valid, attn, siteAddr, items, supply, vat, total, memo, by: (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
+    const data = { docNo, client, ctype, category, date, valid, attn, siteAddr, items, supply, vat, total, memo, by: (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
     if (id) await Store.update('quotes', id, data); else await Store.add('quotes', data);
     try { const cdoc = (state.clients || []).find(x => _normName(x.value) === _normName(client)); if (cdoc && (cdoc.ctype || '') !== ctype) await Store.update('clients', cdoc.id, { ctype }); } catch (e) { }   // 거래처 유형 기억
     for (const it of items) { if (it.extra) continue; try { await quoteLearnPrice(ctype, it.name, +it.price || 0); } catch (e) { } }   // 유형별 단가표 학습(부대비용 제외)
@@ -4175,7 +4177,7 @@ function renderQuote() {
   const noTax = all.filter(q => !q.taxInvoice).length;
   const monthSum = all.filter(q => (q.date || '').startsWith(ym)).reduce((a, b) => a + (+b.total || 0), 0);
   const catAgg = {}; QCATS.forEach(c => catAgg[c] = { sum: 0, cnt: 0 });
-  all.forEach(q => { const cs = {}; (q.items || []).forEach(it => { const c = itemCategory(it.name); if (catAgg[c]) { catAgg[c].sum += Math.round(+it.amt || 0); cs[c] = 1; } }); Object.keys(cs).forEach(c => catAgg[c].cnt++); });
+  all.forEach(q => { if (q.category && catAgg[q.category]) { catAgg[q.category].sum += (+q.supply || 0); catAgg[q.category].cnt++; } else { const cs = {}; (q.items || []).forEach(it => { const c = itemCategory(it.name); if (catAgg[c]) { catAgg[c].sum += Math.round(+it.amt || 0); cs[c] = 1; } }); Object.keys(cs).forEach(c => catAgg[c].cnt++); } });
   const catBreak = `<div class="card" style="margin-bottom:12px;padding:11px 14px"><div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:8px"><i class="ti ti-chart-pie"></i> 분류별 매출 · 견적건</div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${QCATS.map(c => `<div style="text-align:center;padding:7px 4px;background:var(--soft);border-radius:9px"><div style="font-size:10.5px;color:var(--t2);margin-bottom:2px">${c}</div><div style="font-size:14.5px;font-weight:800;color:var(--gd)">${fmtWon(catAgg[c].sum)}</div><div style="font-size:10px;color:var(--t3)">${catAgg[c].cnt}건</div></div>`).join('')}</div></div>`;
   let list = all.slice().sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
   if (qy) list = list.filter(q => (q.client || '').toLowerCase().includes(qy) || (q.docNo || '').toLowerCase().includes(qy) || (q.items || []).some(it => (it.name || '').toLowerCase().includes(qy)));
