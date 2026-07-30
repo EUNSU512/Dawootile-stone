@@ -3671,6 +3671,7 @@ function quoteRefillPrices() {
   document.querySelectorAll('#q-rows .q-row').forEach(r => { const name = (r.querySelector('.q-mat').value || '').trim(); if (!name) return; const p = quoteGetPrice(client, name, type); if (p) r.querySelector('.q-price').value = p; });
   quoteRecalc();
 }
+let _qRawTotal = 0;
 function quoteRecalc() {
   let supply = 0;
   document.querySelectorAll('#q-rows .q-row').forEach(r => { const qty = _numv(r.querySelector('.q-qty').value); const price = _numv(r.querySelector('.q-price').value); const amt = Math.round(qty * price); r.querySelector('.q-amt').textContent = fmtWon(amt); supply += amt; });
@@ -3682,11 +3683,21 @@ function quoteRecalc() {
     document.querySelectorAll('.qx-row').forEach(r => { if ((r.getAttribute('data-name') || '').includes('세면대') && _numv(r.querySelector('.qx-qty').value) > 0) basin = true; });
     noteEl.style.display = basin ? 'block' : 'none';
   }
-  const vat = Math.round(supply * 0.1), total = supply + vat;
+  const vat = Math.round(supply * 0.1); const raw = supply + vat; _qRawTotal = raw;
+  const dc = el('q-dc') ? _numv(el('q-dc').value) : 0;
+  const total = raw - dc;
   if (el('q-supply')) el('q-supply').textContent = fmtWon(supply);
   if (el('q-vat')) el('q-vat').textContent = fmtWon(vat);
+  if (el('q-dcshow')) el('q-dcshow').textContent = dc > 0 ? ('-' + fmtWon(dc)) : '0';
   if (el('q-total')) el('q-total').textContent = fmtWon(total);
 }
+function quoteTruncate(place) {
+  const rem = (_qRawTotal || 0) % place;
+  if (el('q-dc')) el('q-dc').value = rem;
+  quoteRecalc();
+  toast(fmtWon(place) + '원 단위 절삭 · 할인 ' + fmtWon(rem) + '원');
+}
+function quoteDcClear() { if (el('q-dc')) el('q-dc').value = ''; quoteRecalc(); }
 function addQRow() { const c = el('q-rows'); if (c) { c.insertAdjacentHTML('beforeend', qRowHtml({})); } }
 function openQuoteInline(id, copy) { filters.quoteEdit = id || 'new'; filters.quoteCopy = !!copy; filters.quoteCat = ''; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
 function quoteCancel() { filters.quoteEdit = ''; filters.quoteCopy = false; filters.quoteCat = ''; renderQuote(); }
@@ -3802,7 +3813,16 @@ function renderQuoteForm() {
         <div class="fld full" style="margin-bottom:10px"><label>비고 <span style="color:var(--t3);font-weight:500">(기본 양식은 견적 설정에서 관리)</span></label><textarea id="q-memo" lang="ko" placeholder="결제조건·납기 등" style="min-height:64px">${esc(editing ? (v.memo || '') : (v.memo || quoteMemoTemplate()))}</textarea></div>
         <div style="background:var(--soft);border-radius:11px;padding:12px 14px;max-width:360px;margin-left:auto">
           <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:5px"><span style="color:var(--t2)">공급가액</span><b id="q-supply">0</b></div>
-          <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:7px"><span style="color:var(--t2)">부가세 (10%)</span><b id="q-vat">0</b></div>
+          <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:6px"><span style="color:var(--t2)">부가세 (10%)</span><b id="q-vat">0</b></div>
+          <div style="display:flex;justify-content:space-between;align-items:center;font-size:14px;margin-bottom:6px"><span style="color:var(--t2)">할인 (D/C)</span><input id="q-dc" inputmode="numeric" value="${esc(editing ? (v.discount || '') : '')}" oninput="quoteRecalc()" placeholder="0" style="width:130px;text-align:right;font-size:14px;padding:6px 9px;border:1.5px solid var(--bd2);border-radius:8px;color:#c0341d;font-weight:700"></div>
+          <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;justify-content:flex-end;align-items:center">
+            <span style="font-size:10.5px;color:var(--t3);margin-right:auto">끝자리 절삭</span>
+            <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" onclick="quoteTruncate(100)">100</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" onclick="quoteTruncate(1000)">1,000</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" onclick="quoteTruncate(10000)">1만</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" onclick="quoteTruncate(100000)">10만</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" onclick="quoteDcClear()">해제</button>
+          </div>
           <div style="display:flex;justify-content:space-between;font-size:17px;border-top:1px solid var(--bd2);padding-top:8px"><span style="font-weight:700">합계금액</span><b id="q-total" style="color:var(--gd)">0</b></div>
         </div>
       </div>
@@ -3842,13 +3862,13 @@ async function submitQuote(id) {
   const siteAddr = (el('q-site') && el('q-site').value || '').trim();
   const category = (el('q-cat') && el('q-cat').value) || '세라믹+세면대';
   const memo = (el('q-memo') && el('q-memo').value || '').trim();
-  const supply = items.reduce((a, b) => a + (+b.amt || 0), 0); const vat = Math.round(supply * 0.1); const total = supply + vat;
+  const supply = items.reduce((a, b) => a + (+b.amt || 0), 0); const vat = Math.round(supply * 0.1); const discount = el('q-dc') ? _numv(el('q-dc').value) : 0; const total = supply + vat - discount;
   if (_busy) return; _busy = true;
   try {
     await ensureClient(client);
     const q = id ? (state.quotes || []).find(x => x.id === id) : null;
     const docNo = (q && q.docNo) || quoteNextDocNo();
-    const data = { docNo, client, ctype, category, date, valid, attn, siteAddr, items, supply, vat, total, memo, by: (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
+    const data = { docNo, client, ctype, category, date, valid, attn, siteAddr, items, supply, vat, discount, total, memo, by: (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
     if (id) await Store.update('quotes', id, data); else await Store.add('quotes', data);
     try { const cdoc = (state.clients || []).find(x => _normName(x.value) === _normName(client)); if (cdoc && (cdoc.ctype || '') !== ctype) await Store.update('clients', cdoc.id, { ctype }); } catch (e) { }   // 거래처 유형 기억
     for (const it of items) { if (it.extra) continue; try { await quoteLearnPrice(ctype, it.name, +it.price || 0); } catch (e) { } }   // 유형별 단가표 학습(부대비용 제외)
@@ -3944,6 +3964,7 @@ function renderTaxForm() {
         <div style="color:var(--t2);margin-bottom:5px">공급자: <b>${esc(co.name)}</b> (${esc(co.bizno)})</div>
         <div style="display:flex;justify-content:space-between;margin-bottom:3px"><span style="color:var(--t2)">공급가액</span><b>${fmtWon(q.supply)}원</b></div>
         <div style="display:flex;justify-content:space-between;margin-bottom:5px"><span style="color:var(--t2)">세액</span><b>${fmtWon(q.vat)}원</b></div>
+        ${(+q.discount || 0) > 0 ? `<div style="display:flex;justify-content:space-between;margin-bottom:5px"><span style="color:var(--t2)">할인 (D/C)</span><b style="color:#c0341d">- ${fmtWon(q.discount)}원</b></div>` : ''}
         <div style="display:flex;justify-content:space-between;font-size:15px;border-top:1px solid var(--bd2);padding-top:6px"><span style="font-weight:700">합계</span><b style="color:var(--gd)">${fmtWon(q.total)}원</b></div>
       </div>
       <div style="font-size:11.5px;color:var(--t3);margin-bottom:11px">발행 시 국세청 전송되며 팝빌 포인트가 과금됩니다. 공급받는자 이메일로 발행 안내가 발송됩니다. ${co.bizno ? '' : '<b style="color:#c0341d">공급자 사업자번호가 없어 발행이 안 됩니다 — 회사 정보에서 설정하세요.</b>'}</div>
@@ -4808,6 +4829,7 @@ function quoteDocHtml(q) {
     <table class="sum">
       <tr><td class="k">공급가액</td><td class="v">${fmtWon(q.supply)} 원</td></tr>
       <tr><td class="k">부가세 (10%)</td><td class="v">${fmtWon(q.vat)} 원</td></tr>
+      ${(+q.discount || 0) > 0 ? `<tr><td class="k">할인 (D/C)</td><td class="v" style="color:#c0341d">- ${fmtWon(q.discount)} 원</td></tr>` : ''}
       <tr class="tot"><td>합계금액</td><td style="text-align:right">${fmtWon(q.total)} 원</td></tr>
     </table>
   </div>
@@ -4879,6 +4901,7 @@ function downloadQuoteXls(id) {
   html += `<table style="border-collapse:collapse;margin-top:6px"><tr>${TH('No', 40)}${TH('품목', 200)}${TH('규격', 150)}${TH('수량', 60)}${TH('단가', 90)}${TH('금액', 100)}</tr>${body}`;
   html += `<tr><td colspan="5" style="border:0.5pt solid #cfd8d4;text-align:right;font-weight:bold;padding:6px 9px">공급가액</td>${TD('<b>' + fmtWon(q.supply) + '</b>', R)}</tr>`;
   html += `<tr><td colspan="5" style="border:0.5pt solid #cfd8d4;text-align:right;font-weight:bold;padding:6px 9px">부가세(10%)</td>${TD('<b>' + fmtWon(q.vat) + '</b>', R)}</tr>`;
+  if ((+q.discount || 0) > 0) html += `<tr><td colspan="5" style="border:0.5pt solid #cfd8d4;text-align:right;font-weight:bold;padding:6px 9px;color:#c0341d">할인(D/C)</td>${TD('<b>-' + fmtWon(q.discount) + '</b>', R)}</tr>`;
   html += `<tr><td colspan="5" style="border:0.5pt solid #cfd8d4;background:#e1f5ee;text-align:right;font-weight:bold;padding:6px 9px">합계금액</td><td style="border:0.5pt solid #cfd8d4;background:#e1f5ee;text-align:right;font-weight:bold;padding:5px 9px">${fmtWon(q.total)}</td></tr></table>`;
   if (q.memo) html += `<table style="margin-top:8px"><tr><td style="font-weight:bold">비고 : ${esc(q.memo)}</td></tr></table>`;
   if (hasBasinItems(q.items)) html += `<table style="margin-top:8px;border-collapse:collapse"><tr><td style="background:#c0341d;color:#fff;font-weight:bold;padding:6px 9px">⚠ 세면대 주문제작 특이사항 (필독)</td></tr>` + BASIN_NOTICE.map(l => `<tr><td style="border:0.5pt solid #e0b4ad;color:#8a1c10;font-weight:bold;padding:5px 9px">· ${esc(l)}</td></tr>`).join('') + `</table>`;
