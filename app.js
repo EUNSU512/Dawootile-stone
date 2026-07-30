@@ -3866,39 +3866,60 @@ function printQuote(id) {
   for (let i = items.length; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
   const co = DAWOO_CO;
   const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>견적서 ${e(q.client)} ${e(q.docNo)}</title>
-<style>*{box-sizing:border-box}body{font-family:'맑은 고딕','Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#111;margin:0;padding:22px 26px;position:relative}
-h1{text-align:center;font-size:30px;font-weight:800;letter-spacing:18px;margin:2px 0 2px}
-.sub{text-align:center;font-size:12.5px;color:#666;margin-bottom:16px;letter-spacing:.5px}
-.docno{position:absolute;top:22px;right:26px;font-size:13px;font-weight:700}
-table{border-collapse:collapse;width:100%}
-.top{table-layout:fixed;margin-bottom:12px}.top td{border:1px solid #333;padding:7px 9px;font-size:12.5px;vertical-align:top}
-.top .k{background:#f2f2f2;font-weight:700;text-align:center;white-space:nowrap;width:12%}
-.recip{font-size:15px;font-weight:800}
-.supplier .sr{font-size:11.5px;line-height:1.55}
-.stamp{position:absolute;right:8px;top:6px;width:52px;height:52px;border:2px solid #c0341d;border-radius:50%;color:#c0341d;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center;transform:rotate(-8deg)}
-.items{table-layout:fixed}.items th{border:1px solid #333;background:#efefef;padding:8px 6px;font-size:12.5px}.items td{border:1px solid #333;padding:7px 6px;font-size:12.5px;height:30px}
-.items td.c{text-align:center}.items td.l{text-align:left;padding-left:9px}.items td.r{text-align:right;padding-right:9px}
-.sum{margin-top:12px;width:52%;margin-left:auto}.sum td{border:1px solid #333;padding:8px 11px;font-size:13px}.sum .k{background:#f2f2f2;font-weight:700;width:45%}.sum .v{text-align:right;font-weight:700}.sum .tot .k,.sum .tot .v{background:#0F6E56;color:#fff;font-size:15px}
-.memo{margin-top:12px;border:1px solid #333}.memo .mh{background:#f2f2f2;font-weight:700;font-size:12.5px;padding:6px 9px;border-bottom:1px solid #333}.memo .mb{padding:9px;min-height:44px;font-size:12.5px;white-space:pre-wrap}
-.note{margin-top:10px;font-size:11.5px;color:#555}
-@media print{body{padding:10px 12px}}</style></head><body>
-  <div class="docno">견적번호 ${e(q.docNo)}</div>
-  <h1>견 적 서</h1>
-  <div class="sub">Quotation</div>
-  <table class="top"><tr>
-    <td class="k">수 신</td><td style="width:38%"><div class="recip">${e(q.client)} 귀중</div>${q.attn ? `<div style="font-size:12px;color:#555;margin-top:3px">${e(q.attn)}</div>` : ''}<div style="font-size:12px;margin-top:8px">견적일 : ${e(q.date)}</div><div style="font-size:12px">유효기간 : ${e(q.valid) || '-'}</div><div style="font-size:12px;margin-top:6px">아래와 같이 견적합니다.</div></td>
-    <td class="k">공급자</td><td class="supplier"><div class="sr" style="position:relative"><div class="stamp">DAWOO<br>(인)</div><b style="font-size:13.5px">${co.name}</b><br>대표 : ${e(co.ceo)}　등록번호 : ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}</div></td>
-  </tr></table>
+<style>*{box-sizing:border-box}body{font-family:'맑은 고딕','Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#1c1c1c;margin:0;padding:26px 30px;position:relative;font-size:12.5px}
+.qhead{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:3px solid #0F6E56;padding-bottom:11px}
+.qhead .brand{font-size:16px;font-weight:800;color:#0F6E56;letter-spacing:.3px}
+.qhead .brand small{display:block;font-size:9.5px;color:#95a8a1;font-weight:700;letter-spacing:3px;margin-top:3px}
+.qhead .title{text-align:right}
+.qhead .title h1{margin:0;font-size:33px;font-weight:800;letter-spacing:13px;color:#0F6E56;line-height:1}
+.qhead .title .en{font-size:10px;letter-spacing:5px;color:#a7b5af;font-weight:700;margin-top:3px}
+.meta{display:flex;justify-content:flex-end;gap:20px;font-size:11px;color:#777;margin:9px 0 16px}
+.meta b{color:#222;font-weight:700}
+.info{display:flex;gap:12px;margin-bottom:15px}
+.info .box{flex:1;border:1px solid #d7e0dc;border-radius:9px;overflow:hidden}
+.info .bh{background:#eef4f1;color:#0F6E56;font-weight:700;font-size:11px;padding:6px 12px;border-bottom:1px solid #d7e0dc;letter-spacing:1px}
+.info .bb{padding:11px 13px;font-size:11.5px;line-height:1.6;position:relative;min-height:82px}
+.info .recip-name{font-size:16px;font-weight:800;margin-bottom:5px;color:#111}
+.stamp{position:absolute;right:11px;top:10px;width:50px;height:50px;border:2px solid #c0341d;border-radius:50%;color:#c0341d;font-size:9.5px;font-weight:800;display:flex;align-items:center;justify-content:center;text-align:center;line-height:1.2;transform:rotate(-7deg);opacity:.92}
+.items{border-collapse:collapse;width:100%;table-layout:fixed;border-top:2px solid #0F6E56;border-bottom:2px solid #0F6E56}
+.items th{background:#0F6E56;color:#fff;font-weight:700;font-size:11.5px;padding:9px 6px;letter-spacing:.5px}
+.items td{border-bottom:1px solid #e5ece9;padding:8px 7px;font-size:12px;height:31px}
+.items tbody tr:nth-child(even){background:#f6faf8}
+.items td.c{text-align:center}.items td.l{text-align:left;padding-left:11px;font-weight:600}.items td.r{text-align:right;padding-right:11px}
+.bottom{display:flex;gap:14px;margin-top:15px;align-items:stretch}
+.bottom .memo{flex:1;border:1px solid #d7e0dc;border-radius:9px;overflow:hidden;display:flex;flex-direction:column}
+.memo .mh{background:#eef4f1;color:#0F6E56;font-weight:700;font-size:11px;padding:6px 12px;letter-spacing:1px}
+.memo .mb{padding:10px 12px;font-size:11.5px;white-space:pre-wrap;line-height:1.6;flex:1}
+.sum{width:298px;border-collapse:collapse;align-self:flex-start}
+.sum td{padding:9px 13px;font-size:12.5px;border-bottom:1px solid #e5ece9}
+.sum .k{color:#666;font-weight:600}.sum .v{text-align:right;font-weight:700}
+.sum .tot td{background:#0F6E56;color:#fff;font-size:15px;font-weight:800;border:none;padding:12px 13px}
+.notice{margin-top:14px;border:1.5px solid #c0341d;border-radius:9px;overflow:hidden}
+.notice .nh{background:#c0341d;color:#fff;font-weight:800;font-size:12px;padding:7px 12px;letter-spacing:.5px}
+.notice ul{margin:0;padding:9px 10px 9px 28px;font-size:11px;line-height:1.7;color:#8a1c10;font-weight:600;background:#fff6f5}
+.foot{margin-top:16px;border-top:1px solid #d7e0dc;padding-top:9px;font-size:10px;color:#9aa39f;display:flex;justify-content:space-between}
+@media print{body{padding:14px 16px}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body>
+  <div class="qhead">
+    <div class="brand">${e(co.name)}<small>CERAMIC &amp; STONE</small></div>
+    <div class="title"><h1>견 적 서</h1><div class="en">QUOTATION</div></div>
+  </div>
+  <div class="meta"><span>견적번호 <b>${e(q.docNo)}</b></span><span>견적일 <b>${e(q.date)}</b></span><span>유효기간 <b>${e(q.valid) || '-'}</b></span></div>
+  <div class="info">
+    <div class="box"><div class="bh">수신 · RECIPIENT</div><div class="bb"><div class="recip-name">${e(q.client)} 귀중</div>${q.attn ? `<div style="color:#555;margin-bottom:4px">${e(q.attn)}</div>` : ''}<div style="color:#666">아래와 같이 견적합니다.</div></div></div>
+    <div class="box"><div class="bh">공급자 · SUPPLIER</div><div class="bb"><div class="stamp">DAWOO<br>(인)</div><b style="font-size:13px;color:#111">${e(co.name)}</b><br>대표 ${e(co.ceo)}<br>사업자등록번호 ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}</div></div>
+  </div>
   <table class="items"><colgroup><col style="width:7%"><col style="width:33%"><col style="width:22%"><col style="width:10%"><col style="width:14%"><col style="width:14%"></colgroup>
     <thead><tr><th>No</th><th>품목</th><th>규격</th><th>수량</th><th>단가</th><th>금액</th></tr></thead><tbody>${rows}</tbody></table>
-  <table class="sum">
-    <tr><td class="k">공급가액</td><td class="v">${fmtWon(q.supply)} 원</td></tr>
-    <tr><td class="k">부가세 (10%)</td><td class="v">${fmtWon(q.vat)} 원</td></tr>
-    <tr class="tot"><td class="k">합계금액</td><td class="v">${fmtWon(q.total)} 원</td></tr>
-  </table>
-  ${q.memo ? `<div class="memo"><div class="mh">비 고</div><div class="mb">${e(q.memo)}</div></div>` : ''}
-  ${hasBasinItems(items) ? `<div style="margin-top:12px;border:2px solid #c0341d;border-radius:6px;overflow:hidden"><div style="background:#c0341d;color:#fff;font-weight:800;font-size:13px;padding:7px 10px">⚠ 세면대 주문제작 특이사항 (필독)</div><ul style="margin:0;padding:9px 9px 9px 27px;font-size:12px;line-height:1.75;color:#8a1c10;font-weight:600;background:#fff5f5">${BASIN_NOTICE.map(l => `<li>${e(l)}</li>`).join('')}</ul></div>` : ''}
-  <div class="note">※ 본 견적은 유효기간 내에서만 유효하며, 부가세 별도(공급가액 기준) 산정되었습니다.</div>
+  <div class="bottom">
+    <div class="memo"><div class="mh">비 고 · REMARKS</div><div class="mb">${q.memo ? e(q.memo) : ''}</div></div>
+    <table class="sum">
+      <tr><td class="k">공급가액</td><td class="v">${fmtWon(q.supply)} 원</td></tr>
+      <tr><td class="k">부가세 (10%)</td><td class="v">${fmtWon(q.vat)} 원</td></tr>
+      <tr class="tot"><td>합계금액</td><td style="text-align:right">${fmtWon(q.total)} 원</td></tr>
+    </table>
+  </div>
+  ${hasBasinItems(items) ? `<div class="notice"><div class="nh">⚠ 세면대 주문제작 특이사항 (필독)</div><ul>${BASIN_NOTICE.map(l => `<li>${e(l)}</li>`).join('')}</ul></div>` : ''}
+  <div class="foot"><span>※ 본 견적은 유효기간 내에서만 유효하며, 부가세 별도(공급가액 기준)로 산정되었습니다.</span><span>${e(co.name)}</span></div>
 </body></html>`;
   const w = window.open('', '_blank'); if (!w) { toast('팝업이 차단되었습니다. 팝업 허용 후 다시'); return; }
   w.document.write(html); w.document.close(); w.focus(); setTimeout(() => { try { w.print(); } catch (e) { } }, 350);
