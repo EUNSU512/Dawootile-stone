@@ -3518,6 +3518,52 @@ async function saveQuoteMemo() {
   toast('비고 기본 양식 저장됨');
 }
 async function setClientTypeSetting(id, type) { try { await Store.update('clients', id, { ctype: type }); } catch (e) { } }
+function _ctypeNorm(v) { const s = String(v == null ? '' : v).replace(/\s/g, ''); if (!s) return ''; if (/유통|도매/.test(s)) return '유통'; if (/대리점/.test(s)) return '대리점'; if (/인테리어|시공/.test(s)) return '인테리어'; if (/소비자|소매|일반|개인/.test(s)) return '소비자'; return ''; }
+/* 거래처 유형 엑셀/CSV 업로드 → clients.ctype 학습 */
+function clientTypeImport(input) {
+  const f = input.files && input.files[0]; if (!f) return;
+  if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후 다시'); input.value = ''; return; }
+  const rd = new FileReader();
+  rd.onload = async e => {
+    try {
+      const wb = XLSX.read(e.target.result, { type: 'array' });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+      let hi = -1, nameC = -1, typeC = -1;
+      for (let r = 0; r < Math.min(rows.length, 12); r++) {
+        const cells = rows[r] || []; let nc = -1, tc = -1;
+        cells.forEach((c, i) => { const s = String(c || '').replace(/\s/g, '');
+          if (nc < 0 && /(거래처|업체|상호|성명|명칭|고객|거래선)/.test(s)) nc = i;
+          if (tc < 0 && /(유형|구분|타입|등급|단가유형)/.test(s)) tc = i;
+        });
+        if (nc >= 0 && tc >= 0) { hi = r; nameC = nc; typeC = tc; break; }
+      }
+      if (hi < 0) { toast('헤더를 못 찾음 — 거래처명 + 유형 열이 필요합니다'); input.value = ''; return; }
+      let n = 0, added = 0, skipped = 0;
+      for (let r = hi + 1; r < rows.length; r++) {
+        const cells = rows[r] || []; const name = String(cells[nameC] == null ? '' : cells[nameC]).trim(); if (!name) continue;
+        const ctype = _ctypeNorm(cells[typeC]); if (!ctype) { skipped++; continue; }
+        const c = (state.clients || []).find(x => _normName(x.value) === _normName(name));
+        if (c) { await Store.update('clients', c.id, { ctype }); } else { await Store.add('clients', { value: name, ctype }); added++; }
+        n++;
+      }
+      toast(n ? (n + '개 거래처 유형 반영' + (added ? ' (신규 ' + added + ')' : '') + (skipped ? ' · 유형없음 ' + skipped + '건 건너뜀' : '')) : '반영된 행이 없습니다 (유형 열 확인)'); input.value = '';
+      setTimeout(() => { if (filters.quoteSettings) renderQuoteSettings(); }, 400);
+    } catch (err) { toast('파일을 읽지 못했습니다'); input.value = ''; }
+  };
+  rd.readAsArrayBuffer(f);
+}
+/* 거래처 유형 양식(현재값 채워서) 엑셀 다운로드 */
+function clientTypeTemplate() {
+  const TH = t => `<th style="background:#0F6E56;color:#fff;font-weight:bold;border:0.5pt solid #0a4f3e;padding:6px 9px">${t}</th>`;
+  const TD = t => `<td style="border:0.5pt solid #cfd8d4;padding:5px 9px">${t}</td>`;
+  const clients = (state.clients || []).slice().sort((a, b) => (a.value || '').localeCompare(b.value || ''));
+  const body = clients.map(c => `<tr>${TD(esc(c.value || ''))}${TD(esc(c.ctype || ''))}</tr>`).join('');
+  const html = `<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table style="border-collapse:collapse"><tr>${TH('거래처명')}${TH('유형')}</tr>${body}</table></body></html>`;
+  const blob = new Blob(['﻿', html], { type: 'application/vnd.ms-excel' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '거래처유형양식_' + todayStr() + '.xls'; document.body.appendChild(a); a.click(); a.remove();
+  toast('거래처 유형 양식 다운로드 · 유형(유통/대리점/인테리어/소비자) 채워 다시 업로드');
+}
 /* 견적/단가 대상 품목: 재고 + 단가표(priceList) 통합 목록 */
 function quotePriceItems() {
   const map = {};
@@ -3633,7 +3679,13 @@ function renderQuoteSettings() {
         <button class="btn btn-pri btn-sm btn-block" style="margin-top:8px" onclick="saveQuoteMemo()"><i class="ti ti-check"></i>비고 양식 저장</button>
       </div>
       <div class="card" style="margin-bottom:12px;padding:13px 15px">
-        <div class="card-h"><h3><i class="ti ti-users"></i>거래처 유형</h3><span class="more" style="font-size:11px;color:var(--t3)">유통 · 인테리어 · 소비자</span></div>
+        <div class="card-h"><h3><i class="ti ti-users"></i>거래처 유형</h3><span class="more" style="font-size:11px;color:var(--t3)">유통 · 대리점 · 인테리어 · 소비자</span></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+          <button class="btn btn-sm btn-pri" onclick="el('ct-file').click()"><i class="ti ti-upload"></i> 엑셀 업로드</button>
+          <button class="btn btn-sm" onclick="clientTypeTemplate()"><i class="ti ti-download"></i> 양식 다운로드</button>
+          <input type="file" id="ct-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="clientTypeImport(this)">
+        </div>
+        <div style="font-size:11px;color:var(--t3);margin-bottom:8px">엑셀/CSV 열: <b>거래처명 · 유형</b> (유형 = 유통/대리점/인테리어/소비자). 없는 거래처는 자동 등록됩니다.</div>
         <div class="search-box" style="margin-bottom:8px"><i class="ti ti-search"></i><input placeholder="거래처 검색" value="${esc(filters.qsClientSearch || '')}" oninput="qsFilterClients(this.value)" autocomplete="off" lang="ko"></div>
         <div data-keepscroll id="qs-clients" style="max-height:300px;overflow:auto;border:0.5px solid var(--bd);border-radius:10px;padding:2px 8px">${_qsClientRowsHtml()}</div>
       </div>
