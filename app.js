@@ -737,6 +737,21 @@ function clientStats(name) {
   const noTax = qs.filter(q => !q.taxInvoice).length;
   return { count: qs.length, total: total, unpaid: unpaid, noTax: noTax };
 }
+function downloadClientLedger(id) {
+  const c = (state.clients || []).find(x => x.id === id); if (!c) return;
+  if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후 다시'); return; }
+  const qs = (state.quotes || []).filter(x => _normName(x.client) === _normName(c.value)).sort((a, b) => (+a.createdAt || 0) - (+b.createdAt || 0));
+  const head = ['날짜', '견적번호', '품목', '공급가액', '부가세', '합계', '결제', '결제일', '세금계산서', '승인번호'];
+  const rows = qs.map(q => { const names = (q.items || []).map(it => it.name).filter(Boolean).slice(0, 3).join(', ') + ((q.items || []).length > 3 ? (' 외 ' + ((q.items || []).length - 3)) : ''); return [qDate(q), q.docNo || '', names, +q.supply || 0, +q.vat || 0, +q.total || 0, q.paid ? '완료' : '미결제', q.paidDate || '', q.taxInvoice ? '발행' : '미발행', q.ntsConfirmNum || '']; });
+  const supplySum = qs.reduce((a, b) => a + (+b.supply || 0), 0); const vatSum = qs.reduce((a, b) => a + (+b.vat || 0), 0); const total = qs.reduce((a, b) => a + (+b.total || 0), 0); const unpaid = qs.filter(q => !q.paid).reduce((a, b) => a + (+b.total || 0), 0);
+  const ti = c.taxInfo || {};
+  const aoa = [['거래처 원장 · ' + c.value], ['출력일 ' + todayStr() + (ti.bizNo ? (' · 사업자 ' + ti.bizNo) : '') + (c.ctype ? (' · 유형 ' + c.ctype) : '')], [], head].concat(rows);
+  aoa.push([]); aoa.push(['', '', '합계', supplySum, vatSum, total, '', '', '', '']); aoa.push(['', '', '미수금', '', '', unpaid, '', '', '', '']);
+  const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 12 }, { wch: 16 }, { wch: 32 }, { wch: 12 }, { wch: 11 }, { wch: 13 }, { wch: 8 }, { wch: 12 }, { wch: 11 }, { wch: 22 }];
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '원장');
+  XLSX.writeFile(wb, '거래처원장_' + (c.value || '').replace(/\s/g, '') + '_' + todayStr() + '.xlsx');
+  toast('원장 엑셀 다운로드');
+}
 function openClientDetail(id) { filters.clientDetail = id; renderClients(); if (el('pg-clients')) el('pg-clients').scrollIntoView({ block: 'start' }); }
 function clientsBack() { filters.clientDetail = ''; renderClients(); }
 function clientsFilter(v) { filters.clientSearch = v; renderClients(); }
@@ -862,8 +877,9 @@ function renderClientDetail() {
       <div class="stat"><div class="v" style="font-size:18px;color:${st.unpaid > 0 ? 'var(--red-t)' : ''}">${fmtWon(st.unpaid)}</div><div class="l">미수금</div></div>
       <div class="stat"><div class="v">${st.noTax}</div><div class="l">계산서 미발행</div></div>
     </div>
-    <div class="card" style="margin-bottom:12px;padding:14px 16px">
-      <div class="card-h"><h3><i class="ti ti-id-badge-2"></i>사업자 정보 · 유형</h3></div>
+    <div class="card" style="margin-bottom:12px;padding:0;overflow:hidden">
+      <div onclick="const _b=el('cb-body');_b.style.display=(_b.style.display==='none'?'block':'none')" style="cursor:pointer;padding:13px 16px;display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0;font-size:15px"><i class="ti ti-id-badge-2"></i> 사업자 정보 · 유형 확인</h3><i class="ti ti-chevron-down" style="color:var(--t3)"></i></div>
+      <div id="cb-body" style="display:none;padding:0 16px 14px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><label style="font-size:12.5px;color:var(--t2)">거래처 유형</label>
         <select onchange="setClientTypeSetting('${c.id}',this.value)" style="font-size:13px;padding:6px 9px;border:1.5px solid var(--bd2);border-radius:8px">${CTYPES.map(t => `<option ${((c.ctype) || '소비자') === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
         <span style="font-size:11px;color:var(--t3)">사업자정보 조회 시 자동 분류됩니다</span></div>
@@ -877,9 +893,10 @@ function renderClientDetail() {
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">${fld('biztype', '업태', ti.bizType)}${fld('bizclass', '종목', ti.bizClass)}</div>
       <div class="fld full" style="margin-bottom:11px"><label>담당자 이메일 <span style="color:var(--t3);font-weight:500">(세금계산서 발행 메일)</span></label><input id="cb-email" lang="en" value="${esc(ti.email || '')}" placeholder="name@company.com" style="${inp}"></div>
       <div class="frm-foot">${isAdmin() ? `<button class="btn" style="color:var(--red-t);flex:none" onclick="delClientC('${c.id}')"><i class="ti ti-trash"></i></button>` : ''}<button class="btn btn-pri" style="flex:1" onclick="saveClientBizInfo('${c.id}')"><i class="ti ti-check"></i>저장</button></div>
+      </div>
     </div>
     <div class="card" style="padding:14px 16px">
-      <div class="card-h"><h3><i class="ti ti-book"></i>거래 장부</h3><span class="more" style="font-size:11px;color:var(--t3)">미수 ${fmtWon(st.unpaid)}원</span></div>
+      <div class="card-h"><h3><i class="ti ti-book"></i>거래 장부</h3><div style="display:flex;align-items:center;gap:8px"><button class="btn btn-sm" onclick="downloadClientLedger('${c.id}')"><i class="ti ti-file-spreadsheet"></i>엑셀</button><span style="font-size:11px;color:var(--t3)">미수 ${fmtWon(st.unpaid)}원</span></div></div>
       <div style="max-height:52vh;overflow:auto">${ledger}</div>
     </div>`;
 }
