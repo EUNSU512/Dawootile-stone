@@ -3765,10 +3765,28 @@ function qsFilterClients(v) { filters.qsClientSearch = v; const c = el('qs-clien
 function qsFilterPrices(v) { filters.qsMatSearch = v; const b = document.querySelector('#qs-prices tbody'); if (b) b.innerHTML = _qsPriceRowsHtml(); }
 function renderQuoteSettings() {
   const memo = quoteMemoTemplate();
+  const ci = companyInfo();
+  const coFields = [['name', '상호'], ['ceo', '대표'], ['bizno', '사업자등록번호'], ['addr', '주소'], ['tel', '연락처'], ['biztype', '업태·종목'], ['email', '이메일'], ['web', '홈페이지']];
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-settings"></i>견적 기본설정</h2><p>비고 양식 · 거래처 유형 · 자재별 유형단가</p></div>
       <button class="btn btn-sm" onclick="quoteSettingsClose()"><i class="ti ti-arrow-left"></i> 견적 목록</button></div>
     <div id="qset-root">
+      <div class="card" style="margin-bottom:12px;padding:13px 15px">
+        <div class="card-h"><h3><i class="ti ti-building"></i>회사 정보 · 도장</h3><span class="more" style="font-size:11px;color:var(--t3)">견적서·발주서에 표시</span></div>
+        <div style="font-size:11.5px;color:var(--t3);margin-bottom:9px">여기 정보가 견적서·발주서 상단 공급자란에 표시됩니다.</div>
+        ${coFields.map(([k, label]) => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px"><label style="width:100px;font-size:12px;color:var(--t2);flex:none">${label}</label><input value="${esc(ci[k] || '')}" onchange="saveCompanyField('${k}',this.value)" autocomplete="off" lang="ko" style="flex:1;min-width:0;font-size:13px;padding:7px 9px;border:1.5px solid var(--bd2);border-radius:8px"></div>`).join('')}
+        <div style="display:flex;align-items:center;gap:12px;margin-top:11px;padding-top:11px;border-top:0.5px solid var(--bd)">
+          <div style="width:62px;height:62px;flex:none;border:1px dashed var(--bd2);border-radius:8px;display:flex;align-items:center;justify-content:center;overflow:hidden">${ci.stampImg ? `<img src="${ci.stampImg}" style="width:100%;height:100%;object-fit:contain">` : `<span style="font-size:9px;color:#c2a06a;border:1.5px solid #c2a06a;border-radius:50%;width:44px;height:44px;display:flex;align-items:center;justify-content:center">도장</span>`}</div>
+          <div style="flex:1">
+            <div style="font-size:12px;color:var(--t2);margin-bottom:6px">도장 · 직인 이미지 <span style="color:var(--t3)">(배경 투명 PNG 권장)</span></div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button class="btn btn-sm btn-pri" onclick="el('stamp-file').click()"><i class="ti ti-upload"></i> 이미지 업로드</button>
+              ${ci.stampImg ? `<button class="btn btn-sm" onclick="removeStamp()"><i class="ti ti-trash"></i> 제거</button>` : ''}
+              <input type="file" id="stamp-file" accept="image/*" style="display:none" onchange="companyStampImport(this)">
+            </div>
+          </div>
+        </div>
+      </div>
       <div class="card" style="margin-bottom:12px;padding:13px 15px">
         <div class="card-h"><h3><i class="ti ti-note"></i>비고 기본 양식</h3></div>
         <div style="font-size:11.5px;color:var(--t3);margin-bottom:7px">새 견적을 작성할 때 비고란에 자동으로 채워집니다.</div>
@@ -3864,7 +3882,7 @@ function printQuote(id) {
   const items = q.items || []; const MIN = Math.max(8, items.length);
   let rows = items.map((it, i) => `<tr><td class="c">${i + 1}</td><td class="l">${e(it.name)}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}${it.unit ? ' ' + e(it.unit) : ''}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`).join('');
   for (let i = items.length; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
-  const co = DAWOO_CO;
+  const co = companyInfo();
   const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>견적서 ${e(q.client)} ${e(q.docNo)}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@1.3.9/dist/web/static/pretendard.min.css">
 <style>*{box-sizing:border-box}body{font-family:'Pretendard Variable',Pretendard,'맑은 고딕','Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#201c17;margin:0;padding:30px 34px;position:relative;font-size:12.5px;-webkit-font-smoothing:antialiased}
@@ -3882,6 +3900,7 @@ function printQuote(id) {
 .info .bb{padding:12px 14px;font-size:11.5px;line-height:1.65;position:relative;min-height:86px;color:#4a443c}
 .info .recip-name{font-size:16px;font-weight:700;margin-bottom:6px;color:#201c17}
 .stamp{position:absolute;right:12px;top:11px;width:50px;height:50px;border:1.5px solid #c2a06a;border-radius:50%;color:#c2a06a;font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center;text-align:center;line-height:1.2;transform:rotate(-7deg)}
+.stampimg{position:absolute;right:10px;top:6px;width:62px;height:62px;object-fit:contain}
 .items{border-collapse:collapse;width:100%;table-layout:fixed;border-top:2px solid #201c17;border-bottom:2px solid #201c17}
 .items th{background:#201c17;color:#f3ece0;font-weight:600;font-size:11px;padding:10px 6px;letter-spacing:2px}
 .items td{border-bottom:1px solid #ece4d6;padding:9px 7px;font-size:12px;height:31px;color:#332f28}
@@ -3908,7 +3927,7 @@ function printQuote(id) {
   <div class="meta"><span>견적번호 <b>${e(q.docNo)}</b></span><span>견적일 <b>${e(q.date)}</b></span><span>유효기간 <b>${e(q.valid) || '-'}</b></span></div>
   <div class="info">
     <div class="box"><div class="bh">수신 · RECIPIENT</div><div class="bb"><div class="recip-name">${e(q.client)} 귀중</div>${q.attn ? `<div style="color:#555;margin-bottom:4px">${e(q.attn)}</div>` : ''}<div style="color:#666">아래와 같이 견적합니다.</div></div></div>
-    <div class="box"><div class="bh">공급자 · SUPPLIER</div><div class="bb"><div class="stamp">DAWOO<br>(인)</div><b style="font-size:13px;color:#111">${e(co.name)}</b><br>대표 ${e(co.ceo)}<br>사업자등록번호 ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}</div></div>
+    <div class="box"><div class="bh">공급자 · SUPPLIER</div><div class="bb">${co.stampImg ? `<img class="stampimg" src="${co.stampImg}">` : `<div class="stamp">DAWOO<br>(인)</div>`}<b style="font-size:13px;color:#111">${e(co.name)}</b><br>대표 ${e(co.ceo)}<br>사업자등록번호 ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}</div></div>
   </div>
   <table class="items"><colgroup><col style="width:7%"><col style="width:33%"><col style="width:22%"><col style="width:10%"><col style="width:14%"><col style="width:14%"></colgroup>
     <thead><tr><th>No</th><th>품목</th><th>규격</th><th>수량</th><th>단가</th><th>금액</th></tr></thead><tbody>${rows}</tbody></table>
@@ -4185,7 +4204,7 @@ async function submitOutEdit(id) {
   closeModal(); toast('출고 내역이 수정되었습니다');
 }
 /* 출고표(출고증) 인쇄 — 회사 양식 기준. 출고 묶음(shipId) 단위로 발행 */
-const DAWOO_CO = {
+const DAWOO_CO_DEFAULT = {
   name: '주식회사 다우세라믹앤석재',
   addr: '경기도 용인시 처인구 모현읍 곡현로 425, 2동',
   tel: 'Tel ) 070-8211-0144　Fax ) 0503-8379-3628',
@@ -4195,6 +4214,22 @@ const DAWOO_CO = {
   email: 'dawoost@naver.com',
   web: 'www.dawoostone.kr'
 };
+/* 회사 정보 · 도장 (설정에서 수정, 기본값 위에 덮어씀) */
+function companyInfo() { const m = (state.appmeta || []).find(x => x.key === 'companyInfo'); return Object.assign({}, DAWOO_CO_DEFAULT, (m && m.info) || {}); }
+function companyStamp() { const m = (state.appmeta || []).find(x => x.key === 'companyInfo'); return (m && m.info && m.info.stampImg) || ''; }
+async function saveCompanyField(field, val) { const m = (state.appmeta || []).find(x => x.key === 'companyInfo'); const info = Object.assign({}, (m && m.info) || {}); info[field] = val; if (m) await Store.update('appmeta', m.id, { info }); else await Store.add('appmeta', { key: 'companyInfo', info }); }
+function companyStampImport(input) {
+  const f = input.files && input.files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = e => { const img = new Image(); img.onload = async () => {
+    const max = 280; let w = img.width, h = img.height; const s = Math.min(1, max / Math.max(w, h)); w = Math.round(w * s); h = Math.round(h * s);
+    const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(img, 0, 0, w, h);
+    try { await saveCompanyField('stampImg', c.toDataURL('image/png')); toast('도장 이미지 저장됨'); } catch (err) { toast('저장 실패 — 이미지가 너무 큽니다'); }
+    input.value = ''; setTimeout(() => { if (filters.quoteSettings) renderQuoteSettings(); }, 300);
+  }; img.src = e.target.result; };
+  rd.readAsDataURL(f);
+}
+async function removeStamp() { if (!confirm('도장 이미지를 제거할까요?')) return; await saveCompanyField('stampImg', ''); toast('도장 제거됨'); setTimeout(() => { if (filters.quoteSettings) renderQuoteSettings(); }, 300); }
 function printShipSlip(key) {
   const items = state.transactions.filter(t => t.type === 'out' && (t.shipId || t.id) === key)
     .sort((a, b) => (a.itemName || '').localeCompare(b.itemName || ''));
@@ -4272,17 +4307,17 @@ function printShipSlip(key) {
     </tr>
     <tr>
       <td class="issue"><div class="ik">발 행 일 자</div><div class="iv">${e(g.date)}</div></td>
-      <td class="conm" colspan="2">${DAWOO_CO.name}</td>
+      <td class="conm" colspan="2">${companyInfo().name}</td>
     </tr>
     <tr>
       <td class="recip" rowspan="6"><div class="rn">${e(g.targetName)}</div><div class="rt">${route}</div></td>
-      <td class="ck">주 소</td><td class="cv">${DAWOO_CO.addr}<br><span class="tel">${DAWOO_CO.tel}</span></td>
+      <td class="ck">주 소</td><td class="cv">${companyInfo().addr}<br><span class="tel">${companyInfo().tel}</span></td>
     </tr>
-    <tr><td class="ck">업 태</td><td class="cv">${DAWOO_CO.biztype}</td></tr>
-    <tr><td class="ck">대표이사</td><td class="cv">${DAWOO_CO.ceo}</td></tr>
-    <tr><td class="ck">등록번호</td><td class="cv">${DAWOO_CO.bizno}</td></tr>
-    <tr><td class="ck">E-mail</td><td class="cv">${DAWOO_CO.email}</td></tr>
-    <tr><td class="web" colspan="2">${DAWOO_CO.web}</td></tr>
+    <tr><td class="ck">업 태</td><td class="cv">${companyInfo().biztype}</td></tr>
+    <tr><td class="ck">대표이사</td><td class="cv">${companyInfo().ceo}</td></tr>
+    <tr><td class="ck">등록번호</td><td class="cv">${companyInfo().bizno}</td></tr>
+    <tr><td class="ck">E-mail</td><td class="cv">${companyInfo().email}</td></tr>
+    <tr><td class="web" colspan="2">${companyInfo().web}</td></tr>
   </table>
   <table class="items">
     <colgroup><col style="width:6%"><col style="width:30%"><col style="width:8%"><col style="width:16%"><col style="width:12%"><col style="width:10%"><col style="width:18%"></colgroup>
@@ -4774,17 +4809,17 @@ function printBasinSlip(id) {
     </tr>
     <tr>
       <td class="issue"><div class="ik">발 행 일 자</div><div class="iv">${e(date)}</div></td>
-      <td class="conm" colspan="2">${DAWOO_CO.name}</td>
+      <td class="conm" colspan="2">${companyInfo().name}</td>
     </tr>
     <tr>
       <td class="recip" rowspan="6"><div class="rn">${e(b.vendor)}</div><div class="rt">${route}</div></td>
-      <td class="ck">주 소</td><td class="cv">${DAWOO_CO.addr}<br><span class="tel">${DAWOO_CO.tel}</span></td>
+      <td class="ck">주 소</td><td class="cv">${companyInfo().addr}<br><span class="tel">${companyInfo().tel}</span></td>
     </tr>
-    <tr><td class="ck">업 태</td><td class="cv">${DAWOO_CO.biztype}</td></tr>
-    <tr><td class="ck">대표이사</td><td class="cv">${DAWOO_CO.ceo}</td></tr>
-    <tr><td class="ck">등록번호</td><td class="cv">${DAWOO_CO.bizno}</td></tr>
-    <tr><td class="ck">E-mail</td><td class="cv">${DAWOO_CO.email}</td></tr>
-    <tr><td class="web" colspan="2">${DAWOO_CO.web}</td></tr>
+    <tr><td class="ck">업 태</td><td class="cv">${companyInfo().biztype}</td></tr>
+    <tr><td class="ck">대표이사</td><td class="cv">${companyInfo().ceo}</td></tr>
+    <tr><td class="ck">등록번호</td><td class="cv">${companyInfo().bizno}</td></tr>
+    <tr><td class="ck">E-mail</td><td class="cv">${companyInfo().email}</td></tr>
+    <tr><td class="web" colspan="2">${companyInfo().web}</td></tr>
   </table>
   <table class="items">
     <colgroup><col style="width:6%"><col style="width:32%"><col style="width:10%"><col style="width:22%"><col style="width:12%"><col style="width:18%"></colgroup>
@@ -5409,7 +5444,7 @@ function chulgoPrint(id) {
   @media print{body{padding:8px 10px}}
 </style></head><body>
   <h1>${title}</h1>
-  <div class="co">${e(DAWOO_CO.name)} · ${e(DAWOO_CO.tel)}</div>
+  <div class="co">${e(companyInfo().name)} · ${e(companyInfo().tel)}</div>
   <table class="info">
     <tr><td class="k">문서번호</td><td>${e(r.docNo)}</td><td class="k">발행일자</td><td>${e(todayStr())}</td></tr>
     <tr><td class="k">거래처</td><td>${e(r.client)}</td><td class="k">${isIn ? '입고' : '출고'}예정일</td><td>${e(r.schedDate) || '-'}</td></tr>
@@ -5640,7 +5675,7 @@ table{border-collapse:collapse;width:100%}
 @media print{body{padding:10px 12px}}</style></head><body>
   <div class="docno">No. ${e(g.docNos[0] || '')}${g.docNos.length > 1 ? ' 외 ' + (g.docNos.length - 1) : ''}</div>
   <h1>출 고 요 청 서</h1>
-  <div class="sub">${DAWOO_CO.name}　|　Material Dispatch Order</div>
+  <div class="sub">${companyInfo().name}　|　Material Dispatch Order</div>
   ${banner ? `<div class="banner">${e(banner)}</div>` : ''}
   <table class="info">
     <tr><td class="k">문서번호</td><td>${e(g.docNos.join(', '))}</td><td class="k">발행일자</td><td>${kdate(todayStr())}</td></tr>
@@ -5658,7 +5693,7 @@ table{border-collapse:collapse;width:100%}
   <table class="sign">
     <tr><td class="k">요청</td><td class="v">${e(g.dispatchedBy) || ''}</td><td class="k">출고담당<br>(확인자)</td><td class="v">${e(g.handler) || ''}</td><td class="k">차량인수</td><td class="v"></td></tr>
   </table>
-  <div class="co">${DAWOO_CO.name}</div>
+  <div class="co">${companyInfo().name}</div>
 </body></html>`;
   const w = window.open('', '_blank');
   if (!w) { toast('팝업이 차단되었습니다. 팝업 허용 후 다시'); return; }
