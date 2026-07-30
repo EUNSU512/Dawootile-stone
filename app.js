@@ -3420,28 +3420,54 @@ function addQRow() { const c = el('q-rows'); if (c) { c.insertAdjacentHTML('befo
 function openQuoteInline(id, copy) { filters.quoteEdit = id || 'new'; filters.quoteCopy = !!copy; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
 function quoteCancel() { filters.quoteEdit = ''; filters.quoteCopy = false; renderQuote(); }
 /* 부대비용·가공 프리셋 (견적 폼에 항상 표시, 수량 입력한 것만 견적서 반영) */
-const QUOTE_EXTRAS = ['재단비 12T', '재단비 6T', '사선 재단', '고스라', '뒷도메', '배면 연마', '인덕션 타공', '싱크볼 타공', '콘센트 타공', '수전 타공', '사각 타공', '운송비 (창고-공장)', '운송비 (공장-현장)', '실측비', '시공비'];
+const QUOTE_EXTRAS = [
+  { name: '재단비 12T', unit: 'M' }, { name: '재단비 6T', unit: 'M' },
+  { name: '북매치 재단', unit: 'M' }, { name: '워터젯', unit: 'M' },
+  { name: '사선 재단', unit: 'EA' }, { name: '고스라', unit: 'M' },
+  { name: '뒷도메', unit: 'M' }, { name: '배면 연마', unit: 'M' },
+  { name: '모서리 가공', unit: 'EA' },
+  { name: '인덕션 타공', unit: 'EA' }, { name: '싱크볼 타공', unit: 'EA' },
+  { name: '콘센트 타공', unit: 'EA' }, { name: '수전 타공', unit: 'EA' }, { name: '사각 타공', unit: 'EA' },
+  { name: '운송비 (창고-공장)', unit: '회' }, { name: '운송비 (공장-현장)', unit: '회' },
+  { name: '실측비', unit: '회' }, { name: '시공비', unit: '식' }
+];
 function extraPrices() { const m = (state.appmeta || []).find(x => x.key === 'extraPrices'); return (m && m.prices) || {}; }
 async function saveExtraPrices(prices) { const m = (state.appmeta || []).find(x => x.key === 'extraPrices'); if (m) await Store.update('appmeta', m.id, { prices }); else await Store.add('appmeta', { key: 'extraPrices', prices }); }
-function extraItemsList() { const m = (state.appmeta || []).find(x => x.key === 'extraItems'); const arr = (m && Array.isArray(m.items)) ? m.items : null; return (arr && arr.length) ? arr : QUOTE_EXTRAS.slice(); }
+function extraItemsList() {
+  const dmap = {}; QUOTE_EXTRAS.forEach(x => dmap[x.name] = x.unit);
+  const m = (state.appmeta || []).find(x => x.key === 'extraItems'); const arr = (m && Array.isArray(m.items)) ? m.items : null;
+  if (!arr || !arr.length) return QUOTE_EXTRAS.map(x => ({ name: x.name, unit: x.unit }));
+  return arr.map(x => { const nm = (typeof x === 'string') ? x : (x.name || ''); const un = (typeof x === 'object' && x.unit) ? x.unit : (dmap[nm] || ''); return { name: nm, unit: un }; });
+}
 async function saveExtraItems(items) { const m = (state.appmeta || []).find(x => x.key === 'extraItems'); if (m) await Store.update('appmeta', m.id, { items }); else await Store.add('appmeta', { key: 'extraItems', items }); }
 async function saveExtraPrice(name, val) { const p = Object.assign({}, extraPrices()); const v = _numv(val); if (v > 0) p[name] = v; else delete p[name]; await saveExtraPrices(p); toast('단가 저장됨'); }
-async function addExtraItem() { const inpEl = el('qe-new'); const nm = (inpEl && inpEl.value || '').trim(); if (!nm) return; const list = extraItemsList().slice(); if (list.some(x => _normName(x) === _normName(nm))) { toast('이미 있는 항목입니다'); return; } list.push(nm); await saveExtraItems(list); if (inpEl) inpEl.value = ''; toast('항목 추가됨'); setTimeout(() => { if (filters.quoteSettings) renderQuoteSettings(); }, 300); }
-async function delExtraItem(name) { if (!confirm(name + ' 항목을 삭제할까요?')) return; const list = extraItemsList().filter(x => _normName(x) !== _normName(name)); await saveExtraItems(list); const p = Object.assign({}, extraPrices()); delete p[name]; await saveExtraPrices(p); toast('삭제됨'); setTimeout(() => { if (filters.quoteSettings) renderQuoteSettings(); }, 300); }
+async function setExtraUnit(name, unit) { const list = extraItemsList().map(x => x.name === name ? { name: x.name, unit: (unit || '').trim() } : x); await saveExtraItems(list); }
+async function addExtraItem() { const nmEl = el('qe-new'); const unEl = el('qe-unit'); const nm = (nmEl && nmEl.value || '').trim(); const un = (unEl && unEl.value || '').trim(); if (!nm) return; const list = extraItemsList().slice(); if (list.some(x => _normName(x.name) === _normName(nm))) { toast('이미 있는 항목입니다'); return; } list.push({ name: nm, unit: un }); await saveExtraItems(list); if (nmEl) nmEl.value = ''; if (unEl) unEl.value = ''; toast('항목 추가됨'); setTimeout(() => { if (filters.quoteSettings) renderQuoteSettings(); }, 300); }
+async function delExtraItem(name) { if (!confirm(name + ' 항목을 삭제할까요?')) return; const list = extraItemsList().filter(x => _normName(x.name) !== _normName(name)); await saveExtraItems(list); const p = Object.assign({}, extraPrices()); delete p[name]; await saveExtraPrices(p); toast('삭제됨'); setTimeout(() => { if (filters.quoteSettings) renderQuoteSettings(); }, 300); }
+async function moveExtraItem(name, dir) { const list = extraItemsList().slice(); const i = list.findIndex(x => _normName(x.name) === _normName(name)); if (i < 0) return; const j = i + dir; if (j < 0 || j >= list.length) return; const t = list[i]; list[i] = list[j]; list[j] = t; await saveExtraItems(list); setTimeout(() => { if (filters.quoteSettings) renderQuoteSettings(); }, 250); }
 function _qsExtraRowsHtml() {
-  const prices = extraPrices(); const inp = 'width:120px;font-size:13px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px;text-align:right';
-  return extraItemsList().map(nm => { const e = esc(nm).replace(/'/g, "\\'");
-    return `<div class="mem" style="display:flex;align-items:center;gap:8px"><div class="info" style="flex:1;min-width:0"><div class="nm">${esc(nm)}</div></div>
-      <input class="qe-price" inputmode="numeric" placeholder="단가" value="${esc(prices[nm] || '')}" onchange="saveExtraPrice('${e}',this.value)" style="${inp}">
+  const prices = extraPrices(); const pin = 'width:100px;font-size:13px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px;text-align:right'; const uin = 'width:52px;font-size:13px;padding:7px 6px;border:1.5px solid var(--bd2);border-radius:8px;text-align:center';
+  const list = extraItemsList();
+  return list.map((it, idx) => { const nm = it.name; const e = esc(nm).replace(/'/g, "\\'");
+    return `<div class="mem" style="display:flex;align-items:center;gap:6px">
+      <span style="display:flex;flex-direction:column;gap:1px">
+        <i class="ti ti-chevron-up" onclick="moveExtraItem('${e}',-1)" title="위로" style="cursor:${idx === 0 ? 'default' : 'pointer'};color:${idx === 0 ? 'var(--bd2)' : 'var(--t2)'};font-size:14px"></i>
+        <i class="ti ti-chevron-down" onclick="moveExtraItem('${e}',1)" title="아래로" style="cursor:${idx === list.length - 1 ? 'default' : 'pointer'};color:${idx === list.length - 1 ? 'var(--bd2)' : 'var(--t2)'};font-size:14px"></i>
+      </span>
+      <div class="info" style="flex:1;min-width:0"><div class="nm">${esc(nm)}</div></div>
+      <input class="qe-unit" inputmode="text" placeholder="단위" value="${esc(it.unit || '')}" onchange="setExtraUnit('${e}',this.value)" style="${uin}">
+      <input class="qe-price" inputmode="numeric" placeholder="단가" value="${esc(prices[nm] || '')}" onchange="saveExtraPrice('${e}',this.value)" style="${pin}">
       <i class="ti ti-trash" onclick="delExtraItem('${e}')" title="항목 삭제" style="color:#c0341d;cursor:pointer;font-size:16px"></i></div>`; }).join('');
 }
-function qxRowHtml(name, d) {
+function qxRowHtml(item, d) {
+  const name = item.name; const unit = item.unit || '';
   const inp = 'font-size:14px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px';
   const price = (d && d.price != null && d.price !== '') ? d.price : (extraPrices()[name] || '');
   const qty = (d && d.qty != null) ? d.qty : '';
-  return `<div class="qx-row" data-name="${esc(name)}" style="display:flex;gap:6px;align-items:center;margin-bottom:5px">
+  return `<div class="qx-row" data-name="${esc(name)}" data-unit="${esc(unit)}" style="display:flex;gap:6px;align-items:center;margin-bottom:5px">
     <div style="flex:2.2;min-width:0;font-size:13.5px">${esc(name)}</div>
     <input class="qx-qty" inputmode="numeric" placeholder="0" value="${esc(qty)}" oninput="quoteRecalc()" style="flex:1;min-width:42px;${inp};text-align:right">
+    <div style="width:24px;font-size:11.5px;color:var(--t3);text-align:center">${esc(unit)}</div>
     <input class="qx-price" inputmode="numeric" placeholder="단가" value="${esc(price)}" oninput="quoteRecalc()" style="flex:1.3;min-width:54px;${inp};text-align:right">
     <div class="qx-amt" style="flex:1.3;min-width:58px;text-align:right;font-weight:700;font-size:14px">0</div>
   </div>`;
@@ -3451,7 +3477,7 @@ function renderQuoteForm() {
   const copy = !!filters.quoteCopy;
   const q = id ? (state.quotes || []).find(x => x.id === id) : null; const v = q || {};
   _qN = 0;
-  const extraSet = new Set(extraItemsList()); const savedExtra = {};
+  const extraSet = new Set(extraItemsList().map(x => x.name)); const savedExtra = {};
   (v.items || []).forEach(it => { if (extraSet.has(it.name)) savedExtra[it.name] = { qty: it.qty, price: it.price }; });
   const matItems = (v.items || []).filter(it => !extraSet.has(it.name));
   const rows = (matItems.length ? matItems : [{}]).map(qRowHtml).join('');
@@ -3478,8 +3504,8 @@ function renderQuoteForm() {
         </div>
         <div class="fld full" style="margin-bottom:10px"><label>부대비용 · 가공 <span style="color:var(--t3);font-weight:500">(수량 입력한 항목만 견적서에 표시됩니다)</span></label>
           <div style="border:1px solid var(--bd2);border-radius:10px;padding:9px 11px">
-            <div style="display:flex;gap:6px;font-size:11px;color:var(--t3);margin-bottom:5px;font-weight:600"><div style="flex:2.2">항목</div><div style="flex:1;text-align:right">수량</div><div style="flex:1.3;text-align:right">단가</div><div style="flex:1.3;text-align:right">금액</div></div>
-            ${extraItemsList().map(nm => qxRowHtml(nm, savedExtra[nm])).join('')}
+            <div style="display:flex;gap:6px;font-size:11px;color:var(--t3);margin-bottom:5px;font-weight:600"><div style="flex:2.2">항목</div><div style="flex:1;text-align:right">수량</div><div style="width:24px;text-align:center">단위</div><div style="flex:1.3;text-align:right">단가</div><div style="flex:1.3;text-align:right">금액</div></div>
+            ${extraItemsList().map(it => qxRowHtml(it, savedExtra[it.name])).join('')}
           </div>
         </div>
         <div class="fld full" style="margin-bottom:10px"><label>비고 <span style="color:var(--t3);font-weight:500">(기본 양식은 견적 설정에서 관리)</span></label><textarea id="q-memo" lang="ko" placeholder="결제조건·납기 등" style="min-height:64px">${esc(editing ? (v.memo || '') : (v.memo || quoteMemoTemplate()))}</textarea></div>
@@ -3501,8 +3527,8 @@ function collectQItems() {
     if (name && qty > 0) items.push({ name, spec, unit: '', qty, price, amt: Math.round(qty * price) });
   });
   document.querySelectorAll('.qx-row').forEach(r => {
-    const name = r.getAttribute('data-name'); const qty = _numv(r.querySelector('.qx-qty').value); const price = _numv(r.querySelector('.qx-price').value);
-    if (name && qty > 0) items.push({ name, spec: '', unit: '', qty, price, amt: Math.round(qty * price), extra: true });
+    const name = r.getAttribute('data-name'); const unit = r.getAttribute('data-unit') || ''; const qty = _numv(r.querySelector('.qx-qty').value); const price = _numv(r.querySelector('.qx-price').value);
+    if (name && qty > 0) items.push({ name, spec: '', unit, qty, price, amt: Math.round(qty * price), extra: true });
   });
   return items;
 }
@@ -3813,7 +3839,7 @@ function printQuote(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
   const e = s => esc(s == null ? '' : String(s));
   const items = q.items || []; const MIN = Math.max(8, items.length);
-  let rows = items.map((it, i) => `<tr><td class="c">${i + 1}</td><td class="l">${e(it.name)}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`).join('');
+  let rows = items.map((it, i) => `<tr><td class="c">${i + 1}</td><td class="l">${e(it.name)}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}${it.unit ? ' ' + e(it.unit) : ''}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`).join('');
   for (let i = items.length; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
   const co = DAWOO_CO;
   const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>견적서 ${e(q.client)} ${e(q.docNo)}</title>
@@ -3858,7 +3884,7 @@ function downloadQuoteXls(id) {
   const TH = (t, w) => `<th style="background:#0F6E56;color:#fff;font-weight:bold;border:0.5pt solid #0a4f3e;padding:6px 9px;text-align:center" ${w ? 'width="' + w + '"' : ''}>${t}</th>`;
   const TD = (t, st) => `<td style="border:0.5pt solid #cfd8d4;padding:5px 9px;${st || ''}">${t}</td>`;
   const R = 'text-align:right;mso-number-format:\\#\\,\\#\\#0';
-  const body = (q.items || []).map((it, i) => `<tr>${TD(i + 1, 'text-align:center')}${TD('<b>' + esc(it.name) + '</b>')}${TD(esc(it.spec || ''))}${TD(it.qty, R)}${TD(it.price, R)}${TD(it.amt, R)}</tr>`).join('');
+  const body = (q.items || []).map((it, i) => `<tr>${TD(i + 1, 'text-align:center')}${TD('<b>' + esc(it.name) + '</b>')}${TD(esc(it.spec || ''))}${TD(esc(it.qty) + (it.unit ? ' ' + esc(it.unit) : ''), 'text-align:right')}${TD(it.price, R)}${TD(it.amt, R)}</tr>`).join('');
   let html = `<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body>`;
   html += `<table><tr><td colspan="6" style="font-size:15pt;font-weight:bold;color:#0F6E56;padding:6px 4px">견적서 · ${esc(q.client)}</td></tr>`;
   html += `<tr><td colspan="6" style="font-size:10pt;color:#555;padding:2px 4px">견적번호 ${esc(q.docNo)} · 견적일 ${esc(q.date)} · 유효기간 ${esc(q.valid || '-')}</td></tr></table>`;
