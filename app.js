@@ -127,6 +127,25 @@ function isAdmin() { return me && me.role === 'admin'; }
 function isCustomerRole() { return me && me.role === 'customer'; }  // 고객(거래처) — 재고 조회 전용
 function isCrewRole() { return me && me.role === 'crew'; }  // 시공팀 — 자기 시공 스케줄만
 function isRestrictedRole() { return isCustomerRole() || isCrewRole(); }
+/* ===== 메뉴 접근 권한 (직원별) ===== */
+const TAB_LABELS = { home: '홈', sites: '현장', stock: '재고·입고', ship: '출고', chulgo: '출고관리', hold: '홀딩', basin: '세면대 발주', quote: '견적서', clients: '거래처', settle: '정산', settings: '설정' };
+const ALL_TABS = ['home', 'sites', 'stock', 'ship', 'chulgo', 'hold', 'basin', 'quote', 'clients', 'settle', 'settings'];
+const ALWAYS_TABS = ['home', 'settings'];
+const RESTRICTED_TABS = ['settle'];
+function liveMe() { if (!me) return null; return (state.members || []).find(x => (x.email || '').toLowerCase() === (me.email || '').toLowerCase()) || me; }
+function allowedTabs() {
+  if (isAdmin()) return ALL_TABS.slice();
+  const lm = liveMe() || {};
+  const set = Array.isArray(lm.menus) ? lm.menus.slice() : ALL_TABS.filter(t => !RESTRICTED_TABS.includes(t));
+  return ALL_TABS.filter(t => ALWAYS_TABS.includes(t) || set.includes(t));
+}
+function tabAllowed(t) { return allowedTabs().includes(t); }
+function applyMenuPerms() {
+  if (isRestrictedRole()) return;
+  const allow = allowedTabs();
+  document.querySelectorAll('.nav-i[data-tab],.side-i[data-tab],.drawer-i[data-tab]').forEach(b => { b.style.display = allow.includes(b.dataset.tab) ? '' : 'none'; });
+}
+
 /* 공장명 통일 규칙: 포함하면 대표명으로 정규화 */
 const FACTORY_RULES = [['토마스', '동양'], ['동호', '동호엠엔지'], ['거봉', '거봉석재'], ['영진', '영진석재']];
 function normFactory(name) { const n = String(name == null ? '' : name).trim(); if (!n) return n; for (const r of FACTORY_RULES) { if (n.includes(r[0])) return r[1]; } return n; }
@@ -264,7 +283,7 @@ async function afterAuth(user) {
   el('me-nm').textContent = me.name;
   document.body.classList.toggle('cust-mode', isRestrictedRole());  // 고객·시공팀: 전용 UI
   if (isRestrictedRole()) { go('stock'); }
-  else { ensureStaffRoles(); render(); refreshPushToken(); }
+  else { ensureStaffRoles(); render(); applyMenuPerms(); refreshPushToken(); }
 }
 /* 직원/관리자 권한 문서(roles/{이메일}) 자동 생성·동기화 — '승인된 직원만' 보안규칙용.
    관리자가 로그인하면 전 직원 roles 문서를 한 번에 생성(마이그레이션). */
@@ -720,6 +739,7 @@ function goD(t) { closeDrawer(); go(t); }
 
 function go(t) {
   if (isRestrictedRole()) t = 'stock';   // 고객·시공팀은 전용 화면만
+  else if (!tabAllowed(t)) t = 'home';   // 접근 권한 없는 메뉴 차단
   if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; filters.costEdit = ''; }   // 견적 화면 상태 초기화
   if (t !== 'clients') filters.clientDetail = '';
   tab = t;
@@ -729,6 +749,7 @@ function go(t) {
   document.querySelectorAll('.side-i[data-tab]').forEach(n => n.classList.toggle('active', n.dataset.tab === t));
   el('pg-' + t).classList.add('active');
   el('fab').style.display = (!isRestrictedRole() && (t === 'sites' || t === 'stock' || t === 'hold' || t === 'basin')) ? 'flex' : 'none';
+  applyMenuPerms();
   render();
   window.scrollTo(0, 0);
 }
@@ -4416,9 +4437,35 @@ function downloadExpenses() {
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '회사지출'); XLSX.writeFile(wb, '회사지출_' + ym + '.xlsx');
   toast('회사지출 엑셀 다운로드');
 }
+/* ===== 고정 지출 항목 (매월 반복) ===== */
+function fixedExpenses() { const m = (state.appmeta || []).find(x => x.key === 'fixedExpenses'); return (m && Array.isArray(m.items)) ? m.items : []; }
+async function saveFixedExpenses(items) { const m = (state.appmeta || []).find(x => x.key === 'fixedExpenses'); if (m) await Store.update('appmeta', m.id, { items }); else await Store.add('appmeta', { key: 'fixedExpenses', items }); }
+async function addFixedItem() {
+  if (!isAdmin()) { toast('관리자만'); return; }
+  const cat = el('fx-cat').value, name = (el('fx-name').value || '').trim(), amt = Math.round(+el('fx-amt').value || 0);
+  if (!name) { toast('항목명을 입력하세요'); return; }
+  const items = fixedExpenses().slice(); items.push({ cat, name, amount: amt }); await saveFixedExpenses(items); toast('고정항목 추가됨'); renderSettle();
+}
+async function delFixedItem(idx) { if (!isAdmin()) { toast('관리자만'); return; } const items = fixedExpenses().slice(); if (!confirm((items[idx] ? items[idx].name : '') + ' 고정항목을 삭제할까요?')) return; items.splice(idx, 1); await saveFixedExpenses(items); toast('삭제됨'); renderSettle(); }
+async function saveFixedAmt(idx, val) { const items = fixedExpenses().slice(); if (items[idx]) { items[idx].amount = Math.round(+val || 0); await saveFixedExpenses(items); } }
+async function applyFixedToMonth() {
+  if (!isAdmin()) { toast('관리자만'); return; }
+  const ym = filters.settleMonth || todayStr().slice(0, 7);
+  const items = fixedExpenses();
+  if (!items.length) { toast('고정 지출 항목을 먼저 등록하세요'); return; }
+  const existing = (state.expenses || []).filter(e => (e.date || '').startsWith(ym) && e.fixed);
+  let added = 0;
+  for (const it of items) {
+    if (existing.some(e => e.name === it.name && e.cat === it.cat)) continue;
+    await Store.add('expenses', { date: ym + '-01', cat: it.cat, name: it.name, amount: +it.amount || 0, status: '정산중', note: '고정지출', fixed: true, createdAt: Date.now() });
+    added++;
+  }
+  toast(added > 0 ? (added + '개 고정지출 반영됨') : '이번 달은 이미 모두 반영됨'); renderSettle();
+}
+
 function renderSettle() {
   const root = el('pg-settle'); if (!root) return;
-  if (!isAdmin()) { root.innerHTML = `<div class="ph"><div><h2><i class="ti ti-report-money"></i>정산</h2></div></div><div class="empty"><i class="ti ti-lock"></i>원가·마진 정산은 관리자만 열람할 수 있습니다.</div>`; return; }
+  if (!tabAllowed('settle')) { root.innerHTML = `<div class="ph"><div><h2><i class="ti ti-report-money"></i>정산</h2></div></div><div class="empty"><i class="ti ti-lock"></i>정산·원가·마진은 관리자 또는 접근 권한이 있는 직원만 열람할 수 있습니다.</div>`; return; }
   const ym = filters.settleMonth || todayStr().slice(0, 7);
   const WD = ['일', '월', '화', '수', '목', '금', '토'];
   const monthQuotes = (state.quotes || []).filter(q => qDate(q).startsWith(ym));
@@ -4486,7 +4533,26 @@ function renderSettle() {
     <div data-keepscroll id="settle-exp-list" style="max-height:38vh;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">
       <thead><tr style="border-bottom:1.5px solid var(--bd);color:var(--t2);font-size:11px"><th style="padding:6px 8px;text-align:left">일자</th><th style="padding:6px 8px;text-align:left">분류</th><th style="padding:6px 8px;text-align:left">항목</th><th style="padding:6px 8px;text-align:right">금액</th><th style="padding:6px 8px;text-align:center">상태</th><th style="padding:6px 8px;text-align:center"></th></tr></thead>
       <tbody>${expList}</tbody></table></div></div>`;
-  root.innerHTML = `<div class="ph"><div><h2><i class="ti ti-report-money"></i>정산</h2><p>원가 원장 · 회사지출 · 영업이익(마진)</p></div></div>${monthBar}${pnl}${expCatBar}${costLedger}${expForm}`;
+  const _fx = fixedExpenses();
+  const _fxTotal = _fx.reduce((a, b) => a + (+b.amount || 0), 0);
+  const _fxApplied = (state.expenses || []).filter(e => (e.date || '').startsWith(ym) && e.fixed).length;
+  const fxCard = `<div class="card" style="margin-bottom:12px;padding:13px 14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px"><div style="font-size:11.5px;color:var(--t3);font-weight:700"><i class="ti ti-repeat"></i> 고정 지출 항목 (매월 반복)</div>
+      <button class="btn btn-pri btn-sm" onclick="applyFixedToMonth()"><i class="ti ti-calendar-plus"></i>이번 달 반영</button></div>
+    <div style="font-size:11px;color:var(--t3);margin-bottom:9px">이번 달 반영: <b style="color:${_fxApplied >= _fx.length && _fx.length ? '#0f766e' : '#b45309'}">${_fxApplied}/${_fx.length}건</b> · 고정 합계 <b>${fmtWon(_fxTotal)}</b>원 &nbsp;— 버튼을 누르면 이번 달 지출에 자동으로 깔립니다(중복 방지). 금액은 반영 후 개별 수정 가능.</div>
+    <div style="display:grid;grid-template-columns:1fr 1.7fr 1.1fr auto;gap:6px;margin-bottom:8px">
+      <select id="fx-cat" class="inp">${EXP_CATS.map(c => `<option value="${c}">${c}</option>`).join('')}</select>
+      <input id="fx-name" class="inp" placeholder="항목 (예: 창고임대, 임창걸 지사장 급여)">
+      <input id="fx-amt" type="number" class="inp" placeholder="월 금액">
+      <button class="btn btn-sm" onclick="addFixedItem()"><i class="ti ti-plus"></i>추가</button>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:5px">${_fx.length ? _fx.map((it, i) => `<div style="display:flex;align-items:center;gap:8px;background:var(--soft);border-radius:8px;padding:6px 9px">
+      <span style="font-size:11px;color:var(--t3);min-width:56px">${esc(it.cat || '')}</span>
+      <span style="flex:1;font-size:13px;font-weight:600">${esc(it.name || '')}</span>
+      <input type="number" class="inp" style="width:120px;text-align:right" value="${+it.amount || 0}" onchange="saveFixedAmt(${i},this.value)">
+      <button class="btn btn-sm" style="padding:2px 6px" onclick="delFixedItem(${i})"><i class="ti ti-trash"></i></button></div>`).join('') : `<div style="font-size:12px;color:var(--t3);text-align:center;padding:10px">등록된 고정 지출 항목이 없습니다. 위에서 매월 반복되는 항목(급여·임대·공과금 등)을 추가하세요.</div>`}</div></div>`;
+
+  root.innerHTML = `<div class="ph"><div><h2><i class="ti ti-report-money"></i>정산</h2><p>원가 원장 · 회사지출 · 영업이익(마진)</p></div></div>${monthBar}${pnl}${expCatBar}${costLedger}${fxCard}${expForm}`;
 }
 
 function renderQuote() {
@@ -6790,12 +6856,16 @@ function renderSettings() {
 function openMemberForm(id) {
   if (!isAdmin()) return;
   const m = id ? state.members.find(x => x.id === id) : null; const v = m || { role: 'staff', email: '' };
+  const curMenus = Array.isArray(v.menus) ? v.menus : ALL_TABS.filter(t => !RESTRICTED_TABS.includes(t));
   openModal(`
     <div class="sheet-h"><h3><i class="ti ti-user-plus"></i>${m ? '직원 수정' : '직원 추가'}</h3><button class="x" onclick="closeModal()">×</button></div>
     <div class="frm">
       <div class="fld full"><label>이름<span class="req">*</span></label><input id="m-name" value="${esc(v.name || '')}" placeholder="이름"></div>
       <div class="fld"><label>권한</label><select id="m-role"><option value="staff" ${v.role === 'staff' ? 'selected' : ''}>직원</option><option value="admin" ${v.role === 'admin' ? 'selected' : ''}>관리자</option><option value="customer" ${v.role === 'customer' ? 'selected' : ''}>고객(거래처) · 재고조회만</option><option value="crew" ${v.role === 'crew' ? 'selected' : ''}>시공팀 · 시공 스케줄만</option></select></div>
       <div class="fld full"><label>로그인 이메일<span class="req">*</span></label><input id="m-email" type="email" value="${esc(v.email || '')}" autocapitalize="none" spellcheck="false" placeholder="예) hong@dawoo.com"></div>
+      <div class="fld full"><label><i class="ti ti-lock-access"></i> 메뉴 접근 권한 <span style="color:var(--t3);font-weight:500">— 직원 권한일 때 적용 (관리자는 전체 접근)</span></label>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">${ALL_TABS.filter(t => !ALWAYS_TABS.includes(t)).map(t => `<label style="display:flex;align-items:center;gap:5px;font-size:13px;font-weight:500;background:var(--soft);padding:8px 9px;border-radius:8px;cursor:pointer"><input type="checkbox" class="m-menu" value="${t}" ${curMenus.includes(t) ? 'checked' : ''}>${TAB_LABELS[t]}${RESTRICTED_TABS.includes(t) ? ' 🔒' : ''}</label>`).join('')}</div></div>
+
     </div>
     ${m && v.email ? `<div class="fld full" style="margin-bottom:12px"><label><i class="ti ti-key" style="font-size:13px;color:var(--blue)"></i> 비밀번호 변경 <span style="color:var(--t3);font-weight:500">— 메일 없이 바로 적용(가메일 계정 가능)</span></label>
       <div style="display:flex;gap:8px">
@@ -6837,7 +6907,9 @@ async function submitMember(id) {
   if (!name || !email) { toast('이름과 로그인 이메일을 입력하세요'); return; }
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { toast('이메일 형식을 확인하세요'); return; }
   if (state.members.some(m => m.id !== id && (m.email || '').toLowerCase() === email)) { toast('이미 등록된 이메일입니다'); return; }
+  const _menus = Array.from(document.querySelectorAll('.m-menu')).filter(c => c.checked).map(c => c.value);
   const obj = { name, role: el('m-role').value, email };
+  if (obj.role === 'staff') obj.menus = _menus;
   const prevEmail = id ? ((state.members.find(m => m.id === id) || {}).email || '').toLowerCase() : '';
   if (id) await Store.update('members', id, obj); else await Store.add('members', obj);
   await setRoleDoc(email, obj.role, name, prevEmail);
