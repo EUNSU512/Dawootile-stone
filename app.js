@@ -814,6 +814,7 @@ function renderClients() {
         <div style="display:flex;align-items:center;gap:8px;flex:none" onclick="event.stopPropagation()">
           <select onchange="setClientTypeSetting('${c.id}',this.value)" style="font-size:12.5px;padding:5px 7px;border:1.5px solid var(--bd2);border-radius:8px">${CTYPES.map(t => `<option ${((c.ctype) || '소비자') === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
           <div style="text-align:right;min-width:74px"><div style="font-size:14px;font-weight:800;color:${st.unpaid > 0 ? 'var(--red-t)' : 'var(--t3)'}">${fmtWon(st.unpaid)}</div><div style="font-size:9.5px;color:var(--t3)">미수금</div></div>
+          ${isAdmin() ? `<i class="ti ti-trash" onclick="delClientC('${c.id}')" title="거래처 삭제" style="color:#c0341d;cursor:pointer;font-size:16px"></i>` : ''}
           <i class="ti ti-chevron-right" style="color:var(--t3)"></i>
         </div>
       </div></div>`;
