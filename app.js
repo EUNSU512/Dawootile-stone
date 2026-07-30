@@ -742,7 +742,8 @@ function goD(t) { closeDrawer(); go(t); }
 function go(t) {
   if (isRestrictedRole()) t = 'stock';   // 고객·시공팀은 전용 화면만
   else if (!tabAllowed(t)) t = 'home';   // 접근 권한 없는 메뉴 차단
-  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; filters.costEdit = ''; }   // 견적 화면 상태 초기화
+  filters.costEdit = '';   // 원가 입력 폼은 메뉴 이동 시 항상 닫기
+  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; }   // 견적 화면 상태 초기화
   if (t !== 'clients') filters.clientDetail = '';
   tab = t;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -3831,6 +3832,25 @@ function quoteToShip(id) {
   openShipForm({ targetName: q.client, items: (q.items || []).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' })) });
   toast('견적 품목을 출고 등록 폼에 불러왔습니다 · 확인 후 등록하세요');
 }
+function quoteConfirmOrder(id) {
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
+  try { Store.update('quotes', id, { ordered: true, orderedAt: Date.now() }); } catch (e) { }
+  toast('확정 주문 · 진행중 발주로 전환됨'); try { renderQuote(); } catch (e) { }
+}
+function quoteRegister(id) {
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
+  const items = (q.items || []).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' }));
+  const hasBasin = (q.items || []).some(it => (it.name || '').includes('세면대'));
+  if (hasBasin) {
+    let bi = (q.items || []).filter(it => (it.name || '').includes('세면대')).map(it => ({ stone: it.name, spec: it.spec || '', qty: it.qty || '', quoteNo: q.docNo || '' }));
+    if (!bi.length) bi = (q.items || []).map(it => ({ stone: it.name, spec: it.spec || '', qty: it.qty || '' }));
+    go('basin'); setTimeout(() => { try { openBasinForm(null, { vendor: q.client, items: bi }); } catch (e) { } }, 90);
+    toast('세면대 발주로 불러왔습니다');
+  } else if ((q.siteAddr || '').trim()) {
+    go('sites'); setTimeout(() => { try { openSiteForm(null, { name: q.client, address: q.siteAddr }); } catch (e) { } }, 90);
+    toast('현장 등록으로 이동');
+  } else { openShipForm({ targetName: q.client, items: items }); toast('출고 등록으로 불러왔습니다 · 확인 후 등록'); }
+}
 function quoteToOrder(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
   try { Store.update('quotes', id, { ordered: true, orderedAt: Date.now(), shipped: true, shipStartedAt: q.shipStartedAt || Date.now() }); } catch (e) { }
@@ -4300,6 +4320,10 @@ function qDate(q) { return q.date || (q.createdAt ? new Date(+q.createdAt).toISO
 function quoteMonthNav(delta) { const cur = filters.quoteMonth || todayStr().slice(0, 7); const p = cur.split('-').map(Number); const d = new Date(p[0], p[1] - 1 + delta, 1); filters.quoteMonth = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); renderQuote(); }
 function quoteCardHtml(q) {
   const when = qDate(q);
+  const _hasBasin = (q.items || []).some(it => (it.name || '').includes('세면대'));
+  const _isSite = !!(q.siteAddr || '').trim();
+  const _regLabel = _hasBasin ? '세면대 발주' : (_isSite ? '현장 등록' : '출고 등록');
+  const _regIcon = _hasBasin ? 'ti-bath' : (_isSite ? 'ti-building-community' : 'ti-truck-delivery');
   const names = (q.items || []).map(it => it.name).filter(Boolean).slice(0, 3).join(', ') + ((q.items || []).length > 3 ? ` 외 ${q.items.length - 3}` : '');
   const _pa = +q.paidAmount || 0; const _tt = +q.total || 0; const _rem = Math.max(0, _tt - _pa);
   const paidPill = (_tt > 0 && _pa >= _tt) ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 수정"><i class="ti ti-cash"></i> 결제완료</button>` : (_pa > 0 ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 수정"><i class="ti ti-cash"></i> 입금 ${fmtWon(_pa)} · 미수 ${fmtWon(_rem)}</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 입력"><i class="ti ti-cash"></i> 미결제</button>`);
@@ -4314,7 +4338,7 @@ function quoteCardHtml(q) {
       </div>
       <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${shipPill}</div>
       <div class="frm-foot" style="margin-top:9px;flex-wrap:wrap">
-        <button class="btn btn-sm" style="color:var(--blue)" onclick="quoteToOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>
+        ${q.ordered ? `<button class="btn btn-sm btn-pri" onclick="quoteRegister('${q.id}')"><i class="ti ${_regIcon}"></i>${_regLabel}</button>` : `<button class="btn btn-sm" style="color:var(--blue)" onclick="quoteConfirmOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>`}
         <button class="btn btn-sm btn-pri" onclick="printQuote('${q.id}')"><i class="ti ti-printer"></i>인쇄</button>
         <button class="btn btn-sm" onclick="downloadQuoteXls('${q.id}')"><i class="ti ti-file-spreadsheet"></i>엑셀</button>
         <button class="btn btn-sm" onclick="downloadQuotePng('${q.id}')"><i class="ti ti-photo"></i>PNG</button>
@@ -4322,7 +4346,6 @@ function quoteCardHtml(q) {
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}')"><i class="ti ti-edit"></i>수정</button>
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}',true)" title="복사해 새 견적"><i class="ti ti-copy"></i></button>
         ${isAdmin() ? `<button class="btn btn-sm" style="color:var(--gd)" onclick="openTaxForm('${q.id}')" title="세금계산서 발행"><i class="ti ti-file-invoice"></i>계산서</button>` : ''}
-        ${isAdmin() ? `<button class="btn btn-sm" style="color:var(--red-t)" onclick="openCostForm('${q.id}')" title="원가·마진 정리"><i class="ti ti-calculator"></i>원가</button>` : ''}
         <button class="btn btn-sm" style="color:var(--red-t);margin-left:auto" onclick="delQuote('${q.id}')" title="견적 삭제"><i class="ti ti-trash"></i></button>
       </div></div>`;
 }
@@ -4330,8 +4353,8 @@ let _costSupply = 0;
 const GUBUN = ['자재', '가공', '운송', '부속', '기타'];
 function hebeFromSpec(spec) { const m = (spec || '').match(/(\d{3,4})\s*[*xX×]\s*(\d{3,4})/); if (m) { return +((+m[1] / 1000) * (+m[2] / 1000)).toFixed(2); } return ''; }
 function costGubunOf(name) { const n = (name || ''); if (/운송/.test(n)) return '운송'; if (/재단|타공|고스라|뒷도|배면|워터젯|사선|모서리|가공|연마/.test(n)) return '가공'; if (/시공|실측/.test(n)) return '기타'; return '자재'; }
-function openCostForm(id) { if (!isAdmin()) { toast('원가는 관리자만 볼 수 있습니다'); return; } filters.costEdit = id; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
-function costCancel() { filters.costEdit = ''; renderQuote(); }
+function openCostForm(id) { if (!isAdmin()) { toast('원가는 관리자만 볼 수 있습니다'); return; } filters.costEdit = id; render(); const _pg = el('pg-' + tab); if (_pg) _pg.scrollIntoView({ block: 'start' }); }
+function costCancel() { filters.costEdit = ''; render(); }
 function costLineHtml(d) {
   d = d || {}; const inp = 'font-size:13px;padding:6px 7px;border:1.5px solid var(--bd2);border-radius:7px';
   return `<div class="ct-row" style="display:flex;gap:5px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
@@ -4361,11 +4384,11 @@ function costRecalc() {
   if (el('ct-rate')) el('ct-rate').textContent = _costSupply > 0 ? ((margin / _costSupply * 100).toFixed(1) + '%') : '-';
 }
 function renderCostForm() {
-  const q = (state.quotes || []).find(x => x.id === filters.costEdit); if (!q) { filters.costEdit = ''; renderQuote(); return; }
+  const q = (state.quotes || []).find(x => x.id === filters.costEdit); if (!q) { filters.costEdit = ''; render(); return; }
   _costSupply = +q.supply || 0;
   const lines = (q.costLines && q.costLines.length) ? q.costLines : (q.items || []).map(it => ({ gubun: costGubunOf(it.name), factory: '', name: it.name, spec: it.spec || '', hebe: hebeFromSpec(it.spec || ''), qty: it.qty || '', unitCost: '', cost: '' }));
   const rows = lines.map(costLineHtml).join('');
-  el('pg-quote').innerHTML = `
+  el('pg-' + tab).innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-calculator"></i>원가 정리</h2><p>${esc(q.docNo || '')} · ${esc(q.client || '')} · 매출 ${fmtWon(q.supply)}</p></div>
       <button class="btn btn-sm" onclick="costCancel()"><i class="ti ti-arrow-left"></i> 목록</button></div>
     <div id="cost-root" class="card" style="padding:14px 16px">
@@ -4389,7 +4412,7 @@ async function submitCost(id) {
   document.querySelectorAll('#ct-rows .ct-row').forEach(r => { const name = (r.querySelector('.ct-name').value || '').trim(); const cost = _numv(r.querySelector('.ct-cost').value); if (name || cost > 0) { lines.push({ gubun: r.querySelector('.ct-gubun').value, factory: '', name: name, spec: (r.querySelector('.ct-spec').value || '').trim(), hebe: _numv(r.querySelector('.ct-hebe').value) || '', qty: _numv(r.querySelector('.ct-qty').value) || '', unitCost: _numv(r.querySelector('.ct-unit').value) || '', cost: cost }); } });
   const costTotal = lines.reduce((a, b) => a + (+b.cost || 0), 0); const sup = +q.supply || 0; const margin = sup - costTotal;
   await Store.update('quotes', id, { costLines: lines, costTotal: costTotal, margin: margin, marginRate: sup > 0 ? +(margin / sup).toFixed(4) : 0 });
-  filters.costEdit = ''; toast('원가 저장 · 마진 ' + fmtWon(margin)); renderQuote();
+  filters.costEdit = ''; toast('원가 저장 · 마진 ' + fmtWon(margin)); render();
 }
 function downloadCostLedger() {
   if (!isAdmin()) { toast('관리자만'); return; }
@@ -4470,6 +4493,7 @@ async function applyFixedToMonth() {
 
 function renderSettle() {
   const root = el('pg-settle'); if (!root) return;
+  if (filters.costEdit) { if (!document.getElementById('cost-root')) renderCostForm(); return; }   // 원가 입력 폼(관리자)
   if (!tabAllowed('settle')) { root.innerHTML = `<div class="ph"><div><h2><i class="ti ti-report-money"></i>정산</h2></div></div><div class="empty"><i class="ti ti-lock"></i>정산·원가·마진은 관리자 또는 접근 권한이 있는 직원만 열람할 수 있습니다.</div>`; return; }
   const ym = filters.settleMonth || todayStr().slice(0, 7);
   const WD = ['일', '월', '화', '수', '목', '금', '토'];
@@ -4505,16 +4529,17 @@ function renderSettle() {
   </div>`;
   const expCatBar = `<div class="card" style="margin-bottom:12px;padding:11px 14px"><div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:8px"><i class="ti ti-wallet"></i> 회사지출 분류별</div>
     ${_catKeys.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:6px">${_catKeys.map(c => `<div style="text-align:center;padding:6px 3px;background:var(--soft);border-radius:8px"><div style="font-size:10px;color:var(--t2);margin-bottom:2px">${esc(c)}</div><div style="font-size:12.5px;font-weight:800;color:#7c3aed">${fmtWon(expByCat[c])}</div></div>`).join('')}</div>` : `<div style="font-size:12px;color:var(--t3);text-align:center;padding:6px">이번 달 지출 내역이 없습니다</div>`}</div>`;
-  // 원가·마진 전표별
-  const cq = costed.slice().sort((a, b) => (qDate(b) || '').localeCompare(qDate(a) || ''));
-  const cRows = cq.length ? cq.map(q => { const sup = +q.supply || 0; const ct = (+q.costTotal) || (q.costLines || []).reduce((x, l) => x + (+l.cost || 0), 0); const mg = sup - ct; const r = sup > 0 ? Math.round(mg / sup * 100) : 0;
-    return `<tr><td style="padding:6px 8px">${esc(qDate(q).slice(5))}</td><td style="padding:6px 8px">${esc(q.client || '')}</td><td style="padding:6px 8px;font-size:11px;color:var(--t3)">${esc(q.docNo || '')}</td><td style="padding:6px 8px;text-align:right">${fmtWon(sup)}</td><td style="padding:6px 8px;text-align:right;color:#b45309">${fmtWon(ct)}</td><td style="padding:6px 8px;text-align:right;font-weight:700;color:${mg >= 0 ? '#0f766e' : '#dc2626'}">${fmtWon(mg)}</td><td style="padding:6px 8px;text-align:right;color:var(--t2)">${r}%</td></tr>`; }).join('')
-    : `<tr><td colspan="7" style="padding:16px;text-align:center;color:var(--t3)">원가 입력된 견적이 없습니다</td></tr>`;
+  // 원가·마진 전표별 (이번 달 전체 견적 — 여기서 원가 입력/수정)
+  const lq = monthQuotes.slice().sort((a, b) => (qDate(b) || '').localeCompare(qDate(a) || ''));
+  const cRows = lq.length ? lq.map(q => { const sup = +q.supply || 0; const has = (q.costTotal != null) || (q.costLines && q.costLines.length); const ct = has ? ((+q.costTotal) || (q.costLines || []).reduce((x, l) => x + (+l.cost || 0), 0)) : null; const mg = ct != null ? sup - ct : null; const r = (ct != null && sup > 0) ? Math.round(mg / sup * 100) : null;
+    return `<tr style="border-bottom:1px solid var(--soft)"><td style="padding:6px 8px">${esc(qDate(q).slice(5))}</td><td style="padding:6px 8px">${esc(q.client || '')}</td><td style="padding:6px 8px;font-size:11px;color:var(--t3)">${esc(q.docNo || '')}</td><td style="padding:6px 8px;text-align:right">${fmtWon(sup)}</td><td style="padding:6px 8px;text-align:right;color:#b45309">${ct != null ? fmtWon(ct) : '<span style=\'color:#c0341d\'>미입력</span>'}</td><td style="padding:6px 8px;text-align:right;font-weight:700;color:${mg == null ? 'var(--t3)' : (mg >= 0 ? '#0f766e' : '#dc2626')}">${mg != null ? fmtWon(mg) : '-'}</td><td style="padding:6px 8px;text-align:right;color:var(--t2)">${r != null ? r + '%' : '-'}</td><td style="padding:6px 8px;text-align:center"><button class="btn btn-sm" style="padding:3px 8px;${has ? '' : 'color:var(--blue)'}" onclick="openCostForm('${q.id}')">${has ? '<i class="ti ti-edit"></i>수정' : '<i class="ti ti-plus"></i>입력'}</button></td></tr>`; }).join('')
+    : `<tr><td colspan="8" style="padding:16px;text-align:center;color:var(--t3)">이번 달 견적이 없습니다</td></tr>`;
   const costLedger = `<div class="card" style="margin-bottom:12px;padding:13px 14px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:9px"><div style="font-size:11.5px;color:var(--t3);font-weight:700"><i class="ti ti-report-money"></i> 원가 원장 (전표별 매출·원가·마진)</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px"><div style="font-size:11.5px;color:var(--t3);font-weight:700"><i class="ti ti-report-money"></i> 원가 원장 (전표별 원가 입력 · 매출 · 마진)</div>
       <button class="btn btn-sm" onclick="downloadCostLedger()"><i class="ti ti-download"></i>원가원장 엑셀</button></div>
-    <div data-keepscroll id="settle-cost-list" style="max-height:40vh;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">
-      <thead><tr style="border-bottom:1.5px solid var(--bd);color:var(--t2);font-size:11px"><th style="padding:6px 8px;text-align:left">날짜</th><th style="padding:6px 8px;text-align:left">거래처</th><th style="padding:6px 8px;text-align:left">전표</th><th style="padding:6px 8px;text-align:right">매출</th><th style="padding:6px 8px;text-align:right">원가</th><th style="padding:6px 8px;text-align:right">마진</th><th style="padding:6px 8px;text-align:right">마진율</th></tr></thead>
+    <div style="font-size:11px;color:var(--t3);margin-bottom:8px">각 견적(현장)의 <b>입력/수정</b> 버튼으로 원가를 여기서 정리하세요.</div>
+    <div data-keepscroll id="settle-cost-list" style="max-height:42vh;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">
+      <thead><tr style="border-bottom:1.5px solid var(--bd);color:var(--t2);font-size:11px"><th style="padding:6px 8px;text-align:left">날짜</th><th style="padding:6px 8px;text-align:left">거래처</th><th style="padding:6px 8px;text-align:left">전표</th><th style="padding:6px 8px;text-align:right">매출</th><th style="padding:6px 8px;text-align:right">원가</th><th style="padding:6px 8px;text-align:right">마진</th><th style="padding:6px 8px;text-align:right">마진율</th><th style="padding:6px 8px;text-align:center">원가</th></tr></thead>
       <tbody>${cRows}</tbody></table></div></div>`;
   // 회사지출 입력 + 목록
   const expRows = expMonth.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || 0) - (a.createdAt || 0));
