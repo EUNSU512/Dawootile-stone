@@ -3619,7 +3619,7 @@ function renderTaxForm() {
       <button class="btn btn-sm" onclick="taxCancel()"><i class="ti ti-arrow-left"></i> 목록</button></div>
     <div id="taxform-root" class="card" style="padding:15px 17px">
       <div style="font-weight:800;font-size:13px;color:var(--gd);margin-bottom:9px">공급받는자 (거래처)</div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">${fld('tx-bizno', '사업자등록번호 *', ti.bizNo, '000-00-00000')}${fld('tx-corp', '상호', ti.corpName || q.client)}</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px"><div class="fld" style="flex:1;min-width:180px;margin:0"><label>사업자등록번호 *</label><div style="display:flex;gap:6px"><input id="tx-bizno" inputmode="numeric" value="${esc(ti.bizNo || '')}" placeholder="000-00-00000" style="${inp}"><button class="btn btn-sm btn-pri" style="flex:none;white-space:nowrap" onclick="lookupBizInfo()"><i class="ti ti-search"></i>조회</button></div></div>${fld('tx-corp', '상호', ti.corpName || q.client)}</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">${fld('tx-ceo', '대표자', ti.ceo)}${fld('tx-contact', '담당자', ti.contact)}</div>
       <div class="fld full" style="margin-bottom:8px"><label>주소</label><input id="tx-addr" lang="ko" value="${esc(ti.addr || '')}" style="${inp}"></div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">${fld('tx-biztype', '업태', ti.bizType)}${fld('tx-bizclass', '종목', ti.bizClass)}</div>
@@ -3662,6 +3662,7 @@ async function submitTaxInvoice(id) {
   try {
     toast('세금계산서 발행 중…');
     await saveClientTaxInfo(q.client, buyer);
+    try { const _ct = classifyCtype(buyer.bizType, buyer.bizClass, buyer.corpName); const _c = (state.clients || []).find(x => _normName(x.value) === _normName(q.client)); if (_c && (_c.ctype || '') !== _ct) await Store.update('clients', _c.id, { ctype: _ct }); } catch (e) { }
     const token = await auth.currentUser.getIdToken();
     const r = await fetch(PUSH_FN + '?action=taxinvoice', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify(payload) });
     const j = await r.json().catch(() => ({}));
@@ -3669,6 +3670,43 @@ async function submitTaxInvoice(id) {
     else { toast('발행 실패: ' + ((j && j.error) || ('HTTP ' + r.status))); }
   } catch (e) { toast('발행 오류: ' + ((e && e.message) || e)); }
   finally { setTimeout(() => { _busy = false; }, 700); }
+}
+/* 업태/업종/상호로 거래처 유형 자동분류 */
+function classifyCtype(bizType, bizClass, name) {
+  const t = ((bizType || '') + ' ' + (bizClass || '') + ' ' + (name || '')).replace(/\s/g, '');
+  if (/대리점/.test(t)) return '대리점';
+  if (/건축|건설|가구|인테리어|시공|실내|목공|창호|리모델|설계|디자인|공사|marble/i.test(t)) return '인테리어';
+  if (/도매|소매|도소매|타일|도기|위생|석재|제조|무역|유통|자재|판매|건자재/.test(t)) return '유통';
+  return '소비자';
+}
+/* 사업자번호로 기업정보 조회 → 자동입력 + 유형 자동분류 + 거래처 등록 */
+async function lookupBizInfo() {
+  const raw = el('tx-bizno') ? el('tx-bizno').value : ''; const corpNum = (raw || '').replace(/[^0-9]/g, '');
+  if (corpNum.length !== 10) { toast('사업자번호 10자리를 입력하세요'); return; }
+  const co = companyInfo();
+  toast('사업자 정보 조회 중…');
+  try {
+    const token = await auth.currentUser.getIdToken();
+    const r = await fetch(PUSH_FN + '?action=bizinfo', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ corpNum: corpNum, memberCorpNum: co.bizno }) });
+    const j = await r.json().catch(() => ({}));
+    if (!(r.ok && j.ok)) { toast('조회 실패: ' + ((j && j.error) || ('HTTP ' + r.status))); return; }
+    if (j.corpName && el('tx-corp')) el('tx-corp').value = j.corpName;
+    if (j.ceo && el('tx-ceo')) el('tx-ceo').value = j.ceo;
+    if (j.addr && el('tx-addr')) el('tx-addr').value = j.addr;
+    if (j.bizType && el('tx-biztype')) el('tx-biztype').value = j.bizType;
+    if (j.bizClass && el('tx-bizclass')) el('tx-bizclass').value = j.bizClass;
+    const ct = classifyCtype(j.bizType, j.bizClass, j.corpName);
+    const warn = (+j.closeDownState === 2) ? ' · ⚠폐업' : ((+j.closeDownState === 3) ? ' · ⚠휴업' : '');
+    // 거래처에 등록(세금정보 + 유형)
+    const q = (state.quotes || []).find(x => x.id === filters.taxEdit);
+    if (q) {
+      const buyer = { bizNo: corpNum, corpName: j.corpName || '', ceo: j.ceo || '', addr: j.addr || '', bizType: j.bizType || '', bizClass: j.bizClass || '', contact: (el('tx-contact') && el('tx-contact').value) || '', email: (el('tx-email') && el('tx-email').value) || '' };
+      await saveClientTaxInfo(q.client, buyer);
+      const c = (state.clients || []).find(x => _normName(x.value) === _normName(q.client));
+      if (c && (c.ctype || '') !== ct) { try { await Store.update('clients', c.id, { ctype: ct }); } catch (e) { } }
+    }
+    toast('조회완료 · 유형: ' + ct + warn);
+  } catch (e) { toast('조회 오류: ' + ((e && e.message) || e)); }
 }
 /* ── 견적 기본설정: 비고 양식 · 거래처 유형 · 자재별 유형단가 ── */
 function openQuoteSettings() { filters.quoteSettings = true; renderQuote(); }
