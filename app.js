@@ -4525,7 +4525,7 @@ function renderSettle() {
       ${pnlCell('회사지출', expSum, '#7c3aed', expMonth.length + '건')}
       ${pnlCell('영업이익', opProfit, opProfit >= 0 ? '#0f766e' : '#dc2626', '이익률 ' + opRate + '%')}
     </div>
-    <div style="font-size:11px;color:var(--t3);margin-top:8px;line-height:1.5">· 매출총이익 = 원가 입력된 견적의 (매출 − 원가) 기준 · 영업이익 = 매출총이익 − 회사지출${noCost > 0 ? `<br>· <b style="color:#dc2626">원가 미입력 견적 ${noCost}건</b> — 견적서 화면의 <b>원가</b> 버튼으로 입력하면 마진에 반영됩니다` : ''}</div>
+    <div style="font-size:11px;color:var(--t3);margin-top:8px;line-height:1.5">· 매출총이익 = 원가 입력된 견적의 (매출 − 원가) 기준 · 영업이익 = 매출총이익 − 회사지출${noCost > 0 ? `<br>· <b style="color:#dc2626">원가 미입력 견적 ${noCost}건</b> — 아래 <b>원가 원장</b>의 입력 버튼으로 입력하면 마진에 반영됩니다` : ''}</div>
   </div>`;
   const expCatBar = `<div class="card" style="margin-bottom:12px;padding:11px 14px"><div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:8px"><i class="ti ti-wallet"></i> 회사지출 분류별</div>
     ${_catKeys.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:6px">${_catKeys.map(c => `<div style="text-align:center;padding:6px 3px;background:var(--soft);border-radius:8px"><div style="font-size:10px;color:var(--t2);margin-bottom:2px">${esc(c)}</div><div style="font-size:12.5px;font-weight:800;color:#7c3aed">${fmtWon(expByCat[c])}</div></div>`).join('')}</div>` : `<div style="font-size:12px;color:var(--t3);text-align:center;padding:6px">이번 달 지출 내역이 없습니다</div>`}</div>`;
