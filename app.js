@@ -3410,6 +3410,7 @@ function quoteRefillPrices() {
 function quoteRecalc() {
   let supply = 0;
   document.querySelectorAll('#q-rows .q-row').forEach(r => { const qty = _numv(r.querySelector('.q-qty').value); const price = _numv(r.querySelector('.q-price').value); const amt = Math.round(qty * price); r.querySelector('.q-amt').textContent = fmtWon(amt); supply += amt; });
+  document.querySelectorAll('.qx-row').forEach(r => { const qty = _numv(r.querySelector('.qx-qty').value); const price = _numv(r.querySelector('.qx-price').value); const amt = Math.round(qty * price); r.querySelector('.qx-amt').textContent = fmtWon(amt); supply += amt; });
   const vat = Math.round(supply * 0.1), total = supply + vat;
   if (el('q-supply')) el('q-supply').textContent = fmtWon(supply);
   if (el('q-vat')) el('q-vat').textContent = fmtWon(vat);
@@ -3418,12 +3419,30 @@ function quoteRecalc() {
 function addQRow() { const c = el('q-rows'); if (c) { c.insertAdjacentHTML('beforeend', qRowHtml({})); } }
 function openQuoteInline(id, copy) { filters.quoteEdit = id || 'new'; filters.quoteCopy = !!copy; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
 function quoteCancel() { filters.quoteEdit = ''; filters.quoteCopy = false; renderQuote(); }
+/* 부대비용·가공 프리셋 (견적 폼에 항상 표시, 수량 입력한 것만 견적서 반영) */
+const QUOTE_EXTRAS = ['재단비 12T', '재단비 6T', '사선 재단', '고스라', '뒷도메', '배면 연마', '인덕션 타공', '싱크볼 타공', '콘센트 타공', '수전 타공', '사각 타공', '운송비 (창고-공장)', '운송비 (공장-현장)', '실측비', '시공비'];
+function extraPrices() { const m = (state.appmeta || []).find(x => x.key === 'extraPrices'); return (m && m.prices) || {}; }
+async function saveExtraPrices(prices) { const m = (state.appmeta || []).find(x => x.key === 'extraPrices'); if (m) await Store.update('appmeta', m.id, { prices }); else await Store.add('appmeta', { key: 'extraPrices', prices }); }
+function qxRowHtml(name, d) {
+  const inp = 'font-size:14px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px';
+  const price = (d && d.price != null && d.price !== '') ? d.price : (extraPrices()[name] || '');
+  const qty = (d && d.qty != null) ? d.qty : '';
+  return `<div class="qx-row" data-name="${esc(name)}" style="display:flex;gap:6px;align-items:center;margin-bottom:5px">
+    <div style="flex:2.2;min-width:0;font-size:13.5px">${esc(name)}</div>
+    <input class="qx-qty" inputmode="numeric" placeholder="0" value="${esc(qty)}" oninput="quoteRecalc()" style="flex:1;min-width:42px;${inp};text-align:right">
+    <input class="qx-price" inputmode="numeric" placeholder="단가" value="${esc(price)}" oninput="quoteRecalc()" style="flex:1.3;min-width:54px;${inp};text-align:right">
+    <div class="qx-amt" style="flex:1.3;min-width:58px;text-align:right;font-weight:700;font-size:14px">0</div>
+  </div>`;
+}
 function renderQuoteForm() {
   const id = filters.quoteEdit === 'new' ? '' : filters.quoteEdit;
   const copy = !!filters.quoteCopy;
   const q = id ? (state.quotes || []).find(x => x.id === id) : null; const v = q || {};
   _qN = 0;
-  const rows = ((v.items && v.items.length) ? v.items : [{}]).map(qRowHtml).join('');
+  const extraSet = new Set(QUOTE_EXTRAS); const savedExtra = {};
+  (v.items || []).forEach(it => { if (extraSet.has(it.name)) savedExtra[it.name] = { qty: it.qty, price: it.price }; });
+  const matItems = (v.items || []).filter(it => !extraSet.has(it.name));
+  const rows = (matItems.length ? matItems : [{}]).map(qRowHtml).join('');
   const matOpts = quotePriceItems().map(i => `<option value="${esc(i.name)}">`).join('');   // 재고 + 단가표 통합
   const editing = q && !copy;
   el('pg-quote').innerHTML = `
@@ -3445,6 +3464,12 @@ function renderQuoteForm() {
           <datalist id="q-mat-list">${matOpts}</datalist>
           <button type="button" class="btn btn-ghost btn-sm btn-block" onclick="addQRow()"><i class="ti ti-plus"></i>품목 추가</button>
         </div>
+        <div class="fld full" style="margin-bottom:10px"><label>부대비용 · 가공 <span style="color:var(--t3);font-weight:500">(수량 입력한 항목만 견적서에 표시됩니다)</span></label>
+          <div style="border:1px solid var(--bd2);border-radius:10px;padding:9px 11px">
+            <div style="display:flex;gap:6px;font-size:11px;color:var(--t3);margin-bottom:5px;font-weight:600"><div style="flex:2.2">항목</div><div style="flex:1;text-align:right">수량</div><div style="flex:1.3;text-align:right">단가</div><div style="flex:1.3;text-align:right">금액</div></div>
+            ${QUOTE_EXTRAS.map(nm => qxRowHtml(nm, savedExtra[nm])).join('')}
+          </div>
+        </div>
         <div class="fld full" style="margin-bottom:10px"><label>비고 <span style="color:var(--t3);font-weight:500">(기본 양식은 견적 설정에서 관리)</span></label><textarea id="q-memo" lang="ko" placeholder="결제조건·납기 등" style="min-height:64px">${esc(editing ? (v.memo || '') : (v.memo || quoteMemoTemplate()))}</textarea></div>
         <div style="background:var(--soft);border-radius:11px;padding:12px 14px;max-width:360px;margin-left:auto">
           <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:5px"><span style="color:var(--t2)">공급가액</span><b id="q-supply">0</b></div>
@@ -3462,6 +3487,10 @@ function collectQItems() {
     const name = (r.querySelector('.q-mat').value || '').trim(); const spec = (r.querySelector('.q-spec').value || '').trim();
     const qty = _numv(r.querySelector('.q-qty').value); const price = _numv(r.querySelector('.q-price').value);
     if (name && qty > 0) items.push({ name, spec, unit: '', qty, price, amt: Math.round(qty * price) });
+  });
+  document.querySelectorAll('.qx-row').forEach(r => {
+    const name = r.getAttribute('data-name'); const qty = _numv(r.querySelector('.qx-qty').value); const price = _numv(r.querySelector('.qx-price').value);
+    if (name && qty > 0) items.push({ name, spec: '', unit: '', qty, price, amt: Math.round(qty * price), extra: true });
   });
   return items;
 }
@@ -3491,7 +3520,12 @@ async function submitQuote(id) {
     const data = { docNo, client, ctype, date, valid, attn, items, supply, vat, total, memo, by: (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
     if (id) await Store.update('quotes', id, data); else await Store.add('quotes', data);
     try { const cdoc = (state.clients || []).find(x => _normName(x.value) === _normName(client)); if (cdoc && (cdoc.ctype || '') !== ctype) await Store.update('clients', cdoc.id, { ctype }); } catch (e) { }   // 거래처 유형 기억
-    for (const it of items) { try { await quoteLearnPrice(ctype, it.name, +it.price || 0); } catch (e) { } }   // 유형별 단가표 학습
+    for (const it of items) { if (it.extra) continue; try { await quoteLearnPrice(ctype, it.name, +it.price || 0); } catch (e) { } }   // 유형별 단가표 학습(부대비용 제외)
+    try {   // 부대비용 기본단가 기억
+      const cur = extraPrices(); const np = Object.assign({}, cur); let ch = false;
+      document.querySelectorAll('.qx-row').forEach(r => { const nm = r.getAttribute('data-name'); const pr = _numv(r.querySelector('.qx-price').value); if (pr > 0 && cur[nm] !== pr) { np[nm] = pr; ch = true; } });
+      if (ch) await saveExtraPrices(np);
+    } catch (e) { }
     filters.quoteEdit = ''; filters.quoteCopy = false; toast(id ? '견적 저장됨' : '견적 저장 · 유형별 단가 반영됨'); renderQuote();
   } finally { setTimeout(() => { _busy = false; }, 500); }
 }
