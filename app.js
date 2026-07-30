@@ -33,6 +33,7 @@ const COLLS = ['members', 'sites', 'inventory', 'holdings', 'transactions', 'spe
 const CTYPES = ['유통', '대리점', '인테리어', '소비자', '별도'];   // 거래처 유형 (별도 = 예외 업체 단가)
 function ctypeKey(t) { return t === '유통' ? 'dist' : (t === '대리점' ? 'agency' : (t === '인테리어' ? 'interior' : (t === '별도' ? 'special' : 'consumer'))); }
 const QCATS = ['세라믹+세면대', '석재', '통관비용'];
+const CUSTOMS_LINES = ['관세', '부가가치세', '지원가산세', '통관수수료', 'D/O CHG (선사비용)', '적출료', 'SHUTTLE CHG', '경과보관료', '제주선임', '운송료', '취급수수료', '기타경비'];
 function itemCategory(name) {
   const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(name));
   if (pl && pl.cat) return pl.cat;
@@ -3611,8 +3612,8 @@ function quoteRecalc() {
   if (el('q-total')) el('q-total').textContent = fmtWon(total);
 }
 function addQRow() { const c = el('q-rows'); if (c) { c.insertAdjacentHTML('beforeend', qRowHtml({})); } }
-function openQuoteInline(id, copy) { filters.quoteEdit = id || 'new'; filters.quoteCopy = !!copy; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
-function quoteCancel() { filters.quoteEdit = ''; filters.quoteCopy = false; renderQuote(); }
+function openQuoteInline(id, copy) { filters.quoteEdit = id || 'new'; filters.quoteCopy = !!copy; filters.quoteCat = ''; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
+function quoteCancel() { filters.quoteEdit = ''; filters.quoteCopy = false; filters.quoteCat = ''; renderQuote(); }
 /* 부대비용·가공 프리셋 (견적 폼에 항상 표시, 수량 입력한 것만 견적서 반영) */
 const QUOTE_EXTRAS = [
   { name: '재단비 12T', unit: 'M' }, { name: '재단비 6T', unit: 'M' },
@@ -3686,6 +3687,9 @@ function renderQuoteForm() {
   (v.items || []).forEach(it => { if (extraSet.has(it.name)) savedExtra[it.name] = { qty: it.qty, price: it.price }; });
   const matItems = (v.items || []).filter(it => !extraSet.has(it.name));
   const rows = (matItems.length ? matItems : [{}]).map(qRowHtml).join('');
+  const editing0 = q && !copy;
+  const _formCat = filters.quoteCat || (editing0 && v.category) || '세라믹+세면대';
+  if (_formCat === '통관비용') { renderCustomsForm(q, copy); return; }
   const matOpts = quotePriceItems().map(i => `<option value="${esc(i.name)}">`).join('');   // 재고 + 단가표 통합
   const editing = q && !copy;
   el('pg-quote').innerHTML = `
@@ -3696,7 +3700,7 @@ function renderQuoteForm() {
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
           <div class="fld" style="flex:2;min-width:180px;margin:0"><label>거래처 <span class="req">*</span></label>${searchBox('q-client', '업체명 검색·입력', v.client || '', 'companyNames', 'quoteClientChanged')}</div>
           <div class="fld" style="flex:1;min-width:130px;margin:0"><label>단가 유형</label><select id="q-ctype" onchange="quoteTypeChanged()" style="width:100%;font-size:15px;padding:9px 10px;border:1.5px solid var(--bd2);border-radius:10px">${CTYPES.map(t => `<option ${((editing && v.ctype) || clientType(v.client || '')) === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-          <div class="fld" style="flex:1;min-width:130px;margin:0"><label>분류</label><select id="q-cat" style="width:100%;font-size:15px;padding:9px 10px;border:1.5px solid var(--bd2);border-radius:10px">${QCATS.map(cc => `<option ${((editing && v.category) || '세라믹+세면대') === cc ? 'selected' : ''}>${cc}</option>`).join('')}</select></div>
+          <div class="fld" style="flex:1;min-width:130px;margin:0"><label>분류</label><select id="q-cat" onchange="quoteCatChanged(this.value)" style="width:100%;font-size:15px;padding:9px 10px;border:1.5px solid var(--bd2);border-radius:10px">${QCATS.map(cc => `<option ${((editing && v.category) || '세라믹+세면대') === cc ? 'selected' : ''}>${cc}</option>`).join('')}</select></div>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
           <div class="fld" style="flex:1;min-width:150px;margin:0"><label>견적일</label><input type="date" id="q-date" value="${esc((editing && v.date) || todayStr())}"></div>
@@ -4137,6 +4141,136 @@ function renderQuoteSettings() {
       </div>
     </div>`;
 }
+function quoteCatChanged(v) { filters.quoteCat = v; renderQuoteForm(); }
+function cxRowHtml(d) {
+  d = d || {}; const inp = 'font-size:14px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px';
+  return `<div class="cx-row" style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+    <input class="cx-name" lang="ko" placeholder="항목" value="${esc(d.name || '')}" style="flex:2;min-width:0;${inp}">
+    <input class="cx-supply" inputmode="numeric" placeholder="공급가액" value="${esc(d.supply || '')}" oninput="customsRecalc()" style="flex:1.3;min-width:0;${inp};text-align:right">
+    <input class="cx-vat" inputmode="numeric" placeholder="부가세" value="${esc(d.vat || '')}" oninput="customsRecalc()" style="flex:1.3;min-width:0;${inp};text-align:right">
+    <input class="cx-note" lang="ko" placeholder="비고" value="${esc(d.note || '')}" style="flex:1.4;min-width:0;${inp}">
+    <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.cx-row').remove();customsRecalc()"><i class="ti ti-x"></i></button>
+  </div>`;
+}
+function addCustomsRow() { const c = el('cx-rows'); if (c) c.insertAdjacentHTML('beforeend', cxRowHtml({})); }
+function customsRecalc() {
+  let sup = 0, vat = 0;
+  document.querySelectorAll('#cx-rows .cx-row').forEach(r => { sup += _numv(r.querySelector('.cx-supply').value); vat += _numv(r.querySelector('.cx-vat').value); });
+  if (el('cx-supply')) el('cx-supply').textContent = fmtWon(sup);
+  if (el('cx-vat')) el('cx-vat').textContent = fmtWon(vat);
+  if (el('cx-total')) el('cx-total').textContent = fmtWon(sup + vat);
+}
+function renderCustomsForm(q, copy) {
+  const v = q || {}; const editing = q && !copy; const cs = v.customs || {};
+  const inp = 'font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px;width:100%';
+  const lines = (v.items && v.items.length) ? v.items : CUSTOMS_LINES.map(n => ({ name: n, supply: '', vat: '', note: '' }));
+  const rowsHtml = lines.map(cxRowHtml).join('');
+  const hf = (fid, label, val, ph) => `<div class="fld" style="flex:1;min-width:140px;margin:0"><label>${label}</label><input id="${fid}" lang="ko" value="${esc(val || '')}" placeholder="${ph || ''}" style="${inp}"></div>`;
+  el('pg-quote').innerHTML = `
+    <div class="ph"><div><h2><i class="ti ti-ship"></i>통관비 예상 견적</h2><p>수입 통관비용 견적</p></div>
+      <button class="btn btn-sm" onclick="quoteCancel()"><i class="ti ti-arrow-left"></i> 목록</button></div>
+    <div id="qform-root" class="card" style="padding:15px 17px">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+        <div class="fld" style="flex:2;min-width:180px;margin:0"><label>거래처 (TO) <span class="req">*</span></label>${searchBox('cx-client', '업체명 검색·입력', v.client || '', 'companyNames', '')}</div>
+        <div class="fld" style="flex:1;min-width:130px;margin:0"><label>분류</label><select onchange="quoteCatChanged(this.value)" style="${inp}"><option>통관비용</option><option>세라믹+세면대</option><option>석재</option></select></div>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        <div class="fld" style="flex:1;min-width:130px;margin:0"><label>견적일 (DATE)</label><input type="date" id="cx-date" value="${esc((editing && v.date) || todayStr())}" style="${inp}"></div>
+        ${hf('cx-vessel', '선명', cs.vessel)}${hf('cx-arrive', '입항일', cs.arriveDate, '예: 7월 27일')}
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        ${hf('cx-bl', 'B/L NO', cs.blNo)}${hf('cx-product', '품명', cs.product, '예: STONE PRODUCTS')}${hf('cx-port', '도착항', cs.port, '예: 평택항')}
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        ${hf('cx-invoice', 'AMOUNT (인보이스)', cs.invoiceAmt, '예: ¥38,238.51')}${hf('cx-rate', '주간환율', cs.exRate, '예: @₩221.56')}${hf('cx-assessed', '감정가격', cs.assessedPrice)}
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
+        ${hf('cx-qty', '수량', cs.qty, '예: 16 PLT')}${hf('cx-weight', '중량', cs.weight, '예: 27,450 KG')}${hf('cx-cont', "CON'T 수량", cs.container, "예: 20' X 1")}
+      </div>
+      <div class="fld full" style="margin-bottom:10px"><label>적요 (통관비 항목) <span class="req">*</span></label>
+        <div style="display:flex;gap:6px;font-size:11px;color:var(--t3);font-weight:600;padding:0 2px 4px"><div style="flex:2">항목</div><div style="flex:1.3;text-align:right">공급가액</div><div style="flex:1.3;text-align:right">부가세</div><div style="flex:1.4">비고</div><div style="width:28px"></div></div>
+        <div id="cx-rows">${rowsHtml}</div>
+        <button type="button" class="btn btn-ghost btn-sm btn-block" onclick="addCustomsRow()"><i class="ti ti-plus"></i>항목 추가</button>
+      </div>
+      <div class="fld full" style="margin-bottom:10px"><label>비고</label><textarea id="cx-memo" lang="ko" style="min-height:54px">${esc(editing ? (v.memo || '') : (v.memo || '※ 상기 금액은 예상 청구 금액이며 환율변동과 세관검사시 합계 금액이 변경될 수 있습니다.'))}</textarea></div>
+      <div style="background:var(--soft);border-radius:11px;padding:12px 14px;max-width:380px;margin-left:auto">
+        <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:5px"><span style="color:var(--t2)">공급가액 합계</span><b id="cx-supply">0</b></div>
+        <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:7px"><span style="color:var(--t2)">부가세 합계</span><b id="cx-vat">0</b></div>
+        <div style="display:flex;justify-content:space-between;font-size:17px;border-top:1px solid var(--bd2);padding-top:8px"><span style="font-weight:700">총 합계</span><b id="cx-total" style="color:var(--gd)">0</b></div>
+      </div>
+      <div class="frm-foot" style="margin-top:13px">${editing ? `<button class="btn" style="color:var(--red-t);border-color:#e6a9a9" onclick="delQuote('${q.id}')"><i class="ti ti-trash"></i></button>` : ''}<button class="btn" style="flex:1" onclick="quoteCancel()">취소</button><button class="btn btn-pri" style="flex:2" onclick="submitCustomsQuote('${editing ? q.id : ''}')"><i class="ti ti-check"></i>${editing ? '저장' : '통관 견적 저장'}</button></div>
+    </div>`;
+  customsRecalc();
+}
+async function submitCustomsQuote(id) {
+  const client = (el('cx-client') && el('cx-client').value || '').trim(); if (!client) { toast('거래처를 입력하세요'); return; }
+  const lines = []; let sup = 0, vat = 0;
+  document.querySelectorAll('#cx-rows .cx-row').forEach(r => { const name = (r.querySelector('.cx-name').value || '').trim(); const sv = _numv(r.querySelector('.cx-supply').value); const vv = _numv(r.querySelector('.cx-vat').value); const note = (r.querySelector('.cx-note').value || '').trim(); if (name && (sv > 0 || vv > 0 || note)) { lines.push({ name: name, supply: sv, vat: vv, note: note, amt: sv + vv }); sup += sv; vat += vv; } });
+  if (!lines.length) { toast('통관 항목(금액)을 입력하세요'); return; }
+  const g = fid => { const e = el(fid); return e ? e.value.trim() : ''; };
+  const customs = { vessel: g('cx-vessel'), arriveDate: g('cx-arrive'), blNo: g('cx-bl'), product: g('cx-product'), port: g('cx-port'), invoiceAmt: g('cx-invoice'), exRate: g('cx-rate'), assessedPrice: g('cx-assessed'), qty: g('cx-qty'), weight: g('cx-weight'), container: g('cx-cont') };
+  const date = g('cx-date') || todayStr(); const memo = (el('cx-memo') && el('cx-memo').value || '').trim(); const total = sup + vat;
+  if (_busy) return; _busy = true;
+  try {
+    await ensureClient(client);
+    const q = id ? (state.quotes || []).find(x => x.id === id) : null;
+    const docNo = (q && q.docNo) || quoteNextDocNo();
+    const data = { docNo: docNo, client: client, category: '통관비용', customs: customs, ctype: '별도', date: date, items: lines, supply: sup, vat: vat, total: total, memo: memo, by: (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
+    if (id) await Store.update('quotes', id, data); else await Store.add('quotes', data);
+    filters.quoteEdit = ''; filters.quoteCat = ''; toast('통관 견적 저장됨'); renderQuote();
+  } finally { setTimeout(() => { _busy = false; }, 500); }
+}
+function customsDocHtml(q) {
+  const e = s => esc(s == null ? '' : String(s)); const co = companyInfo(); const cs = q.customs || {};
+  const items = q.items || []; const MIN = Math.max(13, items.length);
+  let rows = items.map(it => `<tr><td class="l">${e(it.name)}</td><td class="r">${it.supply ? fmtWon(it.supply) : ''}</td><td class="r">${it.vat ? fmtWon(it.vat) : ''}</td><td class="l">${e(it.note || '')}</td></tr>`).join('');
+  for (let i = items.length; i < MIN; i++) rows += `<tr><td>&nbsp;</td><td></td><td></td><td></td></tr>`;
+  const ic = (k, val) => `<td class="ik">${e(k)}</td><td class="iv">${e(val)}</td>`;
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>통관비견적 ${e(q.client)} ${e(q.docNo)}</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@1.3.9/dist/web/static/pretendard.min.css">
+<style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff}
+@page{size:A4;margin:8mm}
+#page{width:718px;height:1047px;overflow:hidden;position:relative;margin:0 auto;background:#fff}
+#sheet{width:718px;padding:24px 26px;transform-origin:top left;font-family:'Pretendard Variable',Pretendard,'맑은 고딕','Malgun Gothic',sans-serif;color:#1c1c1c;font-size:12px}
+.chead{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #201c17;padding-bottom:10px}
+.chead img{height:40px;display:block}
+.ctitle h1{margin:0;font-size:23px;font-weight:800;letter-spacing:5px;color:#201c17;text-align:right}
+.cmeta{display:flex;justify-content:space-between;font-size:11px;color:#777;margin:9px 0 13px}.cmeta b{color:#222}
+.itbl{border-collapse:collapse;width:100%;margin-bottom:13px;table-layout:fixed}
+.itbl td{border:1px solid #b6ab95;padding:6px 9px;font-size:11.5px}
+.itbl .ik{background:#f6f1e8;font-weight:700;width:13%;white-space:nowrap;color:#7a6531}.itbl .iv{width:24%}
+.atbl{border-collapse:collapse;width:100%;table-layout:fixed;border-top:2px solid #201c17}
+.atbl th{background:#201c17;color:#f3ece0;font-weight:600;font-size:11.5px;padding:8px 6px}
+.atbl td{border:1px solid #e0d8c8;padding:6px 9px;font-size:11.5px;height:25px}
+.atbl td.l{text-align:left}.atbl td.r{text-align:right}
+.total{margin-top:13px;border:2px solid #201c17;display:flex;justify-content:space-between;align-items:center;padding:12px 18px;background:#faf7f1}
+.total .lb{font-weight:800;font-size:15px;letter-spacing:7px;color:#201c17}.total .vv{font-weight:800;font-size:20px;color:#0F6E56}
+.foot{margin-top:13px;font-size:10.5px;color:#666;line-height:1.6}
+@media print{*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body>
+<div id="page"><div id="sheet">
+  <div class="chead"><div><img src="${DAWOO_LOGO}" alt=""></div><div class="ctitle"><h1>통관비 예상 견적서</h1></div></div>
+  <div class="cmeta"><span>견적번호 <b>${e(q.docNo)}</b></span><span>DATE : <b>${e(q.date)}</b></span></div>
+  <table class="itbl">
+    <tr>${ic('TO', q.client)}${ic('주간환율', cs.exRate)}</tr>
+    <tr>${ic('선 명', cs.vessel)}${ic('도착항', cs.port)}</tr>
+    <tr>${ic('입항일', cs.arriveDate)}${ic('수 량', cs.qty)}</tr>
+    <tr>${ic('B/L NO', cs.blNo)}${ic('중 량', cs.weight)}</tr>
+    <tr>${ic('품 명', cs.product)}${ic("CON'T 수량", cs.container)}</tr>
+    <tr>${ic('AMOUNT', cs.invoiceAmt)}${ic('감정가격', cs.assessedPrice)}</tr>
+  </table>
+  <table class="atbl"><colgroup><col style="width:34%"><col style="width:22%"><col style="width:22%"><col style="width:22%"></colgroup>
+    <thead><tr><th>적 요</th><th>공급가액</th><th>부가세</th><th>비고</th></tr></thead>
+    <tbody>${rows}
+      <tr><td class="l" style="font-weight:700;background:#f6f1e8">합 계</td><td class="r" style="font-weight:700;background:#f6f1e8">${fmtWon(q.supply)}</td><td class="r" style="font-weight:700;background:#f6f1e8">${fmtWon(q.vat)}</td><td style="background:#f6f1e8"></td></tr>
+    </tbody>
+  </table>
+  <div class="total"><span class="lb">총 합 계</span><span class="vv">₩ ${fmtWon(q.total)}</span></div>
+  ${q.memo ? `<div class="foot">${e(q.memo)}</div>` : ''}
+  <div class="foot">공급자 : ${e(co.name)} · 대표 ${e(co.ceo)} · 사업자 ${e(co.bizno)} · ${e(co.tel)}</div>
+</div></div>
+<script>window.addEventListener('load',function(){var s=document.getElementById('sheet');var a=1047;if(s&&s.scrollHeight>a){s.style.transform='scale('+(a/s.scrollHeight)+')';}});</script>
+</body></html>`;
+}
 function qDate(q) { return q.date || (q.createdAt ? new Date(+q.createdAt).toISOString().slice(0, 10) : ''); }
 function quoteMonthNav(delta) { const cur = filters.quoteMonth || todayStr().slice(0, 7); const p = cur.split('-').map(Number); const d = new Date(p[0], p[1] - 1 + delta, 1); filters.quoteMonth = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); renderQuote(); }
 function quoteCardHtml(q) {
@@ -4223,6 +4357,7 @@ function renderQuote() {
     ${body}`;
 }
 function quoteDocHtml(q) {
+  if (q.category === '통관비용') return customsDocHtml(q);
   const e = s => esc(s == null ? '' : String(s));
   const items = q.items || []; const MIN = Math.max(6, items.length);
   let rows = items.map((it, i) => `<tr><td class="c">${i + 1}</td><td class="l">${e(it.name)}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}${it.unit ? ' ' + e(it.unit) : ''}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`).join('');
