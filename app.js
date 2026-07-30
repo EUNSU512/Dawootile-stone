@@ -3795,9 +3795,15 @@ function quoteToOrder(id) {
   try { Store.update('quotes', id, { ordered: true, orderedAt: Date.now(), shipped: true, shipStartedAt: q.shipStartedAt || Date.now() }); } catch (e) { }
   const items = (q.items || []).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' }));
   const hasBasin = (q.items || []).some(it => (it.name || '').includes('세면대'));
-  if (hasBasin) { go('basin'); toast('확정 · 세면대 발주로 이동 — ' + (q.client || '') + ' / ' + items.map(x => x.name).join(', ')); }
-  else if ((q.siteAddr || '').trim()) { go('sites'); toast('확정 · 현장으로 이동 — ' + (q.client || '') + ' (' + q.siteAddr + ')'); }
-  else { openShipForm({ targetName: q.client, items: items }); toast('확정 · 출고 등록으로 불러왔습니다 · 확인 후 등록'); }
+  if (hasBasin) {
+    let bi = (q.items || []).filter(it => (it.name || '').includes('세면대')).map(it => ({ stone: it.name, spec: it.spec || '', qty: it.qty || '', quoteNo: q.docNo || '' }));
+    if (!bi.length) bi = (q.items || []).map(it => ({ stone: it.name, spec: it.spec || '', qty: it.qty || '' }));
+    go('basin'); setTimeout(() => { try { openBasinForm(null, { vendor: q.client, items: bi }); } catch (e) { } }, 90);
+    toast('확정 · 세면대 발주로 불러왔습니다');
+  } else if ((q.siteAddr || '').trim()) {
+    go('sites'); setTimeout(() => { try { openSiteForm(null, { name: q.client, address: q.siteAddr }); } catch (e) { } }, 90);
+    toast('확정 · 현장 등록으로 이동');
+  } else { openShipForm({ targetName: q.client, items: items }); toast('확정 · 출고 등록으로 불러왔습니다 · 확인 후 등록'); }
 }
 /* ── 세금계산서 발행 (팝빌 Popbill · CF action=taxinvoice) ── */
 function clientTaxInfo(name) { const c = (state.clients || []).find(x => _normName(x.value) === _normName(name)); return (c && c.taxInfo) || {}; }
@@ -4133,7 +4139,7 @@ function quoteCardHtml(q) {
         <div style="min-width:0"><div style="font-weight:700;font-size:14.5px">${esc(q.client || '-')}</div>
           <div style="font-size:11.5px;color:var(--t3);margin-top:2px">${esc(q.docNo || '')} · ${esc(when)} · ${(q.items || []).length}품목</div>
           <div style="font-size:12px;color:var(--t2);margin-top:3px">${esc(names)}</div></div>
-        <div style="text-align:right;flex:none"><div style="font-size:17px;font-weight:800;color:var(--gd)">${fmtWon(q.total)}<span style="font-size:12px;font-weight:600">원</span></div><div style="font-size:10.5px;color:var(--t3)">VAT 포함</div></div>
+        <div style="text-align:right;flex:none"><div style="font-size:17px;font-weight:800;color:var(--gd)">${fmtWon(q.total)}<span style="font-size:12px;font-weight:600">원</span></div><div style="font-size:10.5px;color:var(--t3)">VAT 포함</div>${_rem > 0 ? `<div style="font-size:11px;color:var(--gd);margin-top:5px">입금 ${fmtWon(_pa)}</div><div style="font-size:13.5px;font-weight:800;color:var(--red-t)">미수 ${fmtWon(_rem)}</div>` : (_pa > 0 ? `<div style="font-size:12px;font-weight:700;color:var(--gd);margin-top:5px"><i class="ti ti-check"></i> 결제완료</div>` : '')}</div>
       </div>
       <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${shipPill}</div>
       <div class="frm-foot" style="margin-top:9px;flex-wrap:wrap">
@@ -4906,9 +4912,9 @@ function collectBasinItems() {
   });
   return items;
 }
-function openBasinForm(id) {
+function openBasinForm(id, pre) {
   const b = id ? (state.basins || []).find(x => x.id === id) : null;
-  const v = b || {};
+  const v = b || pre || {};
   const rows = basinItems(v);
   const rowsHtml = (rows.length ? rows : [{}]).map(basinItemRowHtml).join('');
   openModal(`
