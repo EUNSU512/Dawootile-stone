@@ -3849,6 +3849,7 @@ function quoteCardHtml(q) {
         <button class="btn btn-sm" style="color:var(--blue)" onclick="quoteToShip('${q.id}')"><i class="ti ti-truck-delivery"></i>출고로</button>
         <button class="btn btn-sm btn-pri" onclick="printQuote('${q.id}')"><i class="ti ti-printer"></i>인쇄</button>
         <button class="btn btn-sm" onclick="downloadQuoteXls('${q.id}')"><i class="ti ti-file-spreadsheet"></i>엑셀</button>
+        <button class="btn btn-sm" onclick="downloadQuotePng('${q.id}')"><i class="ti ti-photo"></i>PNG</button>
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}')"><i class="ti ti-edit"></i>수정</button>
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}',true)" title="복사해 새 견적"><i class="ti ti-copy"></i></button>
         <button class="btn btn-sm" style="color:var(--red-t);margin-left:auto" onclick="delQuote('${q.id}')" title="견적 삭제"><i class="ti ti-trash"></i></button>
@@ -3905,16 +3906,18 @@ function renderQuote() {
     </div>
     ${body}`;
 }
-function printQuote(id) {
-  const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
+function quoteDocHtml(q) {
   const e = s => esc(s == null ? '' : String(s));
-  const items = q.items || []; const MIN = Math.max(8, items.length);
+  const items = q.items || []; const MIN = Math.max(6, items.length);
   let rows = items.map((it, i) => `<tr><td class="c">${i + 1}</td><td class="l">${e(it.name)}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}${it.unit ? ' ' + e(it.unit) : ''}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`).join('');
   for (let i = items.length; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
   const co = companyInfo();
-  const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>견적서 ${e(q.client)} ${e(q.docNo)}</title>
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>견적서 ${e(q.client)} ${e(q.docNo)}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@1.3.9/dist/web/static/pretendard.min.css">
-<style>*{box-sizing:border-box}body{font-family:'Pretendard Variable',Pretendard,'맑은 고딕','Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#201c17;margin:0;padding:30px 34px;position:relative;font-size:12.5px;-webkit-font-smoothing:antialiased}
+<style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff}
+@page{size:A4;margin:8mm}
+#page{width:718px;height:1047px;overflow:hidden;position:relative;margin:0 auto;background:#fff}
+#sheet{width:718px;padding:26px 28px;transform-origin:top left;font-family:'Pretendard Variable',Pretendard,'맑은 고딕','Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#201c17;font-size:12.5px;-webkit-font-smoothing:antialiased}
 .qhead{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #201c17;padding-bottom:13px}
 .qhead .brand{font-size:16px;font-weight:700;color:#201c17;letter-spacing:.3px}
 .qhead .brand small{display:block;font-size:9px;color:#b39a6f;font-weight:600;letter-spacing:4px;margin-top:4px}
@@ -3948,7 +3951,8 @@ function printQuote(id) {
 .notice .nh{background:#8a7350;color:#fff;font-weight:700;font-size:11.5px;padding:8px 13px;letter-spacing:1px}
 .notice ul{margin:0;padding:10px 12px 10px 30px;font-size:11px;line-height:1.75;color:#6b5a3c;font-weight:500;background:#faf6ee}
 .foot{margin-top:18px;border-top:1px solid #e6ddcf;padding-top:10px;font-size:9.5px;color:#b0a795;display:flex;justify-content:space-between;letter-spacing:.3px}
-@media print{body{padding:16px 18px}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body>
+@media print{html,body{background:#fff}#page{margin:0}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body>
+  <div id="page"><div id="sheet">
   <div class="qhead">
     <div class="brand">${e(co.name)}<small>CERAMIC &amp; STONE</small></div>
     <div class="title"><h1>견 적 서</h1><div class="en">QUOTATION</div></div>
@@ -3970,9 +3974,34 @@ function printQuote(id) {
   </div>
   ${hasBasinItems(items) ? `<div class="notice"><div class="nh">⚠ 세면대 주문제작 특이사항 (필독)</div><ul>${BASIN_NOTICE.map(l => `<li>${e(l)}</li>`).join('')}</ul></div>` : ''}
   <div class="foot"><span>※ 본 견적은 유효기간 내에서만 유효하며, 부가세 별도(공급가액 기준)로 산정되었습니다.</span><span>${e(co.name)}</span></div>
+  </div></div>
+  <script>window.addEventListener('load',function(){var s=document.getElementById('sheet');var a=1047;if(s&&s.scrollHeight>a){s.style.transform='scale('+(a/s.scrollHeight)+')';}});</script>
 </body></html>`;
+}
+function printQuote(id) {
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
   const w = window.open('', '_blank'); if (!w) { toast('팝업이 차단되었습니다. 팝업 허용 후 다시'); return; }
-  w.document.write(html); w.document.close(); w.focus(); setTimeout(() => { try { w.print(); } catch (e) { } }, 350);
+  w.document.write(quoteDocHtml(q)); w.document.close(); w.focus(); setTimeout(() => { try { w.print(); } catch (e) { } }, 500);
+}
+function downloadQuotePng(id) {
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
+  const run = () => {
+    const ifr = document.createElement('iframe'); ifr.setAttribute('aria-hidden', 'true'); ifr.style.cssText = 'position:fixed;left:-10000px;top:0;width:760px;height:1120px;border:0;background:#fff';
+    document.body.appendChild(ifr);
+    const d = ifr.contentDocument; d.open(); d.write(quoteDocHtml(q)); d.close();
+    setTimeout(async () => {
+      try {
+        const page = d.getElementById('page');
+        const canvas = await html2canvas(page, { scale: 2, backgroundColor: '#ffffff', width: 718, height: 1047, windowWidth: 760 });
+        const a = document.createElement('a'); a.download = '견적서_' + ((q.client || '').replace(/\s/g, '')) + '_' + (q.docNo || '') + '.png'; a.href = canvas.toDataURL('image/png'); document.body.appendChild(a); a.click(); a.remove();
+        toast('PNG 저장됨');
+      } catch (err) { toast('이미지 생성 실패 — 인쇄로 저장해 주세요'); }
+      finally { ifr.remove(); }
+    }, 750);
+  };
+  toast('이미지 생성 중…');
+  if (window.html2canvas) run();
+  else { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'; s.onload = run; s.onerror = () => toast('이미지 모듈 로딩 실패'); document.head.appendChild(s); }
 }
 function downloadQuoteXls(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
