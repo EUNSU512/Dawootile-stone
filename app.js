@@ -3411,6 +3411,13 @@ function quoteRecalc() {
   let supply = 0;
   document.querySelectorAll('#q-rows .q-row').forEach(r => { const qty = _numv(r.querySelector('.q-qty').value); const price = _numv(r.querySelector('.q-price').value); const amt = Math.round(qty * price); r.querySelector('.q-amt').textContent = fmtWon(amt); supply += amt; });
   document.querySelectorAll('.qx-row').forEach(r => { const qty = _numv(r.querySelector('.qx-qty').value); const price = _numv(r.querySelector('.qx-price').value); const amt = Math.round(qty * price); r.querySelector('.qx-amt').textContent = fmtWon(amt); supply += amt; });
+  const noteEl = el('q-basin-note');
+  if (noteEl) {
+    let basin = false;
+    document.querySelectorAll('#q-rows .q-row').forEach(r => { if ((r.querySelector('.q-mat').value || '').includes('세면대')) basin = true; });
+    document.querySelectorAll('.qx-row').forEach(r => { if ((r.getAttribute('data-name') || '').includes('세면대') && _numv(r.querySelector('.qx-qty').value) > 0) basin = true; });
+    noteEl.style.display = basin ? 'block' : 'none';
+  }
   const vat = Math.round(supply * 0.1), total = supply + vat;
   if (el('q-supply')) el('q-supply').textContent = fmtWon(supply);
   if (el('q-vat')) el('q-vat').textContent = fmtWon(vat);
@@ -3429,8 +3436,20 @@ const QUOTE_EXTRAS = [
   { name: '인덕션 타공', unit: 'EA' }, { name: '싱크볼 타공', unit: 'EA' },
   { name: '콘센트 타공', unit: 'EA' }, { name: '수전 타공', unit: 'EA' }, { name: '사각 타공', unit: 'EA' },
   { name: '운송비 (창고-공장)', unit: '회' }, { name: '운송비 (공장-현장)', unit: '회' },
-  { name: '실측비', unit: '회' }, { name: '시공비', unit: '식' }
+  { name: '실측비', unit: '회' }, { name: '시공비', unit: '식' },
+  { name: '세면대 비규격 주문제작', unit: 'EA' }
 ];
+/* 세면대 주문제작 견적 특이사항 (세면대 항목 포함 시 견적서에 강조 표기) */
+const BASIN_NOTICE = [
+  '발주 후 수정 불가',
+  '주문 제작 건은 납기까지 30~33일 정도 소요됩니다.',
+  '세면대 발주 1개 당 브라켓 1SET 포함되어 있으며, 이외 부속품은 별도 구매입니다. (별도 : 폽업, 수전, 트랩 등)',
+  '시공비, 운송비는 별도입니다.',
+  '조적벽 및 가벽에는 각관 하지를 짜놓으셔야 합니다. (동봉된 브라켓은 콘크리트 벽 설치용입니다.)',
+  '제작 방식 상 모든 세면대가 완벽히 동일한 컬러로 나올 수 없으며 (굽는 시간에 따라 색상에 다소 차이가 있음)',
+  '내부 볼의 깊이는 150MM 기준 +- 30MM의 오차가 발생할 수 있습니다.'
+];
+function hasBasinItems(items) { return (items || []).some(it => (it.name || '').includes('세면대')); }
 function extraPrices() { const m = (state.appmeta || []).find(x => x.key === 'extraPrices'); return (m && m.prices) || {}; }
 async function saveExtraPrices(prices) { const m = (state.appmeta || []).find(x => x.key === 'extraPrices'); if (m) await Store.update('appmeta', m.id, { prices }); else await Store.add('appmeta', { key: 'extraPrices', prices }); }
 function extraItemsList() {
@@ -3507,6 +3526,10 @@ function renderQuoteForm() {
             <div style="display:flex;gap:6px;font-size:11px;color:var(--t3);margin-bottom:5px;font-weight:600"><div style="flex:2.2">항목</div><div style="flex:1;text-align:right">수량</div><div style="width:24px;text-align:center">단위</div><div style="flex:1.3;text-align:right">단가</div><div style="flex:1.3;text-align:right">금액</div></div>
             ${extraItemsList().map(it => qxRowHtml(it, savedExtra[it.name])).join('')}
           </div>
+        </div>
+        <div id="q-basin-note" style="display:none;margin-bottom:10px;border:2px solid #c0341d;border-radius:10px;background:#fff5f5;padding:10px 12px">
+          <div style="font-weight:800;color:#c0341d;font-size:13px;margin-bottom:5px">⚠ 세면대 주문제작 특이사항 — 견적서에 자동으로 강조 표기됩니다</div>
+          <ul style="margin:0;padding-left:20px;font-size:12px;line-height:1.65;color:#8a1c10">${BASIN_NOTICE.map(l => `<li>${esc(l)}</li>`).join('')}</ul>
         </div>
         <div class="fld full" style="margin-bottom:10px"><label>비고 <span style="color:var(--t3);font-weight:500">(기본 양식은 견적 설정에서 관리)</span></label><textarea id="q-memo" lang="ko" placeholder="결제조건·납기 등" style="min-height:64px">${esc(editing ? (v.memo || '') : (v.memo || quoteMemoTemplate()))}</textarea></div>
         <div style="background:var(--soft);border-radius:11px;padding:12px 14px;max-width:360px;margin-left:auto">
@@ -3874,6 +3897,7 @@ table{border-collapse:collapse;width:100%}
     <tr class="tot"><td class="k">합계금액</td><td class="v">${fmtWon(q.total)} 원</td></tr>
   </table>
   ${q.memo ? `<div class="memo"><div class="mh">비 고</div><div class="mb">${e(q.memo)}</div></div>` : ''}
+  ${hasBasinItems(items) ? `<div style="margin-top:12px;border:2px solid #c0341d;border-radius:6px;overflow:hidden"><div style="background:#c0341d;color:#fff;font-weight:800;font-size:13px;padding:7px 10px">⚠ 세면대 주문제작 특이사항 (필독)</div><ul style="margin:0;padding:9px 9px 9px 27px;font-size:12px;line-height:1.75;color:#8a1c10;font-weight:600;background:#fff5f5">${BASIN_NOTICE.map(l => `<li>${e(l)}</li>`).join('')}</ul></div>` : ''}
   <div class="note">※ 본 견적은 유효기간 내에서만 유효하며, 부가세 별도(공급가액 기준) 산정되었습니다.</div>
 </body></html>`;
   const w = window.open('', '_blank'); if (!w) { toast('팝업이 차단되었습니다. 팝업 허용 후 다시'); return; }
@@ -3893,6 +3917,7 @@ function downloadQuoteXls(id) {
   html += `<tr><td colspan="5" style="border:0.5pt solid #cfd8d4;text-align:right;font-weight:bold;padding:6px 9px">부가세(10%)</td>${TD('<b>' + fmtWon(q.vat) + '</b>', R)}</tr>`;
   html += `<tr><td colspan="5" style="border:0.5pt solid #cfd8d4;background:#e1f5ee;text-align:right;font-weight:bold;padding:6px 9px">합계금액</td><td style="border:0.5pt solid #cfd8d4;background:#e1f5ee;text-align:right;font-weight:bold;padding:5px 9px">${fmtWon(q.total)}</td></tr></table>`;
   if (q.memo) html += `<table style="margin-top:8px"><tr><td style="font-weight:bold">비고 : ${esc(q.memo)}</td></tr></table>`;
+  if (hasBasinItems(q.items)) html += `<table style="margin-top:8px;border-collapse:collapse"><tr><td style="background:#c0341d;color:#fff;font-weight:bold;padding:6px 9px">⚠ 세면대 주문제작 특이사항 (필독)</td></tr>` + BASIN_NOTICE.map(l => `<tr><td style="border:0.5pt solid #e0b4ad;color:#8a1c10;font-weight:bold;padding:5px 9px">· ${esc(l)}</td></tr>`).join('') + `</table>`;
   html += `</body></html>`;
   const blob = new Blob(['﻿', html], { type: 'application/vnd.ms-excel' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '견적서_' + (q.client || '') + '_' + (q.date || todayStr()) + '.xls'; document.body.appendChild(a); a.click(); a.remove();
