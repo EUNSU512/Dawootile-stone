@@ -3533,6 +3533,13 @@ async function savePriceRow(itemName) {
   if (pl) await Store.update('priceList', pl.id, patch); else await Store.add('priceList', Object.assign({ itemName, dist: 0, agency: 0, interior: 0, consumer: 0 }, patch));
   const ok = row.querySelector('.qsp-ok'); if (ok) { ok.style.opacity = 1; setTimeout(() => { ok.style.opacity = 0; }, 1200); }
 }
+async function deletePriceRow(id, name) {
+  if (!id) return;
+  if (!confirm((name || '이 자재') + ' 단가를 삭제할까요?')) return;
+  await Store.remove('priceList', id);
+  toast('단가 삭제됨');
+  setTimeout(() => { const b = document.querySelector('#qs-prices tbody'); if (b) b.innerHTML = _qsPriceRowsHtml(); }, 250);
+}
 /* 엑셀/CSV 단가표 헤더 열 매핑 */
 function mapPriceCols(cells) {
   const m = { name: null, spec: null, dist: null, agency: null, interior: null, consumer: null, cost: null };
@@ -3609,7 +3616,7 @@ function _qsPriceRowsHtml() {
       <td><input class="qsp-int" inputmode="numeric" value="${esc(pl.interior || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
       <td><input class="qsp-con" inputmode="numeric" value="${esc(pl.consumer || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
       ${adm ? `<td><input class="qsp-cost" inputmode="numeric" value="${esc(pl.cost || '')}" onchange="savePriceRow('${nm}')" style="${inp};background:#fff6f6;border-color:#e6b0b0"></td>` : ''}
-      <td style="width:20px"><i class="ti ti-check qsp-ok" style="color:var(--gd);opacity:0;transition:opacity .2s"></i></td></tr>`; }).join('') || `<tr><td colspan="${cols}"><div class="empty" style="padding:14px">자재가 없습니다</div></td></tr>`;
+      <td style="width:46px;white-space:nowrap;text-align:center"><i class="ti ti-check qsp-ok" style="color:var(--gd);opacity:0;transition:opacity .2s"></i>${pl.id ? `<i class="ti ti-trash" onclick="deletePriceRow('${pl.id}','${nm}')" title="단가 삭제" style="color:#c0341d;cursor:pointer;margin-left:8px;font-size:16px"></i>` : ''}</td></tr>`; }).join('') || `<tr><td colspan="${cols}"><div class="empty" style="padding:14px">자재가 없습니다</div></td></tr>`;
 }
 function qsFilterClients(v) { filters.qsClientSearch = v; const c = el('qs-clients'); if (c) c.innerHTML = _qsClientRowsHtml(); }
 function qsFilterPrices(v) { filters.qsMatSearch = v; const b = document.querySelector('#qs-prices tbody'); if (b) b.innerHTML = _qsPriceRowsHtml(); }
