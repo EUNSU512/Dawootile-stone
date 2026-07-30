@@ -3852,6 +3852,7 @@ function quoteCardHtml(q) {
         <button class="btn btn-sm btn-pri" onclick="printQuote('${q.id}')"><i class="ti ti-printer"></i>인쇄</button>
         <button class="btn btn-sm" onclick="downloadQuoteXls('${q.id}')"><i class="ti ti-file-spreadsheet"></i>엑셀</button>
         <button class="btn btn-sm" onclick="downloadQuotePng('${q.id}')"><i class="ti ti-photo"></i>PNG</button>
+        <button class="btn btn-sm" onclick="copyQuoteImage('${q.id}')"><i class="ti ti-clipboard"></i>복사</button>
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}')"><i class="ti ti-edit"></i>수정</button>
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}',true)" title="복사해 새 견적"><i class="ti ti-copy"></i></button>
         <button class="btn btn-sm" style="color:var(--red-t);margin-left:auto" onclick="delQuote('${q.id}')" title="견적 삭제"><i class="ti ti-trash"></i></button>
@@ -4004,6 +4005,31 @@ function downloadQuotePng(id) {
   toast('이미지 생성 중…');
   if (window.html2canvas) run();
   else { const s = document.createElement('script'); s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'; s.onload = run; s.onerror = () => toast('이미지 모듈 로딩 실패'); document.head.appendChild(s); }
+}
+function copyQuoteImage(id) {
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
+  if (!(navigator.clipboard && window.ClipboardItem)) { toast('이 브라우저는 이미지 복사를 지원하지 않습니다 — PNG로 저장해 주세요'); return; }
+  toast('이미지 복사 중…');
+  const makeBlob = () => new Promise((resolve, reject) => {
+    const render = () => {
+      const ifr = document.createElement('iframe'); ifr.style.cssText = 'position:fixed;left:-10000px;top:0;width:760px;height:1120px;border:0;background:#fff'; document.body.appendChild(ifr);
+      const d = ifr.contentDocument; d.open(); d.write(quoteDocHtml(q)); d.close();
+      setTimeout(async () => {
+        try {
+          const page = d.getElementById('page');
+          const canvas = await html2canvas(page, { scale: 2, backgroundColor: '#ffffff', width: 718, height: 1047, windowWidth: 760 });
+          canvas.toBlob(b => { ifr.remove(); b ? resolve(b) : reject(new Error('blob')); }, 'image/png');
+        } catch (e) { ifr.remove(); reject(e); }
+      }, 750);
+    };
+    if (window.html2canvas) render();
+    else { const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'; sc.onload = render; sc.onerror = () => reject(new Error('load')); document.head.appendChild(sc); }
+  });
+  try {
+    navigator.clipboard.write([new ClipboardItem({ 'image/png': makeBlob() })])
+      .then(() => toast('이미지가 복사되었습니다 · Ctrl+V로 붙여넣기'))
+      .catch(() => toast('복사 실패 — PNG로 저장해 주세요'));
+  } catch (e) { toast('복사 실패 — PNG로 저장해 주세요'); }
 }
 function downloadQuoteXls(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
