@@ -30,8 +30,8 @@ function prefillEmail() {
 function cref(name) { return db.collection('teams').doc(TEAM).collection(name); }
 
 const COLLS = ['members', 'sites', 'inventory', 'holdings', 'transactions', 'specs', 'factories', 'teams', 'suppliers', 'clients', 'issues', 'restocks', 'basins', 'holdRequests', 'shipments', 'chulgoReqs', 'chulgoHandlers', 'quotes', 'clientPrices', 'priceList', 'appmeta'];
-const CTYPES = ['유통', '대리점', '인테리어', '소비자'];   // 거래처 유형
-function ctypeKey(t) { return t === '유통' ? 'dist' : (t === '대리점' ? 'agency' : (t === '인테리어' ? 'interior' : 'consumer')); }
+const CTYPES = ['유통', '대리점', '인테리어', '소비자', '별도'];   // 거래처 유형 (별도 = 예외 업체 단가)
+function ctypeKey(t) { return t === '유통' ? 'dist' : (t === '대리점' ? 'agency' : (t === '인테리어' ? 'interior' : (t === '별도' ? 'special' : 'consumer'))); }
 
 // 로컬(미리보기) 모드용 - 같은 기기의 다른 탭끼리 실시간 반영
 const bc = ('BroadcastChannel' in window) ? new BroadcastChannel('dws') : null;
@@ -3518,7 +3518,7 @@ async function saveQuoteMemo() {
   toast('비고 기본 양식 저장됨');
 }
 async function setClientTypeSetting(id, type) { try { await Store.update('clients', id, { ctype: type }); } catch (e) { } }
-function _ctypeNorm(v) { const s = String(v == null ? '' : v).replace(/\s/g, ''); if (!s) return ''; if (/유통|도매/.test(s)) return '유통'; if (/대리점/.test(s)) return '대리점'; if (/인테리어|시공/.test(s)) return '인테리어'; if (/소비자|소매|일반|개인/.test(s)) return '소비자'; return ''; }
+function _ctypeNorm(v) { const s = String(v == null ? '' : v).replace(/\s/g, ''); if (!s) return ''; if (/유통|도매/.test(s)) return '유통'; if (/대리점/.test(s)) return '대리점'; if (/인테리어|시공/.test(s)) return '인테리어'; if (/별도|이외|특판|예외/.test(s)) return '별도'; if (/소비자|소매|일반|개인/.test(s)) return '소비자'; return ''; }
 /* 거래처 유형 엑셀/CSV 업로드 → clients.ctype 학습 */
 function clientTypeImport(input) {
   const f = input.files && input.files[0]; if (!f) return;
@@ -3555,14 +3555,13 @@ function clientTypeImport(input) {
 }
 /* 거래처 유형 양식(현재값 채워서) 엑셀 다운로드 */
 function clientTypeTemplate() {
-  const TH = t => `<th style="background:#0F6E56;color:#fff;font-weight:bold;border:0.5pt solid #0a4f3e;padding:6px 9px">${t}</th>`;
-  const TD = t => `<td style="border:0.5pt solid #cfd8d4;padding:5px 9px">${t}</td>`;
+  if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후 다시'); return; }
   const clients = (state.clients || []).slice().sort((a, b) => (a.value || '').localeCompare(b.value || ''));
-  const body = clients.map(c => `<tr>${TD(esc(c.value || ''))}${TD(esc(c.ctype || ''))}</tr>`).join('');
-  const html = `<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table style="border-collapse:collapse"><tr>${TH('거래처명')}${TH('유형')}</tr>${body}</table></body></html>`;
-  const blob = new Blob(['﻿', html], { type: 'application/vnd.ms-excel' });
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '거래처유형양식_' + todayStr() + '.xls'; document.body.appendChild(a); a.click(); a.remove();
-  toast('거래처 유형 양식 다운로드 · 유형(유통/대리점/인테리어/소비자) 채워 다시 업로드');
+  const aoa = [['거래처명', '유형']].concat(clients.map(c => [c.value || '', c.ctype || '']));
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '거래처유형');
+  XLSX.writeFile(wb, '거래처유형양식_' + todayStr() + '.xlsx');
+  toast('거래처 유형 양식(.xlsx) 다운로드 · 유형(유통/대리점/인테리어/소비자/별도) 채워 다시 업로드');
 }
 /* 견적/단가 대상 품목: 재고 + 단가표(priceList) 통합 목록 */
 function quotePriceItems() {
@@ -3574,6 +3573,7 @@ function quotePriceItems() {
 async function savePriceRow(itemName) {
   const row = document.querySelector(`.qs-prow[data-nm="${CSS.escape(itemName)}"]`); if (!row) return;
   const patch = { dist: _numv(row.querySelector('.qsp-dist').value), agency: _numv(row.querySelector('.qsp-agy').value), interior: _numv(row.querySelector('.qsp-int').value), consumer: _numv(row.querySelector('.qsp-con').value) };
+  const spcEl = row.querySelector('.qsp-spc'); if (spcEl) patch.special = _numv(spcEl.value);
   const costEl = row.querySelector('.qsp-cost'); if (costEl && isAdmin()) patch.cost = _numv(costEl.value);   // 원가는 관리자만 저장
   const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(itemName));
   if (pl) await Store.update('priceList', pl.id, patch); else await Store.add('priceList', Object.assign({ itemName, dist: 0, agency: 0, interior: 0, consumer: 0 }, patch));
@@ -3588,13 +3588,14 @@ async function deletePriceRow(id, name) {
 }
 /* 엑셀/CSV 단가표 헤더 열 매핑 */
 function mapPriceCols(cells) {
-  const m = { name: null, spec: null, dist: null, agency: null, interior: null, consumer: null, cost: null };
+  const m = { name: null, spec: null, dist: null, agency: null, interior: null, consumer: null, special: null, cost: null };
   cells.forEach((c, i) => { const s = String(c || '').replace(/\s/g, '');
     if (m.name == null && /(자재명|품목명|제품명|자재|품목|품명|제품|명칭)/.test(s)) m.name = i;
     if (m.spec == null && /(규격|사이즈|치수|size)/i.test(s)) m.spec = i;
     if (m.dist == null && /(유통|도매)/.test(s)) m.dist = i;
     if (m.agency == null && /대리점/.test(s)) m.agency = i;
     if (m.interior == null && /(인테리어|시공)/.test(s)) m.interior = i;
+    if (m.special == null && /(별도|이외|특판)/.test(s)) m.special = i;
     if (m.consumer == null && /(소비자|소매|일반|판매가|판매)/.test(s)) m.consumer = i;
     if (m.cost == null && /(원가|매입|cost)/i.test(s)) m.cost = i;
   });
@@ -3616,7 +3617,7 @@ function priceListImport(input) {
       let n = 0; const adm = isAdmin();
       for (let r = hi + 1; r < rows.length; r++) {
         const cells = rows[r] || []; const name = String(cells[map.name] == null ? '' : cells[map.name]).trim(); if (!name) continue;
-        const patch = {}; [['dist', map.dist], ['agency', map.agency], ['interior', map.interior], ['consumer', map.consumer]].forEach(([k, ci]) => { if (ci != null) { const v = _numv(cells[ci]); if (v > 0) patch[k] = v; } });
+        const patch = {}; [['dist', map.dist], ['agency', map.agency], ['interior', map.interior], ['consumer', map.consumer], ['special', map.special]].forEach(([k, ci]) => { if (ci != null) { const v = _numv(cells[ci]); if (v > 0) patch[k] = v; } });
         if (map.cost != null && adm) { const cv = _numv(cells[map.cost]); if (cv > 0) patch.cost = cv; }   // 원가는 관리자만
         if (map.spec != null) { const sp = String(cells[map.spec] == null ? '' : cells[map.spec]).trim(); if (sp) patch.spec = sp; }
         if (!Object.keys(patch).length) continue;
@@ -3631,15 +3632,15 @@ function priceListImport(input) {
 }
 /* 단가표 양식(현재값 채워서) 엑셀 다운로드 — 수정 후 다시 업로드 */
 function priceListTemplate() {
+  if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후 다시'); return; }
   const adm = isAdmin();
-  const TH = t => `<th style="background:#0F6E56;color:#fff;font-weight:bold;border:0.5pt solid #0a4f3e;padding:6px 9px">${t}</th>`;
-  const TD = (t, r) => `<td style="border:0.5pt solid #cfd8d4;padding:5px 9px;${r ? 'text-align:right' : ''}">${t}</td>`;
   const items = quotePriceItems();
-  const body = items.map(i => { const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(i.name)) || {}; return `<tr>${TD(esc(i.name))}${TD(esc(i.spec || ''))}${TD(pl.dist || '', 1)}${TD(pl.agency || '', 1)}${TD(pl.interior || '', 1)}${TD(pl.consumer || '', 1)}${adm ? TD(pl.cost || '', 1) : ''}</tr>`; }).join('');
-  const html = `<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body><table style="border-collapse:collapse"><tr>${TH('자재명')}${TH('규격')}${TH('유통')}${TH('대리점')}${TH('인테리어')}${TH('소비자')}${adm ? TH('원가') : ''}</tr>${body}</table></body></html>`;
-  const blob = new Blob(['﻿', html], { type: 'application/vnd.ms-excel' });
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '단가표양식_' + todayStr() + '.xls'; document.body.appendChild(a); a.click(); a.remove();
-  toast('단가표 양식 다운로드 · 수정 후 다시 업로드하세요');
+  const head = ['자재명', '규격', '유통', '대리점', '인테리어', '소비자', '별도'].concat(adm ? ['원가'] : []);
+  const aoa = [head].concat(items.map(i => { const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(i.name)) || {}; const row = [i.name, i.spec || '', pl.dist || '', pl.agency || '', pl.interior || '', pl.consumer || '', pl.special || '']; if (adm) row.push(pl.cost || ''); return row; }));
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '단가표');
+  XLSX.writeFile(wb, '단가표양식_' + todayStr() + '.xlsx');
+  toast('단가표 양식(.xlsx) 다운로드 · 수정 후 다시 업로드하세요');
 }
 function _qsClientRowsHtml() {
   const clSearch = (filters.qsClientSearch || '').trim().toLowerCase();
@@ -3654,13 +3655,14 @@ function _qsPriceRowsHtml() {
   let mats = quotePriceItems();
   if (matSearch) mats = mats.filter(i => (i.name || '').toLowerCase().includes(matSearch) || (i.spec || '').toLowerCase().includes(matSearch));
   const inp = 'width:100%;font-size:13px;padding:7px 4px;border:1.5px solid var(--bd2);border-radius:8px;text-align:right';
-  const cols = adm ? 7 : 6;
+  const cols = adm ? 8 : 7;
   return mats.slice(0, 150).map(i => { const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(i.name)) || {}; const nm = esc(i.name).replace(/'/g, "\\'");
     return `<tr class="qs-prow" data-nm="${esc(i.name)}"><td style="text-align:left"><b>${esc(i.name)}</b>${i.spec ? `<div style="font-size:10.5px;color:var(--t3)">${esc(i.spec)}</div>` : ''}</td>
       <td><input class="qsp-dist" inputmode="numeric" value="${esc(pl.dist || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
       <td><input class="qsp-agy" inputmode="numeric" value="${esc(pl.agency || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
       <td><input class="qsp-int" inputmode="numeric" value="${esc(pl.interior || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
       <td><input class="qsp-con" inputmode="numeric" value="${esc(pl.consumer || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
+      <td><input class="qsp-spc" inputmode="numeric" value="${esc(pl.special || '')}" onchange="savePriceRow('${nm}')" style="${inp};background:#eef5ff;border-color:#b8d4ee"></td>
       ${adm ? `<td><input class="qsp-cost" inputmode="numeric" value="${esc(pl.cost || '')}" onchange="savePriceRow('${nm}')" style="${inp};background:#fff6f6;border-color:#e6b0b0"></td>` : ''}
       <td style="width:46px;white-space:nowrap;text-align:center"><i class="ti ti-check qsp-ok" style="color:var(--gd);opacity:0;transition:opacity .2s"></i>${pl.id ? `<i class="ti ti-trash" onclick="deletePriceRow('${pl.id}','${nm}')" title="단가 삭제" style="color:#c0341d;cursor:pointer;margin-left:8px;font-size:16px"></i>` : ''}</td></tr>`; }).join('') || `<tr><td colspan="${cols}"><div class="empty" style="padding:14px">자재가 없습니다</div></td></tr>`;
 }
@@ -3696,10 +3698,10 @@ function renderQuoteSettings() {
           <button class="btn btn-sm" onclick="priceListTemplate()"><i class="ti ti-download"></i> 양식 다운로드</button>
           <input type="file" id="pl-file" accept=".xlsx,.xls,.csv" style="display:none" onchange="priceListImport(this)">
         </div>
-        <div style="font-size:11px;color:var(--t3);margin-bottom:8px">엑셀/CSV 열: <b>자재명 · 규격 · 유통 · 대리점 · 인테리어 · 소비자</b> (열 이름만 맞으면 순서 무관). PDF는 자동 인식이 안 되니 엑셀/CSV로 올려주세요.</div>
+        <div style="font-size:11px;color:var(--t3);margin-bottom:8px">엑셀/CSV 열: <b>자재명 · 규격 · 유통 · 대리점 · 인테리어 · 소비자 · 별도</b> (열 이름만 맞으면 순서 무관). <b style="color:#1a6dc0">별도</b>=예외 업체(신성그룹·현대엘앤씨 등) 단가. PDF는 자동 인식이 안 되니 엑셀/CSV로 올려주세요.</div>
         <div class="search-box" style="margin-bottom:8px"><i class="ti ti-search"></i><input placeholder="자재명·규격 검색" value="${esc(filters.qsMatSearch || '')}" oninput="qsFilterPrices(this.value)" autocomplete="off" lang="ko"></div>
         <div data-keepscroll id="qs-prices" style="max-height:52vh;overflow:auto">
-          <table class="tbl"><thead><tr><th style="text-align:left">자재</th><th>유통</th><th>대리점</th><th>인테리어</th><th>소비자</th>${isAdmin() ? '<th style="color:#c0341d">원가🔒</th>' : ''}<th></th></tr></thead><tbody>${_qsPriceRowsHtml()}</tbody></table>
+          <table class="tbl"><thead><tr><th style="text-align:left">자재</th><th>유통</th><th>대리점</th><th>인테리어</th><th>소비자</th><th style="color:#1a6dc0">별도</th>${isAdmin() ? '<th style="color:#c0341d">원가🔒</th>' : ''}<th></th></tr></thead><tbody>${_qsPriceRowsHtml()}</tbody></table>
         </div>
         <div style="font-size:11px;color:var(--t3);margin-top:6px">단가는 칸을 벗어나면(Tab/클릭) 자동 저장됩니다. 상위 120개 표시 — 검색으로 좁혀주세요.</div>
       </div>
