@@ -3423,6 +3423,18 @@ function quoteCancel() { filters.quoteEdit = ''; filters.quoteCopy = false; rend
 const QUOTE_EXTRAS = ['재단비 12T', '재단비 6T', '사선 재단', '고스라', '뒷도메', '배면 연마', '인덕션 타공', '싱크볼 타공', '콘센트 타공', '수전 타공', '사각 타공', '운송비 (창고-공장)', '운송비 (공장-현장)', '실측비', '시공비'];
 function extraPrices() { const m = (state.appmeta || []).find(x => x.key === 'extraPrices'); return (m && m.prices) || {}; }
 async function saveExtraPrices(prices) { const m = (state.appmeta || []).find(x => x.key === 'extraPrices'); if (m) await Store.update('appmeta', m.id, { prices }); else await Store.add('appmeta', { key: 'extraPrices', prices }); }
+function extraItemsList() { const m = (state.appmeta || []).find(x => x.key === 'extraItems'); const arr = (m && Array.isArray(m.items)) ? m.items : null; return (arr && arr.length) ? arr : QUOTE_EXTRAS.slice(); }
+async function saveExtraItems(items) { const m = (state.appmeta || []).find(x => x.key === 'extraItems'); if (m) await Store.update('appmeta', m.id, { items }); else await Store.add('appmeta', { key: 'extraItems', items }); }
+async function saveExtraPrice(name, val) { const p = Object.assign({}, extraPrices()); const v = _numv(val); if (v > 0) p[name] = v; else delete p[name]; await saveExtraPrices(p); toast('단가 저장됨'); }
+async function addExtraItem() { const inpEl = el('qe-new'); const nm = (inpEl && inpEl.value || '').trim(); if (!nm) return; const list = extraItemsList().slice(); if (list.some(x => _normName(x) === _normName(nm))) { toast('이미 있는 항목입니다'); return; } list.push(nm); await saveExtraItems(list); if (inpEl) inpEl.value = ''; toast('항목 추가됨'); setTimeout(() => { if (filters.quoteSettings) renderQuoteSettings(); }, 300); }
+async function delExtraItem(name) { if (!confirm(name + ' 항목을 삭제할까요?')) return; const list = extraItemsList().filter(x => _normName(x) !== _normName(name)); await saveExtraItems(list); const p = Object.assign({}, extraPrices()); delete p[name]; await saveExtraPrices(p); toast('삭제됨'); setTimeout(() => { if (filters.quoteSettings) renderQuoteSettings(); }, 300); }
+function _qsExtraRowsHtml() {
+  const prices = extraPrices(); const inp = 'width:120px;font-size:13px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px;text-align:right';
+  return extraItemsList().map(nm => { const e = esc(nm).replace(/'/g, "\\'");
+    return `<div class="mem" style="display:flex;align-items:center;gap:8px"><div class="info" style="flex:1;min-width:0"><div class="nm">${esc(nm)}</div></div>
+      <input class="qe-price" inputmode="numeric" placeholder="단가" value="${esc(prices[nm] || '')}" onchange="saveExtraPrice('${e}',this.value)" style="${inp}">
+      <i class="ti ti-trash" onclick="delExtraItem('${e}')" title="항목 삭제" style="color:#c0341d;cursor:pointer;font-size:16px"></i></div>`; }).join('');
+}
 function qxRowHtml(name, d) {
   const inp = 'font-size:14px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px';
   const price = (d && d.price != null && d.price !== '') ? d.price : (extraPrices()[name] || '');
@@ -3439,7 +3451,7 @@ function renderQuoteForm() {
   const copy = !!filters.quoteCopy;
   const q = id ? (state.quotes || []).find(x => x.id === id) : null; const v = q || {};
   _qN = 0;
-  const extraSet = new Set(QUOTE_EXTRAS); const savedExtra = {};
+  const extraSet = new Set(extraItemsList()); const savedExtra = {};
   (v.items || []).forEach(it => { if (extraSet.has(it.name)) savedExtra[it.name] = { qty: it.qty, price: it.price }; });
   const matItems = (v.items || []).filter(it => !extraSet.has(it.name));
   const rows = (matItems.length ? matItems : [{}]).map(qRowHtml).join('');
@@ -3467,7 +3479,7 @@ function renderQuoteForm() {
         <div class="fld full" style="margin-bottom:10px"><label>부대비용 · 가공 <span style="color:var(--t3);font-weight:500">(수량 입력한 항목만 견적서에 표시됩니다)</span></label>
           <div style="border:1px solid var(--bd2);border-radius:10px;padding:9px 11px">
             <div style="display:flex;gap:6px;font-size:11px;color:var(--t3);margin-bottom:5px;font-weight:600"><div style="flex:2.2">항목</div><div style="flex:1;text-align:right">수량</div><div style="flex:1.3;text-align:right">단가</div><div style="flex:1.3;text-align:right">금액</div></div>
-            ${QUOTE_EXTRAS.map(nm => qxRowHtml(nm, savedExtra[nm])).join('')}
+            ${extraItemsList().map(nm => qxRowHtml(nm, savedExtra[nm])).join('')}
           </div>
         </div>
         <div class="fld full" style="margin-bottom:10px"><label>비고 <span style="color:var(--t3);font-weight:500">(기본 양식은 견적 설정에서 관리)</span></label><textarea id="q-memo" lang="ko" placeholder="결제조건·납기 등" style="min-height:64px">${esc(editing ? (v.memo || '') : (v.memo || quoteMemoTemplate()))}</textarea></div>
@@ -3724,6 +3736,15 @@ function renderQuoteSettings() {
         <div style="font-size:11px;color:var(--t3);margin-bottom:8px">엑셀/CSV 열: <b>거래처명 · 유형</b> (유형 = 유통/대리점/인테리어/소비자). 없는 거래처는 자동 등록됩니다.</div>
         <div class="search-box" style="margin-bottom:8px"><i class="ti ti-search"></i><input placeholder="거래처 검색" value="${esc(filters.qsClientSearch || '')}" oninput="qsFilterClients(this.value)" autocomplete="off" lang="ko"></div>
         <div data-keepscroll id="qs-clients" style="max-height:300px;overflow:auto;border:0.5px solid var(--bd);border-radius:10px;padding:2px 8px">${_qsClientRowsHtml()}</div>
+      </div>
+      <div class="card" style="margin-bottom:12px;padding:13px 15px">
+        <div class="card-h"><h3><i class="ti ti-tools"></i>부대비용 · 가공 단가</h3><span class="more" style="font-size:11px;color:var(--t3)">견적 작성 시 자동 표시</span></div>
+        <div style="font-size:11.5px;color:var(--t3);margin-bottom:8px">기본 단가를 미리 저장하면 견적 작성 시 자동으로 채워집니다. 항목을 추가·삭제할 수 있습니다.</div>
+        <div id="qs-extras" data-keepscroll style="max-height:340px;overflow:auto;border:0.5px solid var(--bd);border-radius:10px;padding:2px 8px">${_qsExtraRowsHtml()}</div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <input id="qe-new" lang="ko" placeholder="새 항목명 (예: 모서리 가공)" autocomplete="off" style="flex:1;font-size:13.5px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:8px">
+          <button class="btn btn-sm btn-pri" onclick="addExtraItem()"><i class="ti ti-plus"></i>항목 추가</button>
+        </div>
       </div>
       <div class="card" style="padding:13px 15px">
         <div class="card-h"><h3><i class="ti ti-currency-won"></i>자재별 유형단가</h3><span class="more" style="font-size:11px;color:var(--t3)">칸에 입력하면 자동 저장</span></div>
