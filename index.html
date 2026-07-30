@@ -290,6 +290,22 @@ body.cust-mode .wrap{padding-bottom:24px}
 .fld input:focus,.fld select:focus,.fld textarea:focus{outline:none;border-color:var(--g);box-shadow:0 0 0 3px var(--gl)}
 .inp{font-size:14px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:9px;background:#fff;color:var(--t1);width:100%;font-family:inherit;min-width:0}
 .inp:focus{outline:none;border-color:var(--g);box-shadow:0 0 0 3px var(--gl)}
+.perm-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;gap:8px}
+.perm-quick{display:flex;gap:6px;flex:none}
+.perm-quick button{font-size:11px;padding:5px 10px;border:1.5px solid var(--bd2);border-radius:8px;background:#fff;color:var(--t2);font-weight:600;cursor:pointer}
+.perm-quick button:active{background:var(--soft)}
+.perm-grid{display:flex;flex-direction:column;gap:6px}
+.perm-row{display:flex;align-items:center;justify-content:space-between;padding:9px 12px;border:1.5px solid var(--bd);border-radius:11px;background:#fff}
+.perm-row.sens{border-color:#e7d3a4;background:#fbf6ea}
+.perm-lab{display:flex;align-items:center;gap:9px;font-size:14px;font-weight:600;color:var(--t1)}
+.perm-lab i{font-size:17px;color:var(--t2)}
+.perm-lab .pbadge{font-size:10px;font-weight:700;color:#a2740f;background:#f4e4bf;padding:1px 7px;border-radius:6px}
+.swt{position:relative;display:inline-block;width:46px;height:27px;flex:none}
+.swt input{opacity:0;width:0;height:0;position:absolute}
+.swt .track{position:absolute;inset:0;background:#cdd2d8;border-radius:20px;transition:.18s;cursor:pointer}
+.swt .track::before{content:"";position:absolute;width:21px;height:21px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.18s;box-shadow:0 1px 3px rgba(0,0,0,.28)}
+.swt input:checked + .track{background:var(--g)}
+.swt input:checked + .track::before{transform:translateX(19px)}
 .chk{display:flex;align-items:center;gap:9px;padding:11px 12px;border:1.5px solid var(--bd2);border-radius:var(--r);font-size:13.5px;font-weight:600;cursor:pointer}
 .chk input{width:19px;height:19px;accent-color:var(--g)}
 .chk.on{border-color:var(--g);background:var(--gl2)}

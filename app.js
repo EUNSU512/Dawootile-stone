@@ -129,6 +129,8 @@ function isCrewRole() { return me && me.role === 'crew'; }  // 시공팀 — 자
 function isRestrictedRole() { return isCustomerRole() || isCrewRole(); }
 /* ===== 메뉴 접근 권한 (직원별) ===== */
 const TAB_LABELS = { home: '홈', sites: '현장', stock: '재고·입고', ship: '출고', chulgo: '출고관리', hold: '홀딩', basin: '세면대 발주', quote: '견적서', clients: '거래처', settle: '정산', settings: '설정' };
+const TAB_ICONS = { sites: 'ti-building-community', stock: 'ti-packages', ship: 'ti-truck-delivery', chulgo: 'ti-clipboard-list', hold: 'ti-lock-square-rounded', basin: 'ti-bath', quote: 'ti-file-invoice', clients: 'ti-users', settle: 'ti-report-money' };
+function menuPermAll(on) { document.querySelectorAll('.m-menu').forEach(c => { c.checked = !!on; }); }
 const ALL_TABS = ['home', 'sites', 'stock', 'ship', 'chulgo', 'hold', 'basin', 'quote', 'clients', 'settle', 'settings'];
 const ALWAYS_TABS = ['home', 'settings'];
 const RESTRICTED_TABS = ['settle'];
@@ -951,6 +953,7 @@ function render() {
   if (Object.keys(_keep).length) requestAnimationFrame(() => { for (const id in _keep) { const e = el(id); if (e) e.scrollTop = _keep[id]; } });
   if (isCustomerRole()) { renderCustomerStock(); return; }   // 고객: 재고 조회 전용
   if (isCrewRole()) { renderCrewSchedule(); return; }        // 시공팀: 시공 스케줄 전용
+  applyMenuPerms();
   if (tab === 'home') renderHome();
   else if (tab === 'sites') renderSites();
   else if (tab === 'stock') renderStock();
@@ -6865,8 +6868,10 @@ function openMemberForm(id) {
       <div class="fld full"><label>이름<span class="req">*</span></label><input id="m-name" value="${esc(v.name || '')}" placeholder="이름"></div>
       <div class="fld"><label>권한</label><select id="m-role"><option value="staff" ${v.role === 'staff' ? 'selected' : ''}>직원</option><option value="admin" ${v.role === 'admin' ? 'selected' : ''}>관리자</option><option value="customer" ${v.role === 'customer' ? 'selected' : ''}>고객(거래처) · 재고조회만</option><option value="crew" ${v.role === 'crew' ? 'selected' : ''}>시공팀 · 시공 스케줄만</option></select></div>
       <div class="fld full"><label>로그인 이메일<span class="req">*</span></label><input id="m-email" type="email" value="${esc(v.email || '')}" autocapitalize="none" spellcheck="false" placeholder="예) hong@dawoo.com"></div>
-      <div class="fld full"><label><i class="ti ti-lock-access"></i> 메뉴 접근 권한 <span style="color:var(--t3);font-weight:500">— 직원 권한일 때 적용 (관리자는 전체 접근)</span></label>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">${ALL_TABS.filter(t => !ALWAYS_TABS.includes(t)).map(t => `<label style="display:flex;align-items:center;gap:5px;font-size:13px;font-weight:500;background:var(--soft);padding:8px 9px;border-radius:8px;cursor:pointer"><input type="checkbox" class="m-menu" value="${t}" ${curMenus.includes(t) ? 'checked' : ''}>${TAB_LABELS[t]}${RESTRICTED_TABS.includes(t) ? ' 🔒' : ''}</label>`).join('')}</div></div>
+      <div class="fld full"><div class="perm-head"><label style="margin:0"><i class="ti ti-lock-access"></i> 메뉴 접근 권한 <span style="color:var(--t3);font-weight:500">— 직원 권한일 때 적용</span></label>
+        <div class="perm-quick"><button type="button" onclick="menuPermAll(true)">전체 허용</button><button type="button" onclick="menuPermAll(false)">전체 해제</button></div></div>
+        <div class="perm-grid">${ALL_TABS.filter(t => !ALWAYS_TABS.includes(t)).map(t => { const sens = RESTRICTED_TABS.includes(t); return `<div class="perm-row${sens ? ' sens' : ''}"><span class="perm-lab"><i class="ti ${TAB_ICONS[t] || 'ti-square'}"></i>${TAB_LABELS[t]}${sens ? '<span class="pbadge">민감</span>' : ''}</span><label class="swt"><input type="checkbox" class="m-menu" value="${t}" ${curMenus.includes(t) ? 'checked' : ''}><span class="track"></span></label></div>`; }).join('')}</div>
+        <div style="font-size:11px;color:var(--t3);margin-top:7px;line-height:1.5">· 홈 · 설정은 항상 접근 가능 · 관리자는 전체 접근 · <b>정산</b>은 민감 정보라 기본 꺼짐</div></div>
 
     </div>
     ${m && v.email ? `<div class="fld full" style="margin-bottom:12px"><label><i class="ti ti-key" style="font-size:13px;color:var(--blue)"></i> 비밀번호 변경 <span style="color:var(--t3);font-weight:500">— 메일 없이 바로 적용(가메일 계정 가능)</span></label>
