@@ -4354,9 +4354,21 @@ function quoteCardHtml(q) {
       </div></div>`;
 }
 let _costSupply = 0;
-const GUBUN = ['자재', '운송', '부속', '기타'];   // 가공은 라인이 아니라 공장 견적 총액으로 별도 입력
+let _costRev = { mat: 0, proc: 0, cons: 0, trans: 0 };
+function marginCat(name) { const n = name || ''; if (/운송|배송|운반/.test(n)) return '운송'; if (/재단|타공|고스라|뒷도|배면|워터젯|사선|모서리|가공|연마|코너/.test(n)) return '가공'; if (/시공|실측|설치/.test(n)) return '시공'; return '자재'; }
+function quoteMarginBreakdown(q) {
+  const rev = { 자재: 0, 가공: 0, 시공: 0, 운송: 0 };
+  (q.items || []).forEach(it => { rev[marginCat(it.name)] += Math.round(+it.amt || 0); });
+  const cost = { 자재: 0, 가공: +q.processCost || 0, 시공: 0, 운송: 0 };
+  (q.costLines || []).forEach(l => { const c = +l.cost || 0; if (l.gubun === '운송') cost.운송 += c; else if (l.gubun === '시공') cost.시공 += c; else cost.자재 += c; });
+  const cats = ['자재', '가공', '시공', '운송']; const out = {}; let rt = 0, ct = 0;
+  cats.forEach(c => { out[c] = { rev: rev[c], cost: cost[c], margin: rev[c] - cost[c] }; rt += rev[c]; ct += cost[c]; });
+  out['총'] = { rev: rt, cost: ct, margin: rt - ct };
+  return out;
+}
+const GUBUN = ['자재', '운송', '시공', '부속', '기타'];   // 가공은 공장 견적 총액으로 별도 입력
 function hebeFromSpec(spec) { const m = (spec || '').match(/(\d{3,4})\s*[*xX×]\s*(\d{3,4})/); if (m) { return +((+m[1] / 1000) * (+m[2] / 1000)).toFixed(2); } return ''; }
-function costGubunOf(name) { const n = (name || ''); if (/운송/.test(n)) return '운송'; if (/재단|타공|고스라|뒷도|배면|워터젯|사선|모서리|가공|연마/.test(n)) return '가공'; if (/시공|실측/.test(n)) return '기타'; return '자재'; }
+function costGubunOf(name) { const n = (name || ''); if (/운송|배송|운반/.test(n)) return '운송'; if (/재단|타공|고스라|뒷도|배면|워터젯|사선|모서리|가공|연마|코너/.test(n)) return '가공'; if (/시공|실측|설치/.test(n)) return '시공'; return '자재'; }
 function openCostForm(id) { if (!isAdmin()) { toast('원가는 관리자만 볼 수 있습니다'); return; } filters.costEdit = id; render(); const _pg = el('pg-' + tab); if (_pg) _pg.scrollIntoView({ block: 'start' }); }
 function costCancel() { filters.costEdit = ''; render(); }
 function costLineHtml(d) {
@@ -4374,26 +4386,30 @@ function costLineHtml(d) {
 }
 function addCostRow() { const c = el('ct-rows'); if (c) c.insertAdjacentHTML('beforeend', costLineHtml({ gubun: '자재' })); }
 function costRecalc() {
-  let lineTot = 0;
+  let cMat = 0, cCons = 0, cTrans = 0;
   document.querySelectorAll('#ct-rows .ct-row').forEach(r => {
     const g = r.querySelector('.ct-gubun').value;
     const hebe = _numv(r.querySelector('.ct-hebe').value), qty = _numv(r.querySelector('.ct-qty').value), unit = _numv(r.querySelector('.ct-unit').value);
     const costEl = r.querySelector('.ct-cost');
     if (g === '자재' && hebe > 0 && qty > 0 && unit > 0) { costEl.value = Math.round(hebe * qty * unit); }
-    lineTot += _numv(costEl.value);
+    const c = _numv(costEl.value);
+    if (g === '운송') cTrans += c; else if (g === '시공') cCons += c; else cMat += c;
   });
   const proc = el('ct-process') ? _numv(el('ct-process').value) : 0;
-  const tot = lineTot + proc;
-  const margin = _costSupply - tot;
-  if (el('ct-linetotal')) el('ct-linetotal').textContent = fmtWon(lineTot);
-  if (el('ct-proctotal')) el('ct-proctotal').textContent = fmtWon(proc);
-  if (el('ct-total')) el('ct-total').textContent = fmtWon(tot);
+  const cost = { mat: cMat, proc: proc, cons: cCons, trans: cTrans };
+  const setCat = (k) => { const m = (_costRev[k] || 0) - cost[k]; if (el('cc_' + k)) el('cc_' + k).textContent = fmtWon(cost[k]); const me = el('cm_' + k); if (me) { me.textContent = fmtWon(m); me.style.color = m < 0 ? 'var(--red-t)' : 'var(--gd)'; } };
+  setCat('mat'); setCat('proc'); setCat('cons'); setCat('trans');
+  const totCost = cMat + proc + cCons + cTrans;
+  const margin = _costSupply - totCost;
+  if (el('ct-total')) el('ct-total').textContent = fmtWon(totCost);
   if (el('ct-margin')) { el('ct-margin').textContent = fmtWon(margin); el('ct-margin').style.color = margin < 0 ? 'var(--red-t)' : 'var(--gd)'; }
   if (el('ct-rate')) el('ct-rate').textContent = _costSupply > 0 ? ((margin / _costSupply * 100).toFixed(1) + '%') : '-';
 }
 function renderCostForm() {
   const q = (state.quotes || []).find(x => x.id === filters.costEdit); if (!q) { filters.costEdit = ''; render(); return; }
   _costSupply = +q.supply || 0;
+  _costRev = { mat: 0, proc: 0, cons: 0, trans: 0 };
+  (q.items || []).forEach(it => { const c = marginCat(it.name); const k = c === '가공' ? 'proc' : c === '시공' ? 'cons' : c === '운송' ? 'trans' : 'mat'; _costRev[k] += Math.round(+it.amt || 0); });
   const _procItems = (q.items || []).filter(it => costGubunOf(it.name) === '가공');
   const lines = (q.costLines && q.costLines.length) ? q.costLines : (q.items || []).filter(it => costGubunOf(it.name) !== '가공').map(it => ({ gubun: costGubunOf(it.name), factory: '', name: it.name, spec: it.spec || '', hebe: hebeFromSpec(it.spec || ''), qty: it.qty || '', unitCost: '', cost: '' }));
   const rows = lines.map(costLineHtml).join('');
@@ -4412,13 +4428,18 @@ function renderCostForm() {
           <input id="ct-process" inputmode="numeric" value="${esc(q.processCost || '')}" oninput="costRecalc()" placeholder="0" style="width:140px;text-align:right;font-size:16px;font-weight:800;padding:9px 11px;border:1.5px solid #e6bf93;border-radius:9px;background:#fff;color:#a2560f">
         </div>
       </div>
-      <div style="background:var(--soft);border-radius:11px;padding:12px 14px;margin-top:12px;max-width:360px;margin-left:auto">
-        <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px"><span style="color:var(--t2)">매출액(공급가액)</span><b>${fmtWon(q.supply)}</b></div>
-        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px"><span style="color:var(--t2)">자재·기타 원가</span><b id="ct-linetotal">0</b></div>
-        <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px"><span style="color:var(--t2)">가공비(공장견적)</span><b id="ct-proctotal">0</b></div>
-        <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:4px;border-top:1px dashed var(--bd2);padding-top:5px"><span style="color:var(--t2);font-weight:600">총원가</span><b id="ct-total">0</b></div>
-        <div style="display:flex;justify-content:space-between;font-size:16px;border-top:1px solid var(--bd2);padding-top:6px"><span style="font-weight:700">마진</span><b id="ct-margin" style="color:var(--gd)">0</b></div>
-        <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--t3)"><span>마진율</span><b id="ct-rate">-</b></div>
+      <div style="background:var(--soft);border-radius:11px;padding:12px 14px;margin-top:12px;max-width:460px;margin-left:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead><tr style="color:var(--t3);font-size:11px"><th style="text-align:left;padding:2px 4px">분류</th><th style="text-align:right;padding:2px 4px">매출</th><th style="text-align:right;padding:2px 4px">원가</th><th style="text-align:right;padding:2px 4px">마진</th></tr></thead>
+          <tbody>
+            <tr><td style="padding:3px 4px">자재</td><td style="text-align:right">${fmtWon(_costRev.mat)}</td><td style="text-align:right;color:#b45309"><span id="cc_mat">0</span></td><td style="text-align:right;font-weight:700"><span id="cm_mat">0</span></td></tr>
+            <tr><td style="padding:3px 4px">가공</td><td style="text-align:right">${fmtWon(_costRev.proc)}</td><td style="text-align:right;color:#b45309"><span id="cc_proc">0</span></td><td style="text-align:right;font-weight:700"><span id="cm_proc">0</span></td></tr>
+            <tr><td style="padding:3px 4px">시공</td><td style="text-align:right">${fmtWon(_costRev.cons)}</td><td style="text-align:right;color:#b45309"><span id="cc_cons">0</span></td><td style="text-align:right;font-weight:700"><span id="cm_cons">0</span></td></tr>
+            <tr><td style="padding:3px 4px">운송</td><td style="text-align:right">${fmtWon(_costRev.trans)}</td><td style="text-align:right;color:#b45309"><span id="cc_trans">0</span></td><td style="text-align:right;font-weight:700"><span id="cm_trans">0</span></td></tr>
+          </tbody>
+          <tfoot><tr style="border-top:1.5px solid var(--bd2);font-size:14px"><td style="padding:5px 4px;font-weight:800">총</td><td style="text-align:right;font-weight:700">${fmtWon(q.supply)}</td><td style="text-align:right;font-weight:700;color:#b45309"><span id="ct-total">0</span></td><td style="text-align:right;font-weight:800"><span id="ct-margin" style="color:var(--gd)">0</span></td></tr></tfoot>
+        </table>
+        <div style="display:flex;justify-content:space-between;font-size:11.5px;color:var(--t3);margin-top:6px"><span>가공 원가 = 공장 견적 총액</span><span>총마진율 <b id="ct-rate">-</b></span></div>
       </div>
       <div class="frm-foot" style="margin-top:12px"><button class="btn" style="flex:1" onclick="costCancel()">취소</button><button class="btn btn-pri" style="flex:2" onclick="submitCost('${q.id}')"><i class="ti ti-check"></i>원가 저장</button></div>
     </div>`;
@@ -4602,7 +4623,18 @@ function renderSettle() {
       <input type="number" class="inp" style="width:120px;text-align:right" value="${+it.amount || 0}" onchange="saveFixedAmt(${i},this.value)">
       <button class="btn btn-sm" style="padding:2px 6px" onclick="delFixedItem(${i})"><i class="ti ti-trash"></i></button></div>`).join('') : `<div style="font-size:12px;color:var(--t3);text-align:center;padding:10px">등록된 고정 지출 항목이 없습니다. 위에서 매월 반복되는 항목(급여·임대·공과금 등)을 추가하세요.</div>`}</div></div>`;
 
-  root.innerHTML = `<div class="ph"><div><h2><i class="ti ti-report-money"></i>정산</h2><p>원가 원장 · 회사지출 · 영업이익(마진)</p></div></div>${monthBar}${pnl}${expCatBar}${costLedger}${fxCard}${expForm}`;
+  const _mb = { 자재: { rev: 0, cost: 0 }, 가공: { rev: 0, cost: 0 }, 시공: { rev: 0, cost: 0 }, 운송: { rev: 0, cost: 0 } };
+  costed.forEach(q => { const b = quoteMarginBreakdown(q); ['자재', '가공', '시공', '운송'].forEach(c => { _mb[c].rev += b[c].rev; _mb[c].cost += b[c].cost; }); });
+  let _mtR = 0, _mtC = 0; ['자재', '가공', '시공', '운송'].forEach(c => { _mtR += _mb[c].rev; _mtC += _mb[c].cost; });
+  const marginCard = costed.length ? `<div class="card" style="margin-bottom:12px;padding:13px 14px">
+    <div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:9px"><i class="ti ti-chart-bar"></i> 분류별 마진 <span style="font-weight:500">(원가 입력분 ${costed.length}건)</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px">
+      ${['자재', '가공', '시공', '운송'].map(c => { const m = _mb[c].rev - _mb[c].cost; const r = _mb[c].rev > 0 ? Math.round(m / _mb[c].rev * 100) : 0; return `<div style="text-align:center;padding:9px 6px;background:var(--soft);border-radius:10px"><div style="font-size:10.5px;color:var(--t2);margin-bottom:3px">${c} 마진</div><div style="font-size:14.5px;font-weight:800;color:${m >= 0 ? '#0f766e' : '#dc2626'}">${fmtWon(m)}</div><div style="font-size:10px;color:var(--t3)">매출 ${fmtWon(_mb[c].rev)} · ${r}%</div></div>`; }).join('')}
+      ${(() => { const m = _mtR - _mtC; const r = _mtR > 0 ? Math.round(m / _mtR * 100) : 0; return `<div style="text-align:center;padding:9px 6px;background:var(--gl2,#eefaf5);border:1.5px solid var(--gbd,#bfe6d5);border-radius:10px"><div style="font-size:10.5px;color:var(--t2);margin-bottom:3px">총마진</div><div style="font-size:14.5px;font-weight:800;color:${m >= 0 ? '#0f766e' : '#dc2626'}">${fmtWon(m)}</div><div style="font-size:10px;color:var(--t3)">${r}%</div></div>`; })()}
+    </div>
+    <div style="font-size:10.5px;color:var(--t3);margin-top:7px">분류별 매출(견적) − 분류별 원가(자재·가공비·시공·운송). 가공 원가는 공장 견적 총액.</div>
+  </div>` : '';
+  root.innerHTML = `<div class="ph"><div><h2><i class="ti ti-report-money"></i>정산</h2><p>원가 원장 · 회사지출 · 영업이익(마진)</p></div></div>${monthBar}${pnl}${marginCard}${expCatBar}${costLedger}${fxCard}${expForm}`;
 }
 
 function renderQuote() {
