@@ -850,6 +850,54 @@ function parseBizCert(text) {
   const ct = classifyCtype(bt, bc, nm);
   toast('스캔 완료 · 유형: ' + ct + ' — 내용 확인 후 저장하세요');
 }
+async function importClientsFull(input) {
+  if (!isAdmin()) { toast('관리자만 가능합니다'); return; }
+  const f = input.files && input.files[0]; if (!f) return; input.value = '';
+  if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후 다시'); return; }
+  toast('거래처 파일 읽는 중…');
+  try {
+    const buf = await f.arrayBuffer();
+    const wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    if (rows.length < 2) { toast('데이터가 없습니다'); return; }
+    const head = (rows[0] || []).map(h => String(h == null ? '' : h).trim());
+    const ci = n => head.indexOf(n);
+    const cName = ci('거래처명(최대35자)'), cCorp = ci('상호명'), cBiz = ci('사업자(주민)번호'), cCeo = ci('대표자명'), cType = ci('업태'), cCls = ci('종목'), cAddr = ci('사업장주소(동)'), cAddr2 = ci('상세주소'), cTel = ci('전화'), cMob = ci('휴대전화'), cMail = ci('대표담당자 메일');
+    if (cName < 0 && cCorp < 0) { toast('거래처명 열을 찾지 못했습니다 — 표준 양식인지 확인하세요'); return; }
+    const gv = (r, i) => i >= 0 ? String(r[i] == null ? '' : r[i]).trim() : '';
+    const nk = x => _normName(x).replace(/\s+/g, '').replace(/\(주\)|㈜|주식회사|\(유\)|유한회사/g, '');
+    const byBiz = {}, byName = {};
+    (state.clients || []).forEach(c => { const b = ((c.taxInfo && c.taxInfo.bizNo) || '').replace(/[^0-9]/g, ''); if (b.length === 10) byBiz[b] = c; byName[nk(c.value)] = c; });
+    const coll = cref('clients');
+    let added = 0, updated = 0, skipped = 0, ops = 0; let batch = db.batch(); const commits = [];
+    for (let i = 1; i < rows.length; i++) {
+      const r = rows[i]; const name = gv(r, cName) || gv(r, cCorp);
+      if (!name) { skipped++; continue; }
+      const bizD = gv(r, cBiz).replace(/[^0-9]/g, '');
+      const bizFmt = bizD.length === 10 ? (bizD.slice(0, 3) + '-' + bizD.slice(3, 5) + '-' + bizD.slice(5)) : gv(r, cBiz);
+      const addr = (gv(r, cAddr) + ' ' + gv(r, cAddr2)).trim();
+      const bizType = gv(r, cType), bizClass = gv(r, cCls);
+      const ti = { bizNo: bizFmt, corpName: gv(r, cCorp) || name, ceo: gv(r, cCeo), addr: addr, bizType: bizType, bizClass: bizClass, contact: gv(r, cTel) || gv(r, cMob), email: gv(r, cMail) };
+      const ct = classifyCtype(bizType, bizClass, name);
+      const match = (bizD.length === 10 && byBiz[bizD]) || byName[nk(name)];
+      if (match) {
+        const ex = match.taxInfo || {}; const merged = {};
+        ['bizNo', 'corpName', 'ceo', 'addr', 'bizType', 'bizClass', 'contact', 'email'].forEach(k => { merged[k] = ti[k] || ex[k] || ''; });
+        const patch = { taxInfo: merged }; if (bizType || bizClass) patch.ctype = ct;
+        batch.update(coll.doc(match.id), patch); updated++; ops++;
+      } else {
+        const ref = coll.doc(); batch.set(ref, { value: name, ctype: ct, taxInfo: ti });
+        const stub = { id: ref.id, value: name, taxInfo: ti }; byName[nk(name)] = stub; if (bizD.length === 10) byBiz[bizD] = stub; added++; ops++;
+      }
+      if (ops >= 400) { commits.push(batch.commit()); batch = db.batch(); ops = 0; toast('반영 중… 신규 ' + added + ' / 갱신 ' + updated); }
+    }
+    if (ops > 0) commits.push(batch.commit());
+    await Promise.all(commits);
+    toast('거래처 반영 완료 ✓ 신규 ' + added + ' · 갱신(대치) ' + updated + (skipped ? (' · 이름없음 ' + skipped) : ''));
+    setTimeout(renderClients, 800);
+  } catch (e) { toast('업로드 실패: ' + ((e && e.message) || e)); }
+}
 async function delClientC(id) { if (!isAdmin()) { toast('관리자만 삭제할 수 있습니다'); return; } const c = (state.clients || []).find(x => x.id === id); if (!c) return; if (!confirm((c.value || '') + ' 거래처를 삭제할까요?')) return; await Store.remove('clients', id); filters.clientDetail = ''; toast('삭제됨'); setTimeout(renderClients, 300); }
 function renderClients() {
   if (filters.clientDetail) { renderClientDetail(); return; }
@@ -885,6 +933,8 @@ function renderClients() {
       <button class="btn btn-sm" onclick="el('ct-file2').click()"><i class="ti ti-upload"></i> 유형 엑셀 업로드</button>
       <button class="btn btn-sm" onclick="clientTypeTemplate()"><i class="ti ti-download"></i> 양식</button>
       <input type="file" id="ct-file2" accept=".xlsx,.xls,.csv" style="display:none" onchange="clientTypeImport(this)">
+      <button class="btn btn-sm btn-pri" onclick="el('cl-fullfile').click()"><i class="ti ti-file-upload"></i> 거래처 일괄 등록·대치</button>
+      <input type="file" id="cl-fullfile" accept=".xlsx,.xls" style="display:none" onchange="importClientsFull(this)">
     </div>
     <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i><input id="cl-search" placeholder="거래처 검색" value="${esc(filters.clientSearch || '')}" oninput="clientsFilter(this.value)" autocomplete="off" lang="ko"></div>
     <div data-keepscroll id="cl-list" style="max-height:58vh;overflow:auto;padding-right:2px">${rows}</div>`;
