@@ -4407,7 +4407,9 @@ function downloadCostLedger() {
   toast('원가 원장 엑셀 다운로드');
 }
 /* ================= 정산: 원가 원장 · 회사지출 · 영업이익(마진) ================= */
-const EXP_CATS = ['급여', '공용부분', '운반비', '복리후생', '공과금', '기타'];
+const EXP_CATS = ['급여', '공용부분', '운반비', '공과금', '상여금', '복리후생', '접대비', '소모품', '수선비', '기타'];
+const FIXED_CATS = ['급여', '공용부분', '운반비', '공과금', '기타'];   // 매월 고정
+const VAR_CATS = ['상여금', '복리후생', '접대비', '소모품', '수선비', '운반비', '기타'];   // 변동성 지출
 function settleMonthNav(d) {
   const ym = filters.settleMonth || todayStr().slice(0, 7);
   const [y, m] = ym.split('-').map(Number); const dt = new Date(y, m - 1 + d, 1);
@@ -4481,7 +4483,7 @@ function renderSettle() {
   const grossRate = salesCosted > 0 ? Math.round(grossProfit / salesCosted * 100) : 0;
   const opRate = salesAll > 0 ? Math.round(opProfit / salesAll * 100) : 0;
   // 회사지출 분류별
-  const expByCat = {}; EXP_CATS.forEach(c => expByCat[c] = 0); expMonth.forEach(e => { const c = EXP_CATS.includes(e.cat) ? e.cat : '기타'; expByCat[c] += +e.amount || 0; });
+  const expByCat = {}; expMonth.forEach(e => { const c = e.cat || '기타'; expByCat[c] = (expByCat[c] || 0) + (+e.amount || 0); }); const _catKeys = Object.keys(expByCat).sort((a, b) => expByCat[b] - expByCat[a]);
   const monthBar = `<div style="display:flex;align-items:center;justify-content:space-between;background:var(--soft);border-radius:11px;padding:8px 12px;margin-bottom:12px">
     <button class="btn btn-sm" onclick="settleMonthNav(-1)"><i class="ti ti-chevron-left"></i></button>
     <div style="text-align:center"><div style="font-weight:800;font-size:15.5px">${esc(ym.replace('-', '. '))} 정산</div><div style="font-size:11.5px;color:var(--t3)">견적 ${monthQuotes.length}건 · 지출 ${expMonth.length}건</div></div>
@@ -4499,7 +4501,7 @@ function renderSettle() {
     <div style="font-size:11px;color:var(--t3);margin-top:8px;line-height:1.5">· 매출총이익 = 원가 입력된 견적의 (매출 − 원가) 기준 · 영업이익 = 매출총이익 − 회사지출${noCost > 0 ? `<br>· <b style="color:#dc2626">원가 미입력 견적 ${noCost}건</b> — 견적서 화면의 <b>원가</b> 버튼으로 입력하면 마진에 반영됩니다` : ''}</div>
   </div>`;
   const expCatBar = `<div class="card" style="margin-bottom:12px;padding:11px 14px"><div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:8px"><i class="ti ti-wallet"></i> 회사지출 분류별</div>
-    <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px">${EXP_CATS.map(c => `<div style="text-align:center;padding:6px 3px;background:var(--soft);border-radius:8px"><div style="font-size:10px;color:var(--t2);margin-bottom:2px">${c}</div><div style="font-size:12.5px;font-weight:800;color:#7c3aed">${fmtWon(expByCat[c])}</div></div>`).join('')}</div></div>`;
+    ${_catKeys.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:6px">${_catKeys.map(c => `<div style="text-align:center;padding:6px 3px;background:var(--soft);border-radius:8px"><div style="font-size:10px;color:var(--t2);margin-bottom:2px">${esc(c)}</div><div style="font-size:12.5px;font-weight:800;color:#7c3aed">${fmtWon(expByCat[c])}</div></div>`).join('')}</div>` : `<div style="font-size:12px;color:var(--t3);text-align:center;padding:6px">이번 달 지출 내역이 없습니다</div>`}</div>`;
   // 원가·마진 전표별
   const cq = costed.slice().sort((a, b) => (qDate(b) || '').localeCompare(qDate(a) || ''));
   const cRows = cq.length ? cq.map(q => { const sup = +q.supply || 0; const ct = (+q.costTotal) || (q.costLines || []).reduce((x, l) => x + (+l.cost || 0), 0); const mg = sup - ct; const r = sup > 0 ? Math.round(mg / sup * 100) : 0;
@@ -4520,8 +4522,8 @@ function renderSettle() {
       <button class="btn btn-sm" onclick="downloadExpenses()"><i class="ti ti-download"></i>지출 엑셀</button></div>
     <div style="display:grid;grid-template-columns:1.1fr 1fr 1.6fr 1.1fr;gap:6px;margin-bottom:6px">
       <input id="exp-date" type="date" class="inp" value="${todayStr()}">
-      <select id="exp-cat" class="inp">${EXP_CATS.map(c => `<option value="${c}">${c}</option>`).join('')}</select>
-      <input id="exp-name" class="inp" placeholder="항목 (예: 창고임대, 임창걸 지사장)">
+      <select id="exp-cat" class="inp">${VAR_CATS.map(c => `<option value="${c}">${c}</option>`).join('')}</select>
+      <input id="exp-name" class="inp" placeholder="항목 (예: 명절 상여금, 경조사비)">
       <input id="exp-mgr" class="inp" placeholder="담당자(선택)">
     </div>
     <div style="display:grid;grid-template-columns:1.1fr 1fr 1.6fr 1.1fr;gap:6px;margin-bottom:8px">
@@ -4541,7 +4543,7 @@ function renderSettle() {
       <button class="btn btn-pri btn-sm" onclick="applyFixedToMonth()"><i class="ti ti-calendar-plus"></i>이번 달 반영</button></div>
     <div style="font-size:11px;color:var(--t3);margin-bottom:9px">이번 달 반영: <b style="color:${_fxApplied >= _fx.length && _fx.length ? '#0f766e' : '#b45309'}">${_fxApplied}/${_fx.length}건</b> · 고정 합계 <b>${fmtWon(_fxTotal)}</b>원 &nbsp;— 버튼을 누르면 이번 달 지출에 자동으로 깔립니다(중복 방지). 금액은 반영 후 개별 수정 가능.</div>
     <div style="display:grid;grid-template-columns:1fr 1.7fr 1.1fr auto;gap:6px;margin-bottom:8px">
-      <select id="fx-cat" class="inp">${EXP_CATS.map(c => `<option value="${c}">${c}</option>`).join('')}</select>
+      <select id="fx-cat" class="inp">${FIXED_CATS.map(c => `<option value="${c}">${c}</option>`).join('')}</select>
       <input id="fx-name" class="inp" placeholder="항목 (예: 창고임대, 임창걸 지사장 급여)">
       <input id="fx-amt" type="number" class="inp" placeholder="월 금액">
       <button class="btn btn-sm" onclick="addFixedItem()"><i class="ti ti-plus"></i>추가</button>
