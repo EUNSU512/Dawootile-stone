@@ -3829,24 +3829,15 @@ function renderQuoteSettings() {
       </div>
     </div>`;
 }
-function renderQuote() {
-  if (filters.quoteSettings) { if (!document.getElementById('qset-root')) renderQuoteSettings(); return; }   // 설정 화면
-  if (filters.quoteEdit) { if (!document.getElementById('qform-root')) renderQuoteForm(); return; }   // 편집 중엔 실시간 재렌더로 폼을 덮어쓰지 않음
-  const qy = (filters.quoteSearch || '').trim().toLowerCase();
-  const all = (state.quotes || []);
-  const ym = todayStr().slice(0, 7);
-  const unpaid = all.filter(q => !q.paid).reduce((a, b) => a + (+b.total || 0), 0);
-  const noTax = all.filter(q => !q.taxInvoice).length;
-  const monthSum = all.filter(q => (q.date || '').startsWith(ym)).reduce((a, b) => a + (+b.total || 0), 0);
-  let list = all.slice().sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
-  if (qy) list = list.filter(q => (q.client || '').toLowerCase().includes(qy) || (q.docNo || '').toLowerCase().includes(qy) || (q.items || []).some(it => (it.name || '').toLowerCase().includes(qy)));
-  const cards = list.length ? list.map(q => {
-    const when = q.date || (q.createdAt ? new Date(+q.createdAt).toISOString().slice(0, 10) : '');
-    const names = (q.items || []).map(it => it.name).filter(Boolean).slice(0, 3).join(', ') + ((q.items || []).length > 3 ? ` 외 ${q.items.length - 3}` : '');
-    const paidPill = q.paid ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="클릭 시 해제"><i class="ti ti-cash"></i> 결제완료${q.paidDate ? ' ' + esc(q.paidDate.slice(5)) : ''}</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="결제 완료로 표시"><i class="ti ti-cash"></i> 미결제</button>`;
-    const taxPill = q.taxInvoice ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="클릭 시 해제"><i class="ti ti-file-check"></i> 계산서 발행${q.taxDate ? ' ' + esc(q.taxDate.slice(5)) : ''}</button>` : `<button class="pill p-gray" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="발행으로 표시"><i class="ti ti-file-off"></i> 계산서 미발행</button>`;
-    const shipPill = q.shipped ? `<span class="pill p-hold"><i class="ti ti-truck-delivery"></i> 출고 진행</span>` : '';
-    return `<div class="card" style="margin-bottom:10px;padding:12px 14px">
+function qDate(q) { return q.date || (q.createdAt ? new Date(+q.createdAt).toISOString().slice(0, 10) : ''); }
+function quoteMonthNav(delta) { const cur = filters.quoteMonth || todayStr().slice(0, 7); const p = cur.split('-').map(Number); const d = new Date(p[0], p[1] - 1 + delta, 1); filters.quoteMonth = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); renderQuote(); }
+function quoteCardHtml(q) {
+  const when = qDate(q);
+  const names = (q.items || []).map(it => it.name).filter(Boolean).slice(0, 3).join(', ') + ((q.items || []).length > 3 ? ` 외 ${q.items.length - 3}` : '');
+  const paidPill = q.paid ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="클릭 시 해제"><i class="ti ti-cash"></i> 결제완료${q.paidDate ? ' ' + esc(q.paidDate.slice(5)) : ''}</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="결제 완료로 표시"><i class="ti ti-cash"></i> 미결제</button>`;
+  const taxPill = q.taxInvoice ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="클릭 시 해제"><i class="ti ti-file-check"></i> 계산서 발행${q.taxDate ? ' ' + esc(q.taxDate.slice(5)) : ''}</button>` : `<button class="pill p-gray" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="발행으로 표시"><i class="ti ti-file-off"></i> 계산서 미발행</button>`;
+  const shipPill = q.shipped ? `<span class="pill p-hold"><i class="ti ti-truck-delivery"></i> 출고 진행</span>` : '';
+  return `<div class="card" style="margin-bottom:10px;padding:12px 14px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="min-width:0"><div style="font-weight:700;font-size:14.5px">${esc(q.client || '-')}</div>
           <div style="font-size:11.5px;color:var(--t3);margin-top:2px">${esc(q.docNo || '')} · ${esc(when)} · ${(q.items || []).length}품목</div>
@@ -3862,7 +3853,43 @@ function renderQuote() {
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}',true)" title="복사해 새 견적"><i class="ti ti-copy"></i></button>
         <button class="btn btn-sm" style="color:var(--red-t);margin-left:auto" onclick="delQuote('${q.id}')" title="견적 삭제"><i class="ti ti-trash"></i></button>
       </div></div>`;
-  }).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${qy ? '검색 결과가 없습니다' : '작성한 견적이 없습니다. 견적 작성으로 시작하세요.'}</div>`;
+}
+function renderQuote() {
+  if (filters.quoteSettings) { if (!document.getElementById('qset-root')) renderQuoteSettings(); return; }   // 설정 화면
+  if (filters.quoteEdit) { if (!document.getElementById('qform-root')) renderQuoteForm(); return; }   // 편집 중엔 실시간 재렌더로 폼을 덮어쓰지 않음
+  const qy = (filters.quoteSearch || '').trim().toLowerCase();
+  const all = (state.quotes || []);
+  const ym = todayStr().slice(0, 7);
+  const unpaid = all.filter(q => !q.paid).reduce((a, b) => a + (+b.total || 0), 0);
+  const noTax = all.filter(q => !q.taxInvoice).length;
+  const monthSum = all.filter(q => (q.date || '').startsWith(ym)).reduce((a, b) => a + (+b.total || 0), 0);
+  let list = all.slice().sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
+  if (qy) list = list.filter(q => (q.client || '').toLowerCase().includes(qy) || (q.docNo || '').toLowerCase().includes(qy) || (q.items || []).some(it => (it.name || '').toLowerCase().includes(qy)));
+  const view = filters.quoteView || 'all';
+  const curMonth = filters.quoteMonth || ym;
+  const WD = ['일', '월', '화', '수', '목', '금', '토'];
+  let body;
+  if (view === 'month') {
+    const mlist = list.filter(q => qDate(q).startsWith(curMonth));
+    const mSum = mlist.reduce((a, b) => a + (+b.total || 0), 0);
+    const byDay = {}; mlist.forEach(q => { const d = qDate(q) || '날짜미상'; (byDay[d] = byDay[d] || []).push(q); });
+    const days = Object.keys(byDay).sort((a, b) => b.localeCompare(a));
+    const monthBar = `<div style="display:flex;align-items:center;justify-content:space-between;background:var(--soft);border-radius:11px;padding:8px 12px;margin-bottom:10px">
+      <button class="btn btn-sm" onclick="quoteMonthNav(-1)"><i class="ti ti-chevron-left"></i></button>
+      <div style="text-align:center"><div style="font-weight:800;font-size:15.5px">${esc(curMonth.replace('-', '. '))}</div><div style="font-size:11.5px;color:var(--t3)">${mlist.length}건 · <b style="color:var(--gd)">${fmtWon(mSum)}</b>원</div></div>
+      <button class="btn btn-sm" onclick="quoteMonthNav(1)"><i class="ti ti-chevron-right"></i></button></div>`;
+    const sections = days.length ? days.map(d => {
+      const qs = byDay[d]; const dSum = qs.reduce((a, b) => a + (+b.total || 0), 0);
+      const dLabel = d === '날짜미상' ? d : (d.slice(5).replace('-', '/') + ' (' + WD[new Date(d + 'T00:00').getDay()] + ')');
+      return `<div style="display:flex;align-items:center;gap:8px;margin:14px 2px 8px"><div style="font-weight:800;font-size:13.5px">${esc(dLabel)}</div><div style="flex:1;height:1px;background:var(--bd)"></div><div style="font-size:12px;color:var(--t2)">${qs.length}건 · <b style="color:var(--gd)">${fmtWon(dSum)}</b>원</div></div>${qs.map(quoteCardHtml).join('')}`;
+    }).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${esc(curMonth)}에 견적이 없습니다</div>`;
+    body = monthBar + sections;
+  } else {
+    body = list.length ? list.map(quoteCardHtml).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${qy ? '검색 결과가 없습니다' : '작성한 견적이 없습니다. 견적 작성으로 시작하세요.'}</div>`;
+  }
+  const toggle = `<div style="display:flex;gap:6px;margin-bottom:10px">
+    <button class="btn btn-sm ${view === 'all' ? 'btn-pri' : ''}" onclick="filters.quoteView='all';renderQuote()">전체</button>
+    <button class="btn btn-sm ${view === 'month' ? 'btn-pri' : ''}" onclick="filters.quoteView='month';renderQuote()"><i class="ti ti-calendar-month"></i> 월별</button></div>`;
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
       <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
@@ -3871,11 +3898,12 @@ function renderQuote() {
       <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행</div></div>
       <div class="stat"><div class="ic g"><i class="ti ti-calendar-stats"></i></div><div class="v" style="font-size:19px">${fmtWon(monthSum)}</div><div class="l">이번 달 견적</div></div>
     </div>
+    ${toggle}
     <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i>
       <input id="q-search" placeholder="거래처·견적번호·자재 검색" value="${esc(filters.quoteSearch || '')}" oninput="filters.quoteSearch=this.value;renderQuote()" autocomplete="off" lang="ko">
       ${(filters.quoteSearch || '').trim() ? `<button class="search-x" onclick="filters.quoteSearch='';el('q-search').value='';renderQuote()"><i class="ti ti-x"></i></button>` : ''}
     </div>
-    ${cards}`;
+    ${body}`;
 }
 function printQuote(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
