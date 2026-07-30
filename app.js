@@ -3516,6 +3516,7 @@ function renderQuoteForm() {
           <div class="fld" style="flex:1;min-width:150px;margin:0"><label>유효기간</label><input id="q-valid" lang="ko" value="${esc(v.valid || '견적일로부터 15일')}"></div>
         </div>
         <div class="fld full" style="margin-bottom:10px"><label>수신·참조 <span style="color:var(--t3);font-weight:500">(담당자·현장 등, 선택)</span></label><input id="q-attn" lang="ko" placeholder="예: 홍길동 과장 / OO현장" value="${esc(v.attn || '')}"></div>
+        <div class="fld full" style="margin-bottom:10px"><label>현장 주소 <span style="color:var(--t3);font-weight:500">(선택 · 견적서 수신란에 표시)</span></label><input id="q-site" lang="ko" placeholder="예: OO시 OO구 OO동 OO현장" value="${esc(v.siteAddr || '')}"></div>
         <div class="fld full" style="margin-bottom:10px"><label>견적 품목 <span class="req">*</span> <span style="color:var(--t3);font-weight:500">(자재 선택 시 규격·단가 자동 · 단가 수정 가능)</span></label>
           <div id="q-rows">${rows}</div>
           <datalist id="q-mat-list">${matOpts}</datalist>
@@ -3571,6 +3572,7 @@ async function submitQuote(id) {
   const date = (el('q-date') && el('q-date').value) || todayStr();
   const valid = (el('q-valid') && el('q-valid').value || '').trim();
   const attn = (el('q-attn') && el('q-attn').value || '').trim();
+  const siteAddr = (el('q-site') && el('q-site').value || '').trim();
   const memo = (el('q-memo') && el('q-memo').value || '').trim();
   const supply = items.reduce((a, b) => a + (+b.amt || 0), 0); const vat = Math.round(supply * 0.1); const total = supply + vat;
   if (_busy) return; _busy = true;
@@ -3578,7 +3580,7 @@ async function submitQuote(id) {
     await ensureClient(client);
     const q = id ? (state.quotes || []).find(x => x.id === id) : null;
     const docNo = (q && q.docNo) || quoteNextDocNo();
-    const data = { docNo, client, ctype, date, valid, attn, items, supply, vat, total, memo, by: (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
+    const data = { docNo, client, ctype, date, valid, attn, siteAddr, items, supply, vat, total, memo, by: (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
     if (id) await Store.update('quotes', id, data); else await Store.add('quotes', data);
     try { const cdoc = (state.clients || []).find(x => _normName(x.value) === _normName(client)); if (cdoc && (cdoc.ctype || '') !== ctype) await Store.update('clients', cdoc.id, { ctype }); } catch (e) { }   // 거래처 유형 기억
     for (const it of items) { if (it.extra) continue; try { await quoteLearnPrice(ctype, it.name, +it.price || 0); } catch (e) { } }   // 유형별 단가표 학습(부대비용 제외)
@@ -3959,7 +3961,7 @@ function quoteDocHtml(q) {
   </div>
   <div class="meta"><span>견적번호 <b>${e(q.docNo)}</b></span><span>견적일 <b>${e(q.date)}</b></span><span>유효기간 <b>${e(q.valid) || '-'}</b></span></div>
   <div class="info">
-    <div class="box"><div class="bh">수신</div><div class="bb"><div class="recip-name">${e(q.client)} 귀중</div>${q.attn ? `<div style="color:#555;margin-bottom:4px">${e(q.attn)}</div>` : ''}<div style="color:#666">아래와 같이 견적합니다.</div></div></div>
+    <div class="box"><div class="bh">수신</div><div class="bb"><div class="recip-name">${e(q.client)} 귀중</div>${q.attn ? `<div style="color:#555;margin-bottom:4px">${e(q.attn)}</div>` : ''}<div style="color:#666">아래와 같이 견적합니다.</div>${q.siteAddr ? `<div style="margin-top:11px;padding-top:9px;border-top:1px dashed #e0d6c4"><span style="color:#8a7350;font-weight:700;font-size:10px;letter-spacing:1.5px">현장 주소</span><div style="color:#332f28;margin-top:3px;line-height:1.5">${e(q.siteAddr)}</div></div>` : ''}</div></div>
     <div class="box"><div class="bh">공급자</div><div class="bb">${co.stampImg ? `<img class="stampimg" src="${co.stampImg}">` : `<div class="stamp">DAWOO<br>(인)</div>`}<b style="font-size:13px;color:#111">${e(co.name)}</b><br>대표 ${e(co.ceo)}<br>사업자등록번호 ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}</div></div>
   </div>
   <table class="items"><colgroup><col style="width:7%"><col style="width:33%"><col style="width:22%"><col style="width:10%"><col style="width:14%"><col style="width:14%"></colgroup>
