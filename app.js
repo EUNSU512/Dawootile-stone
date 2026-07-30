@@ -770,6 +770,34 @@ async function lookupClientBiz(id) {
     toast('조회완료 · 유형: ' + ct + warn + ' — 저장을 눌러 반영하세요');
   } catch (e) { toast('조회 오류: ' + ((e && e.message) || e)); }
 }
+/* 사업자등록증 이미지 OCR (Tesseract) → 사업자번호 등 자동 인식 */
+function scanBizCert(input) {
+  const f = input.files && input.files[0]; if (!f) return; input.value = '';
+  toast('사업자등록증 인식 중… 10~30초');
+  const run = async () => {
+    try {
+      const worker = await Tesseract.createWorker('kor+eng');
+      const res = await worker.recognize(f); await worker.terminate();
+      parseBizCert((res && res.data && res.data.text) || '');
+    } catch (e) { toast('인식 실패 — 사업자번호만 직접 입력해 주세요'); }
+  };
+  if (window.Tesseract) run();
+  else { const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js'; sc.onload = run; sc.onerror = () => toast('OCR 모듈 로딩 실패'); document.head.appendChild(sc); }
+}
+function parseBizCert(text) {
+  const setV = (id, v) => { const e = el(id); if (e && v) e.value = v; };
+  const num = text.match(/(\d{3})\s*[-‐–]?\s*(\d{2})\s*[-‐–]?\s*(\d{5})/);
+  if (num) setV('cb-bizno', num[1] + '-' + num[2] + '-' + num[3]);
+  const grab = labels => { for (const lb of labels) { const m = text.match(new RegExp(lb + '\\s*[:：)]?\\s*([^\\n]+)')); if (m) { let v = m[1].trim().split(/\s{2,}|\||\(|（/)[0].trim(); if (v) return v; } } return ''; };
+  setV('cb-corp', grab(['법\\s*인\\s*명\\s*\\(?\\s*단체명\\s*\\)?', '상\\s*호', '법\\s*인\\s*명']));
+  setV('cb-ceo', grab(['성\\s*명', '대\\s*표\\s*자']));
+  setV('cb-addr', grab(['사업장\\s*소재지', '사업장소재지', '소\\s*재\\s*지', '주\\s*소']));
+  setV('cb-biztype', grab(['업\\s*태']));
+  setV('cb-bizclass', grab(['종\\s*목']));
+  const bt = el('cb-biztype') ? el('cb-biztype').value : ''; const bc = el('cb-bizclass') ? el('cb-bizclass').value : ''; const nm = el('cb-corp') ? el('cb-corp').value : '';
+  const ct = classifyCtype(bt, bc, nm);
+  toast('스캔 완료 · 유형: ' + ct + ' — 내용 확인 후 저장하세요');
+}
 async function delClientC(id) { if (!isAdmin()) { toast('관리자만 삭제할 수 있습니다'); return; } const c = (state.clients || []).find(x => x.id === id); if (!c) return; if (!confirm((c.value || '') + ' 거래처를 삭제할까요?')) return; await Store.remove('clients', id); filters.clientDetail = ''; toast('삭제됨'); setTimeout(renderClients, 300); }
 function renderClients() {
   if (filters.clientDetail) { renderClientDetail(); return; }
@@ -806,7 +834,7 @@ function renderClients() {
       <input type="file" id="ct-file2" accept=".xlsx,.xls,.csv" style="display:none" onchange="clientTypeImport(this)">
     </div>
     <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i><input id="cl-search" placeholder="거래처 검색" value="${esc(filters.clientSearch || '')}" oninput="clientsFilter(this.value)" autocomplete="off" lang="ko"></div>
-    ${rows}`;
+    <div data-keepscroll id="cl-list" style="max-height:58vh;overflow:auto;padding-right:2px">${rows}</div>`;
 }
 function renderClientDetail() {
   const c = (state.clients || []).find(x => x.id === filters.clientDetail); if (!c) { filters.clientDetail = ''; renderClients(); return; }
@@ -842,6 +870,7 @@ function renderClientDetail() {
         <div class="fld" style="flex:1;min-width:180px;margin:0"><label>사업자등록번호</label><div style="display:flex;gap:6px"><input id="cb-bizno" inputmode="numeric" value="${esc(ti.bizNo || '')}" placeholder="000-00-00000" style="${inp}"><button class="btn btn-sm btn-pri" style="flex:none;white-space:nowrap" onclick="lookupClientBiz('${c.id}')"><i class="ti ti-search"></i>조회</button></div></div>
         ${fld('corp', '상호', ti.corpName || c.value)}
       </div>
+      <div style="margin-bottom:9px"><button class="btn btn-sm" onclick="el('bizcert-file').click()"><i class="ti ti-scan"></i> 사업자등록증 스캔(사진)</button><input type="file" id="bizcert-file" accept="image/*" style="display:none" onchange="scanBizCert(this)"><span style="font-size:10.5px;color:var(--t3);margin-left:8px">사진 올리면 자동 인식</span></div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">${fld('ceo', '대표자', ti.ceo)}${fld('contact', '담당자', ti.contact)}</div>
       <div class="fld full" style="margin-bottom:8px"><label>주소</label><input id="cb-addr" lang="ko" value="${esc(ti.addr || '')}" style="${inp}"></div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">${fld('biztype', '업태', ti.bizType)}${fld('bizclass', '종목', ti.bizClass)}</div>
