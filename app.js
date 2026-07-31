@@ -3712,6 +3712,7 @@ function quoteRecalc() {
   if (el('q-vat')) el('q-vat').textContent = fmtWon(vat);
   if (el('q-dcshow')) el('q-dcshow').textContent = dc > 0 ? ('-' + fmtWon(dc)) : '0';
   if (el('q-total')) el('q-total').textContent = fmtWon(total);
+  if (el('q-total-foot')) el('q-total-foot').textContent = fmtWon(total) + '원';
 }
 function quoteTruncate(place) {
   const rem = (_qRawTotal || 0) % place;
@@ -3886,7 +3887,11 @@ function renderQuoteForm() {
           <div style="display:flex;justify-content:space-between;font-size:17px;border-top:1px solid var(--bd2);padding-top:8px"><span style="font-weight:700">합계금액</span><b id="q-total" style="color:var(--gd)">0</b></div>
         </div>
       </div>
-      <div class="frm-foot" style="margin-top:13px">${editing ? `<button class="btn" style="color:var(--red-t);border-color:#e6a9a9" onclick="delQuote('${q.id}')"><i class="ti ti-trash"></i></button>` : ''}<button class="btn" style="flex:1" onclick="quoteCancel()">취소</button><button class="btn btn-pri" style="flex:2" onclick="submitQuote('${editing ? q.id : ''}')"><i class="ti ti-check"></i>${editing ? '저장' : '견적 저장'}</button></div>
+      <div class="frm-foot" style="position:sticky;bottom:calc(66px + env(safe-area-inset-bottom));z-index:30;margin-top:14px;background:var(--card);border:1.5px solid var(--bd2);border-radius:13px;box-shadow:0 5px 20px rgba(0,0,0,.13);padding:9px 11px;display:flex;align-items:center;gap:7px">
+        <div style="margin-right:auto;line-height:1.15;padding-left:2px"><div style="font-size:10.5px;color:var(--t3)">합계금액</div><b id="q-total-foot" style="font-size:17px;color:var(--gd)">0</b></div>
+        ${editing ? `<button class="btn" style="color:var(--red-t);border-color:#e6a9a9" onclick="delQuote('${q.id}')"><i class="ti ti-trash"></i></button>` : ''}
+        <button class="btn" onclick="quoteCancel()"><i class="ti ti-list"></i>목록</button>
+        <button class="btn btn-pri" style="flex:1.4" onclick="submitQuote('${editing ? q.id : ''}')"><i class="ti ti-check"></i>${editing ? '저장' : '견적 저장'}</button></div>
     </div>`;
   quoteRecalc();
 }
