@@ -793,6 +793,8 @@ function openClientDetail(id) { filters.clientDetail = id; renderClients(); if (
 function clientsBack() { filters.clientDetail = ''; renderClients(); }
 function clientsFilter(v) { filters.clientSearch = v; const box = el('cl-list'); if (box) box.innerHTML = clientRowsHtml(); else renderClients(); }
 async function addClientQuick() { const inpEl = el('cl-new'); const v = (inpEl && inpEl.value || '').trim(); if (!v) return; if ((state.clients || []).some(c => _normName(c.value) === _normName(v))) { toast('이미 있는 거래처'); return; } await Store.add('clients', { value: v }); if (inpEl) inpEl.value = ''; toast('거래처 등록됨'); setTimeout(renderClients, 300); }
+function salesRepPhoneOf(name) { const m = (state.members || []).find(x => _normName(x.name) === _normName(name || '')); return (m && m.phone) || ''; }
+async function saveClientSalesRep(id, name) { try { await Store.update('clients', id, { salesRep: (name || '').trim() }); toast('영업담당자 저장됨'); } catch (e) { } setTimeout(renderClients, 200); }
 async function saveClientBizInfo(id) {
   const c = (state.clients || []).find(x => x.id === id); if (!c) return;
   const g = k => { const e = el('cb-' + k); return e ? e.value.trim() : ''; };
@@ -968,6 +970,17 @@ function renderClientDetail() {
       <div class="stat"><div class="v" style="font-size:18px;color:var(--gd)">${fmtWon(st.paidSum)}</div><div class="l">입금액</div></div>
       <div class="stat"><div class="v" style="font-size:18px;color:${st.unpaid > 0 ? 'var(--red-t)' : ''}">${fmtWon(st.unpaid)}</div><div class="l">미수금</div></div>
       <div class="stat"><div class="v">${st.noTax}</div><div class="l">계산서 미발행</div></div>
+    </div>
+    <div class="card" style="margin-bottom:12px;padding:12px 16px">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <h3 style="margin:0;font-size:14px;white-space:nowrap"><i class="ti ti-user-star"></i> 영업 담당자</h3>
+        <select onchange="saveClientSalesRep('${c.id}',this.value)" style="font-size:14px;padding:7px 10px;border:1.5px solid var(--bd2);border-radius:9px;flex:1;min-width:150px">
+          <option value="">(지정 안 함)</option>
+          ${(state.members || []).filter(m => ['admin', 'staff'].includes(m.role || 'staff')).map(m => `<option ${_normName(c.salesRep || '') === _normName(m.name) ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}
+        </select>
+        <span style="font-size:12.5px;color:var(--t3);white-space:nowrap">${c.salesRep ? esc(salesRepPhoneOf(c.salesRep) || '연락처 미등록') : ''}</span>
+      </div>
+      <div style="font-size:11px;color:var(--t3);margin-top:6px">견적서에서 <b>영업담당자로 표기</b>를 켜면 견적 담당자 대신 이 담당자의 이름·연락처가 표시됩니다.</div>
     </div>
     <div class="card" style="margin-bottom:12px;padding:0;overflow:hidden">
       <div onclick="const _b=el('cb-body');_b.style.display=(_b.style.display==='none'?'block':'none')" style="cursor:pointer;padding:13px 16px;display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0;font-size:15px"><i class="ti ti-id-badge-2"></i> 사업자 정보 · 유형 확인</h3><i class="ti ti-chevron-down" style="color:var(--t3)"></i></div>
@@ -3799,6 +3812,7 @@ function renderQuoteForm() {
           <div class="fld" style="flex:1;min-width:130px;margin:0"><label>담당자</label><input id="q-staff" lang="ko" placeholder="담당자명" value="${esc(editing ? (v.by || '') : ((me && me.name) || ''))}"></div>
         </div>
         <div class="fld full" style="margin-bottom:10px"><label>수신·참조 <span style="color:var(--t3);font-weight:500">(담당자·현장 등, 선택)</span></label><input id="q-attn" lang="ko" placeholder="예: 홍길동 과장 / OO현장" value="${esc(v.attn || '')}"></div>
+        <div class="fld full" style="margin-bottom:10px;background:var(--soft);border-radius:10px;padding:9px 12px"><label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:600;margin:0"><input type="checkbox" id="q-userep" ${editing && v.useSalesRep ? 'checked' : ''} style="width:18px;height:18px"> 영업담당자로 표기 <span style="font-weight:400;color:var(--t3);font-size:12px">(견적 담당자 대신 거래처 영업담당자 이름·연락처 표시)</span></label></div>
         <div class="fld full" style="margin-bottom:10px"><label>현장 주소 <span style="color:var(--t3);font-weight:500">(선택 · 견적서 수신란에 표시)</span></label><input id="q-site" lang="ko" placeholder="예: OO시 OO구 OO동 OO현장" value="${esc(v.siteAddr || '')}"></div>
         <div class="fld full" style="margin-bottom:10px"><label>견적 품목 <span class="req">*</span> <span style="color:var(--t3);font-weight:500">(자재 선택 시 규격·단가 자동 · 단가 수정 가능)</span></label>
           <div id="q-rows">${rows}</div>
@@ -3873,7 +3887,8 @@ async function submitQuote(id) {
     await ensureClient(client);
     const q = id ? (state.quotes || []).find(x => x.id === id) : null;
     const docNo = (q && q.docNo) || quoteNextDocNo();
-    const data = { docNo, client, ctype, category, date, valid, attn, siteAddr, items, supply, vat, discount, total, memo, by: (el('q-staff') && el('q-staff').value.trim()) || (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
+    const useSalesRep = !!(el('q-userep') && el('q-userep').checked);
+    const data = { docNo, client, ctype, category, date, valid, attn, siteAddr, items, supply, vat, discount, total, memo, useSalesRep, by: (el('q-staff') && el('q-staff').value.trim()) || (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
     if (id) await Store.update('quotes', id, data); else await Store.add('quotes', data);
     try { const cdoc = (state.clients || []).find(x => _normName(x.value) === _normName(client)); if (cdoc && (cdoc.ctype || '') !== ctype) await Store.update('clients', cdoc.id, { ctype }); } catch (e) { }   // 거래처 유형 기억
     for (const it of items) { if (it.extra) continue; try { await quoteLearnPrice(ctype, it.name, +it.price || 0); } catch (e) { } }   // 유형별 단가표 학습(부대비용 제외)
@@ -4774,6 +4789,8 @@ function quoteDocHtml(q) {
   if (q.category === '통관비용') return customsDocHtml(q);
   const e = s => esc(s == null ? '' : String(s));
   const _staff = (state.members || []).find(m => _normName(m.name) === _normName(q.by || '')); const _staffPhone = (_staff && _staff.phone) || '';
+  let _repLabel = '견적 담당자', _repName = q.by || '', _repPhone = _staffPhone;
+  if (q.useSalesRep) { const _cl = (state.clients || []).find(x => _normName(x.value) === _normName(q.client || '')); const _sr = _cl && _cl.salesRep; if (_sr) { _repLabel = '영업 담당자'; _repName = _sr; _repPhone = salesRepPhoneOf(_sr); } }
   const items = q.items || []; const MIN = Math.max(6, items.length);
   let rows = items.map((it, i) => `<tr><td class="c">${i + 1}</td><td class="l">${e(it.name)}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}${it.unit ? ' ' + e(it.unit) : ''}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`).join('');
   for (let i = items.length; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
@@ -4823,10 +4840,10 @@ function quoteDocHtml(q) {
     <div class="brand"><img src="${DAWOO_LOGO}" alt="" style="height:42px;display:block"></div>
     <div class="title"><h1>견 적 서</h1></div>
   </div>
-  <div class="meta"><span style="color:#201c17;font-weight:600">견적 담당자 : ${e(q.by) || '-'}${_staffPhone ? ` <span style="color:#9a9086;font-weight:500">${e(_staffPhone)}</span>` : ''}</span><span style="display:flex;gap:22px"><span>견적번호 <b>${e(q.docNo)}</b></span><span>견적일 <b>${e(q.date)}</b></span><span>유효기간 <b>${e(q.valid) || '-'}</b></span></span></div>
+  <div class="meta"><span style="color:#201c17;font-weight:600">${e(_repLabel)} : ${e(_repName) || '-'}${_repPhone ? ` <span style="color:#9a9086;font-weight:500">${e(_repPhone)}</span>` : ''}</span><span style="display:flex;gap:22px"><span>견적번호 <b>${e(q.docNo)}</b></span><span>견적일 <b>${e(q.date)}</b></span><span>유효기간 <b>${e(q.valid) || '-'}</b></span></span></div>
   <div class="info">
     <div class="box"><div class="bh">수신</div><div class="bb"><div class="recip-name">${e(q.client)} 귀중</div>${q.attn ? `<div style="color:#555;margin-bottom:4px">${e(q.attn)}</div>` : ''}<div style="color:#666">아래와 같이 견적합니다.</div>${q.siteAddr ? `<div style="margin-top:11px;padding-top:9px;border-top:1px dashed #e0d6c4"><span style="color:#8a7350;font-weight:700;font-size:10px;letter-spacing:1.5px">현장 주소</span><div style="color:#332f28;margin-top:3px;line-height:1.5">${e(q.siteAddr)}</div></div>` : ''}</div></div>
-    <div class="box"><div class="bh">공급자</div><div class="bb">${co.stampImg ? `<img class="stampimg" src="${co.stampImg}">` : `<div class="stamp">DAWOO<br>(인)</div>`}<b style="font-size:13px;color:#111">${e(co.name)}</b><br>대표 ${e(co.ceo)}<br>사업자등록번호 ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}${q.by ? `<br><b style="color:#111">담당 ${e(q.by)}${_staffPhone ? ' ' + e(_staffPhone) : ''}</b>` : ''}</div></div>
+    <div class="box"><div class="bh">공급자</div><div class="bb">${co.stampImg ? `<img class="stampimg" src="${co.stampImg}">` : `<div class="stamp">DAWOO<br>(인)</div>`}<b style="font-size:13px;color:#111">${e(co.name)}</b><br>대표 ${e(co.ceo)}<br>사업자등록번호 ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}${_repName ? `<br><b style="color:#111">담당 ${e(_repName)}${_repPhone ? ' ' + e(_repPhone) : ''}</b>` : ''}</div></div>
   </div>
   <table class="items"><colgroup><col style="width:7%"><col style="width:33%"><col style="width:22%"><col style="width:10%"><col style="width:14%"><col style="width:14%"></colgroup>
     <thead><tr><th>No</th><th>품목</th><th>규격</th><th>수량</th><th>단가</th><th>금액</th></tr></thead><tbody>${rows}</tbody></table>
