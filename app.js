@@ -4458,6 +4458,7 @@ function customsDocHtml(q) {
 }
 function qDate(q) { return q.date || (q.createdAt ? new Date(+q.createdAt).toISOString().slice(0, 10) : ''); }
 function quoteMonthNav(delta) { const cur = filters.quoteMonth || todayStr().slice(0, 7); const p = cur.split('-').map(Number); const d = new Date(p[0], p[1] - 1 + delta, 1); filters.quoteMonth = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); renderQuote(); }
+function quoteDayNav(delta) { const cur = filters.quoteDay || todayStr(); const d = new Date(cur + 'T00:00'); d.setDate(d.getDate() + delta); filters.quoteDay = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); renderQuote(); }
 function quoteCardHtml(q) {
   const when = qDate(q);
   const _hasBasin = (q.items || []).some(it => (it.name || '').includes('세면대'));
@@ -4863,29 +4864,40 @@ function renderQuote() {
   if (qy) list = list.filter(q => (q.client || '').toLowerCase().includes(qy) || (q.docNo || '').toLowerCase().includes(qy) || (q.items || []).some(it => (it.name || '').toLowerCase().includes(qy)));
   const view = filters.quoteView || 'all';
   const curMonth = filters.quoteMonth || ym;
+  const curDay = filters.quoteDay || todayStr();
   const WD = ['일', '월', '화', '수', '목', '금', '토'];
-  let body;
+  let body, navBar = '';
   if (view === 'month') {
     const mlist = list.filter(q => qDate(q).startsWith(curMonth));
     const mSum = mlist.reduce((a, b) => a + (+b.total || 0), 0);
     const byDay = {}; mlist.forEach(q => { const d = qDate(q) || '날짜미상'; (byDay[d] = byDay[d] || []).push(q); });
     const days = Object.keys(byDay).sort((a, b) => b.localeCompare(a));
-    const monthBar = `<div style="display:flex;align-items:center;justify-content:space-between;background:var(--soft);border-radius:11px;padding:8px 12px;margin-bottom:10px">
+    navBar = `<div style="display:flex;align-items:center;justify-content:space-between;background:var(--soft);border-radius:11px;padding:8px 12px;margin-bottom:10px">
       <button class="btn btn-sm" onclick="quoteMonthNav(-1)"><i class="ti ti-chevron-left"></i></button>
       <div style="text-align:center"><div style="font-weight:800;font-size:15.5px">${esc(curMonth.replace('-', '. '))}</div><div style="font-size:11.5px;color:var(--t3)">${mlist.length}건 · <b style="color:var(--gd)">${fmtWon(mSum)}</b>원</div></div>
       <button class="btn btn-sm" onclick="quoteMonthNav(1)"><i class="ti ti-chevron-right"></i></button></div>`;
-    const sections = days.length ? days.map(d => {
+    body = days.length ? days.map(d => {
       const qs = byDay[d]; const dSum = qs.reduce((a, b) => a + (+b.total || 0), 0);
       const dLabel = d === '날짜미상' ? d : (d.slice(5).replace('-', '/') + ' (' + WD[new Date(d + 'T00:00').getDay()] + ')');
       return `<div style="display:flex;align-items:center;gap:8px;margin:14px 2px 8px"><div style="font-weight:800;font-size:13.5px">${esc(dLabel)}</div><div style="flex:1;height:1px;background:var(--bd)"></div><div style="font-size:12px;color:var(--t2)">${qs.length}건 · <b style="color:var(--gd)">${fmtWon(dSum)}</b>원</div></div>${qs.map(quoteCardHtml).join('')}`;
     }).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${esc(curMonth)}에 견적이 없습니다</div>`;
-    body = monthBar + sections;
+  } else if (view === 'day') {
+    const dlist = list.filter(q => qDate(q) === curDay);
+    const dSum = dlist.reduce((a, b) => a + (+b.total || 0), 0);
+    const dObj = new Date(curDay + 'T00:00');
+    const dTitle = curDay.replace(/-/g, '. ') + ' (' + WD[dObj.getDay()] + ')';
+    navBar = `<div style="display:flex;align-items:center;justify-content:space-between;background:var(--soft);border-radius:11px;padding:8px 12px;margin-bottom:10px">
+      <button class="btn btn-sm" onclick="quoteDayNav(-1)"><i class="ti ti-chevron-left"></i></button>
+      <div style="text-align:center"><div style="font-weight:800;font-size:15.5px">${esc(dTitle)}</div><div style="font-size:11.5px;color:var(--t3)">${dlist.length}건 · <b style="color:var(--gd)">${fmtWon(dSum)}</b>원</div></div>
+      <button class="btn btn-sm" onclick="quoteDayNav(1)"><i class="ti ti-chevron-right"></i></button></div>`;
+    body = dlist.length ? dlist.map(quoteCardHtml).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${esc(dTitle)}에 견적이 없습니다</div>`;
   } else {
     body = list.length ? list.map(quoteCardHtml).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${qy ? '검색 결과가 없습니다' : '작성한 견적이 없습니다. 견적 작성으로 시작하세요.'}</div>`;
   }
   const toggle = `<div style="display:flex;gap:6px;margin-bottom:10px">
     <button class="btn btn-sm ${view === 'all' ? 'btn-pri' : ''}" onclick="filters.quoteView='all';renderQuote()">전체</button>
-    <button class="btn btn-sm ${view === 'month' ? 'btn-pri' : ''}" onclick="filters.quoteView='month';renderQuote()"><i class="ti ti-calendar-month"></i> 월별</button></div>`;
+    <button class="btn btn-sm ${view === 'month' ? 'btn-pri' : ''}" onclick="filters.quoteView='month';renderQuote()"><i class="ti ti-calendar-month"></i> 월별</button>
+    <button class="btn btn-sm ${view === 'day' ? 'btn-pri' : ''}" onclick="filters.quoteView='day';renderQuote()"><i class="ti ti-calendar-event"></i> 일별</button></div>`;
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
       <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
@@ -4900,7 +4912,8 @@ function renderQuote() {
       <input id="q-search" placeholder="거래처·견적번호·자재 검색" value="${esc(filters.quoteSearch || '')}" oninput="filters.quoteSearch=this.value;renderQuote()" autocomplete="off" lang="ko">
       ${(filters.quoteSearch || '').trim() ? `<button class="search-x" onclick="filters.quoteSearch='';el('q-search').value='';renderQuote()"><i class="ti ti-x"></i></button>` : ''}
     </div>
-    ${body}`;
+    ${navBar}
+    <div id="q-list" data-keepscroll style="max-height:calc(100vh - 300px);min-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${body}</div>`;
 }
 function quoteDocHtml(q) {
   if (q.category === '통관비용') return customsDocHtml(q);
