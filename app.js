@@ -3934,14 +3934,15 @@ function quoteRegister(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
   const items = (q.items || []).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' }));
   const hasBasin = (q.items || []).some(it => (it.name || '').includes('세면대'));
+  const hasGagong = (q.items || []).some(it => marginCat(it.name) === '가공');
   if (hasBasin) {
     let bi = (q.items || []).filter(it => (it.name || '').includes('세면대')).map(it => ({ stone: it.name, spec: it.spec || '', qty: it.qty || '', quoteNo: q.docNo || '' }));
     if (!bi.length) bi = (q.items || []).map(it => ({ stone: it.name, spec: it.spec || '', qty: it.qty || '' }));
     go('basin'); setTimeout(() => { try { openBasinForm(null, { vendor: q.client, items: bi }); } catch (e) { } }, 90);
     toast('세면대 발주로 불러왔습니다');
-  } else if ((q.siteAddr || '').trim()) {
+  } else if (hasGagong) {
     go('sites'); setTimeout(() => { try { openSiteForm(null, { name: q.client, address: q.siteAddr, quoteId: id }); } catch (e) { } }, 90);
-    toast('현장 등록으로 이동');
+    toast('가공 포함 · 현장 등록으로 이동');
   } else { openShipForm({ targetName: q.client, items: items, quoteId: id }); toast('출고 등록으로 불러왔습니다 · 확인 후 등록'); }
 }
 function quoteToOrder(id) {
@@ -4415,9 +4416,9 @@ function quoteMonthNav(delta) { const cur = filters.quoteMonth || todayStr().sli
 function quoteCardHtml(q) {
   const when = qDate(q);
   const _hasBasin = (q.items || []).some(it => (it.name || '').includes('세면대'));
-  const _isSite = !!(q.siteAddr || '').trim();
-  const _regLabel = _hasBasin ? '세면대 발주' : (_isSite ? '현장 등록' : '출고 등록');
-  const _regIcon = _hasBasin ? 'ti-bath' : (_isSite ? 'ti-building-community' : 'ti-truck-delivery');
+  const _hasGagong = (q.items || []).some(it => marginCat(it.name) === '가공');
+  const _regLabel = _hasBasin ? '세면대 발주' : (_hasGagong ? '현장 등록' : '출고 등록');
+  const _regIcon = _hasBasin ? 'ti-bath' : (_hasGagong ? 'ti-building-community' : 'ti-truck-delivery');
   const names = (q.items || []).map(it => it.name).filter(Boolean).slice(0, 3).join(', ') + ((q.items || []).length > 3 ? ` 외 ${q.items.length - 3}` : '');
   const _pa = +q.paidAmount || 0; const _tt = +q.total || 0; const _rem = Math.max(0, _tt - _pa);
   const paidPill = (_tt > 0 && _pa >= _tt) ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 수정"><i class="ti ti-cash"></i> 결제완료</button>` : (_pa > 0 ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 수정"><i class="ti ti-cash"></i> 입금 ${fmtWon(_pa)} · 미수 ${fmtWon(_rem)}</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 입력"><i class="ti ti-cash"></i> 미결제</button>`);
@@ -4450,7 +4451,7 @@ function quoteCardHtml(q) {
 }
 let _costSupply = 0;
 let _costRev = { mat: 0, proc: 0, cons: 0, trans: 0 };
-function marginCat(name) { const n = name || ''; if (/운송|배송|운반/.test(n)) return '운송'; if (/재단|타공|고스라|뒷도|배면|워터젯|사선|모서리|가공|연마|코너/.test(n)) return '가공'; if (/시공|실측|설치/.test(n)) return '시공'; return '자재'; }
+function marginCat(name) { const n = name || ''; if (/운송|배송|운반|파렛트|팔레트|팔렛|파레트|빠렛/.test(n)) return '운송'; if (/재단|타공|고스라|뒷도|배면|워터젯|사선|모서리|가공|연마|코너/.test(n)) return '가공'; if (/시공|실측|설치/.test(n)) return '시공'; return '자재'; }
 function quoteMarginBreakdown(q) {
   const rev = { 자재: 0, 가공: 0, 시공: 0, 운송: 0 };
   (q.items || []).forEach(it => { rev[marginCat(it.name)] += Math.round(+it.amt || 0); });
@@ -4463,7 +4464,7 @@ function quoteMarginBreakdown(q) {
 }
 const GUBUN = ['자재', '운송', '시공', '부속', '기타'];   // 가공은 공장 견적 총액으로 별도 입력
 function hebeFromSpec(spec) { const m = (spec || '').match(/(\d{3,4})\s*[*xX×]\s*(\d{3,4})/); if (m) { return +((+m[1] / 1000) * (+m[2] / 1000)).toFixed(2); } return ''; }
-function costGubunOf(name) { const n = (name || ''); if (/운송|배송|운반/.test(n)) return '운송'; if (/재단|타공|고스라|뒷도|배면|워터젯|사선|모서리|가공|연마|코너/.test(n)) return '가공'; if (/시공|실측|설치/.test(n)) return '시공'; return '자재'; }
+function costGubunOf(name) { const n = (name || ''); if (/운송|배송|운반|파렛트|팔레트|팔렛|파레트|빠렛/.test(n)) return '운송'; if (/재단|타공|고스라|뒷도|배면|워터젯|사선|모서리|가공|연마|코너/.test(n)) return '가공'; if (/시공|실측|설치/.test(n)) return '시공'; return '자재'; }
 function openCostForm(id) { if (!isAdmin()) { toast('원가는 관리자만 볼 수 있습니다'); return; } filters.costEdit = id; render(); const _pg = el('pg-' + tab); if (_pg) _pg.scrollIntoView({ block: 'start' }); }
 function costCancel() { filters.costEdit = ''; render(); }
 function costLineHtml(d) {
