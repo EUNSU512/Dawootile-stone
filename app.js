@@ -3930,6 +3930,12 @@ function quoteConfirmOrder(id) {
   try { Store.update('quotes', id, { ordered: true, orderedAt: Date.now() }); } catch (e) { }
   toast('확정 주문 · 진행중 발주로 전환됨'); try { renderQuote(); } catch (e) { }
 }
+function quoteCancelOrder(id) {
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
+  if (!confirm('확정 주문을 취소할까요?\n(미확정 상태로 되돌립니다)')) return;
+  try { Store.update('quotes', id, { ordered: false, orderedAt: 0 }); } catch (e) { }
+  toast('확정 주문 취소됨'); try { renderQuote(); } catch (e) { }
+}
 function quoteRegister(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
   const items = (q.items || []).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' }));
@@ -4434,7 +4440,7 @@ function quoteCardHtml(q) {
       </div>
       <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${shipBadge}${siteBadge}</div>
       <div class="frm-foot" style="margin-top:9px;display:flex;align-items:center;gap:5px;flex-wrap:wrap">
-        ${(q.shipped || q.siteDone) ? '' : (q.ordered ? `<button class="btn btn-sm btn-pri" onclick="quoteRegister('${q.id}')"><i class="ti ${_regIcon}"></i>${_regLabel}</button>` : `<button class="btn btn-sm btn-pri" onclick="quoteConfirmOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>`)}
+        ${(q.shipped || q.siteDone) ? '' : (q.ordered ? `<button class="btn btn-sm btn-pri" onclick="quoteRegister('${q.id}')"><i class="ti ${_regIcon}"></i>${_regLabel}</button><button class="btn btn-sm" style="color:var(--t3)" onclick="quoteCancelOrder('${q.id}')" title="확정 주문 취소"><i class="ti ti-arrow-back-up"></i>확정취소</button>` : `<button class="btn btn-sm btn-pri" onclick="quoteConfirmOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>`)}
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}')"><i class="ti ti-edit"></i>수정</button>
         <button class="btn btn-sm" onclick="printQuote('${q.id}')"><i class="ti ti-printer"></i>인쇄</button>
         <span style="display:inline-flex;gap:2px;padding-left:6px;margin-left:2px;border-left:1px solid var(--bd)">
