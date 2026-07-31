@@ -3682,8 +3682,9 @@ function quoteClientChanged() {
   const client = (el('q-client') && el('q-client').value || '').trim();
   const cs = el('q-ctype'); if (cs) cs.value = clientType(client);
   quoteRefillPrices();
+  quoteExtraRefresh();
 }
-function quoteTypeChanged() { quoteRefillPrices(); }
+function quoteTypeChanged() { quoteRefillPrices(); quoteExtraRefresh(); }
 function quoteRefillPrices() {
   const client = (el('q-client') && el('q-client').value || '').trim();
   const type = el('q-ctype') ? el('q-ctype').value : '';
@@ -3722,6 +3723,7 @@ function addQRow() { const c = el('q-rows'); if (c) { c.insertAdjacentHTML('befo
 function openQuoteInline(id, copy) { filters.quoteEdit = id || 'new'; filters.quoteCopy = !!copy; filters.quoteCat = ''; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
 function quoteCancel() { filters.quoteEdit = ''; filters.quoteCopy = false; filters.quoteCat = ''; renderQuote(); }
 /* 부대비용·가공 프리셋 (견적 폼에 항상 표시, 수량 입력한 것만 견적서 반영) */
+const CONSUMER_GAGONG = [{ name: '가공비 12T (장당)', unit: '장' }, { name: '가공비 6T (장당)', unit: '장' }];   // 소비자 유형 가공비
 const QUOTE_EXTRAS = [
   { name: '재단비 12T', unit: 'M' }, { name: '재단비 6T', unit: 'M' },
   { name: '북매치 재단', unit: 'M' }, { name: '워터젯', unit: 'M' },
@@ -3770,7 +3772,8 @@ function _qsExtraRowsHtml() {
       <div class="info" style="flex:1;min-width:0"><div class="nm">${esc(nm)}</div></div>
       <input class="qe-unit" inputmode="text" placeholder="단위" value="${esc(it.unit || '')}" onchange="setExtraUnit('${e}',this.value)" style="${uin}">
       <input class="qe-price" inputmode="numeric" placeholder="단가" value="${esc(prices[nm] || '')}" onchange="saveExtraPrice('${e}',this.value)" style="${pin}">
-      <i class="ti ti-trash" onclick="delExtraItem('${e}')" title="항목 삭제" style="color:#c0341d;cursor:pointer;font-size:16px"></i></div>`; }).join('');
+      <i class="ti ti-trash" onclick="delExtraItem('${e}')" title="항목 삭제" style="color:#c0341d;cursor:pointer;font-size:16px"></i></div>`; }).join('')
+    + `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--bd)"><div style="font-size:11px;color:#a2560f;margin-bottom:5px;font-weight:700">소비자 유형 가공비 (장당) · 소비자 견적서에만 자동 표시</div>` + CONSUMER_GAGONG.map(it => { const nm = it.name; const e = esc(nm).replace(/'/g, "\\'"); return `<div class="mem" style="display:flex;align-items:center;gap:6px"><div class="info" style="flex:1;min-width:0"><div class="nm">${esc(nm)}</div></div><input inputmode="numeric" placeholder="장당 단가" value="${esc(prices[nm] || '')}" onchange="saveExtraPrice('${e}',this.value)" style="${pin}"></div>`; }).join('') + `</div>`;
 }
 function qxRowHtml(item, d) {
   const name = item.name; const unit = item.unit || '';
@@ -3784,6 +3787,19 @@ function qxRowHtml(item, d) {
     <input class="qx-price" inputmode="numeric" placeholder="단가" value="${esc(price)}" oninput="quoteRecalc()" style="flex:1.3;min-width:54px;${inp};text-align:right">
     <div class="qx-amt" style="flex:1.3;min-width:58px;text-align:right;font-weight:700;font-size:14px">0</div>
   </div>`;
+}
+function extraItemsFor(ctype) {
+  const base = extraItemsList();
+  if ((ctype || '') === '소비자') { const nonG = base.filter(it => marginCat(it.name) !== '가공'); return CONSUMER_GAGONG.concat(nonG); }
+  return base;
+}
+function collectQxValues() { const m = {}; document.querySelectorAll('.qx-row').forEach(r => { const nm = r.getAttribute('data-name'); m[nm] = { qty: r.querySelector('.qx-qty').value, price: r.querySelector('.qx-price').value }; }); return m; }
+function quoteExtraRefresh() {
+  const box = el('qx-rows-box'); if (!box) return;
+  const ctype = el('q-ctype') ? el('q-ctype').value : '소비자';
+  const saved = collectQxValues();
+  box.innerHTML = extraItemsFor(ctype).map(it => qxRowHtml(it, saved[it.name])).join('');
+  quoteRecalc();
 }
 function renderQuoteForm() {
   const id = filters.quoteEdit === 'new' ? '' : filters.quoteEdit;
@@ -3825,7 +3841,7 @@ function renderQuoteForm() {
         <div class="fld full" style="margin-bottom:10px"><label>부대비용 · 가공 <span style="color:var(--t3);font-weight:500">(수량 입력한 항목만 견적서에 표시됩니다)</span></label>
           <div style="border:1px solid var(--bd2);border-radius:10px;padding:9px 11px">
             <div style="display:flex;gap:6px;font-size:11px;color:var(--t3);margin-bottom:5px;font-weight:600"><div style="flex:2.2">항목</div><div style="flex:1;text-align:right">수량</div><div style="width:24px;text-align:center">단위</div><div style="flex:1.3;text-align:right">단가</div><div style="flex:1.3;text-align:right">금액</div></div>
-            ${extraItemsList().map(it => qxRowHtml(it, savedExtra[it.name])).join('')}
+            <div id="qx-rows-box">${extraItemsFor((editing && v.ctype) || clientType(v.client || '') || '소비자').map(it => qxRowHtml(it, savedExtra[it.name])).join('')}</div>
           </div>
         </div>
         <div id="q-basin-note" style="display:none;margin-bottom:10px;border:2px solid #c0341d;border-radius:10px;background:#fff5f5;padding:10px 12px">
