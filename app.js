@@ -4685,6 +4685,7 @@ async function toggleCrewPaid(id) {
   toast(paid ? '시공비 정산 완료 표시' : '미정산으로 변경'); renderSettle();
 }
 function crewToggleUnpaid() { filters.crewUnpaidOnly = !filters.crewUnpaidOnly; renderSettle(); }
+function crewPickTeam(v) { filters.crewTeam = v || ''; renderSettle(); }
 function downloadCrewLedger() {
   if (!isAdmin()) { toast('관리자만'); return; }
   if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후'); return; }
@@ -4706,8 +4707,10 @@ function crewSettleCard() {
   const onlyUnpaid = !!filters.crewUnpaidOnly;
   const byTeam = {}; sites.forEach(s => { const t = (s.team || '미지정'); (byTeam[t] = byTeam[t] || []).push(s); });
   const teams = Object.keys(byTeam).sort((a, b) => a.localeCompare(b));
+  const selTeam = filters.crewTeam || '';
+  const showTeams = selTeam ? teams.filter(t => t === selTeam) : teams;
   const inp = 'width:110px;text-align:right;font-size:13px;padding:6px 8px;border:1.5px solid var(--bd2);border-radius:8px';
-  const blocks = teams.map(t => {
+  const blocks = showTeams.map(t => {
     let list = byTeam[t].slice().sort((a, b) => (b.constructDate || '').localeCompare(a.constructDate || ''));
     if (onlyUnpaid) list = list.filter(s => !s.crewPaid);
     if (!list.length) return '';
@@ -4731,7 +4734,7 @@ function crewSettleCard() {
   return `<div class="card" style="margin-bottom:12px;padding:13px 14px">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:6px">
       <div style="font-size:11.5px;color:var(--t3);font-weight:700"><i class="ti ti-hammer"></i> 시공비 정산 (시공팀별 · 현장별)</div>
-      <div style="display:flex;gap:6px"><button class="btn btn-sm ${onlyUnpaid ? 'btn-pri' : ''}" onclick="crewToggleUnpaid()">미정산만</button><button class="btn btn-sm" onclick="downloadCrewLedger()"><i class="ti ti-download"></i>엑셀</button></div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><select onchange="crewPickTeam(this.value)" style="font-size:12px;padding:6px 8px;border:1.5px solid var(--bd2);border-radius:8px;background:#fff"><option value="">전체 팀</option>${teams.map(t => `<option value="${esc(t)}" ${selTeam === t ? 'selected' : ''}>${esc(t)}${isSelfTeam(t) ? ' (자체)' : ''}</option>`).join('')}</select><button class="btn btn-sm ${onlyUnpaid ? 'btn-pri' : ''}" onclick="crewToggleUnpaid()">미정산만</button><button class="btn btn-sm" onclick="downloadCrewLedger()"><i class="ti ti-download"></i>엑셀</button></div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:6px">
       <div style="text-align:center;padding:8px;background:#fdf0ea;border-radius:9px"><div style="font-size:10.5px;color:var(--t2)">미정산 합계</div><div style="font-size:15px;font-weight:800;color:#c0341d">${fmtWon(totUnpaid)}</div></div>
