@@ -3954,7 +3954,7 @@ function quoteCancelOrder(id) {
 }
 function quoteRegister(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
-  const items = (q.items || []).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' }));
+  const items = (q.items || []).filter(it => marginCat(it.name) === '자재').map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' }));   // 출고엔 자재만 (가공·운송 제외)
   const hasBasin = (q.items || []).some(it => (it.name || '').includes('세면대'));
   const hasGagong = (q.items || []).some(it => marginCat(it.name) === '가공');
   if (hasBasin) {
