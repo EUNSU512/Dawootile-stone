@@ -921,6 +921,7 @@ function clientRowsHtml() {
   }).join('') : `<div class="empty"><i class="ti ti-users"></i>${q ? '검색 결과가 없습니다' : '거래처가 없습니다'}</div>`;
 }
 function renderClients() {
+  keepScrolls();
   if (filters.clientDetail) { renderClientDetail(); return; }
   const allUnpaid = (state.clients || []).reduce((a, c) => a + clientStats(c.value).unpaid, 0);
   const rows = clientRowsHtml();
@@ -1005,6 +1006,13 @@ function renderClientDetail() {
       <div style="max-height:52vh;overflow:auto">${ledger}</div>
     </div>`;
 }
+function keepScrolls() {
+  const k = {};
+  document.querySelectorAll('[data-keepscroll]').forEach(e => { if (e.id && e.scrollTop > 0) k[e.id] = e.scrollTop; });
+  if (!Object.keys(k).length) return;
+  const restore = () => { for (const id in k) { const e = el(id); if (e) e.scrollTop = k[id]; } };
+  requestAnimationFrame(() => { restore(); requestAnimationFrame(restore); });
+}
 function render() {
   if (!me) return;
   // 입력 중(검색창·폼 포커스)에는 전체 재렌더를 미뤄 한글 입력·검색 끊김 방지
@@ -1015,9 +1023,7 @@ function render() {
   }
   if (_renderTimer) { clearTimeout(_renderTimer); _renderTimer = null; }
   // 스크롤 위치 보존(재렌더로 스크롤이 위로 튕기는 것 방지) — data-keepscroll + id 붙은 요소
-  const _keep = {};
-  document.querySelectorAll('[data-keepscroll]').forEach(e => { if (e.id && e.scrollTop > 0) _keep[e.id] = e.scrollTop; });
-  if (Object.keys(_keep).length) requestAnimationFrame(() => { for (const id in _keep) { const e = el(id); if (e) e.scrollTop = _keep[id]; } });
+  keepScrolls();
   if (isCustomerRole()) { renderCustomerStock(); return; }   // 고객: 재고 조회 전용
   if (isCrewRole()) { renderCrewSchedule(); return; }        // 시공팀: 시공 스케줄 전용
   applyMenuPerms();
@@ -1170,6 +1176,7 @@ function startCustomerHoldings() {
   } catch (e) { console.warn(e); }
 }
 function renderCustomerStock() {
+  keepScrolls();
   const tab = filters.custTab || 'stock';
   const list = custStockList();
   const custInv = state.inventory.filter(i => catIsCeramicLike(itemCat(i)));
@@ -2230,6 +2237,7 @@ function filterSites() {
   if (el('sites-count')) el('sites-count').textContent = list.length + '건';
 }
 function renderSites() {
+  keepScrolls();
   const f = filters.sites;
   if (f === 'issue') { renderIssues(); return; } // 이슈는 전용 화면
   const list = sitesFilteredList();
@@ -2675,6 +2683,7 @@ ${body}
   toast('입고 엑셀 다운로드 (' + rows.length + '행)');
 }
 function renderStock() {
+  keepScrolls();
   const f = filters.stock;
   const list = stockBaseList();
   const ins = state.transactions.filter(t => t.type === 'in').sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 8);
@@ -3491,6 +3500,7 @@ function thickChipsHtml(agg) {
   }).join('');
 }
 function renderShip() {
+  keepScrolls();
   const _shipSY = window.scrollY, _shipTW = el('r-wrap') ? el('r-wrap').scrollTop : 0;   // 재렌더 후 스크롤 위치 유지
   const outs = state.transactions.filter(t => t.type === 'out').sort((a, b) => (b.date || '').localeCompare(a.date || ''));
   const now = new Date(); const ym = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
@@ -4275,6 +4285,7 @@ function _qsPriceRowsHtml() {
 function qsFilterClients(v) { filters.qsClientSearch = v; const c = el('qs-clients'); if (c) c.innerHTML = _qsClientRowsHtml(); }
 function qsFilterPrices(v) { filters.qsMatSearch = v; const b = document.querySelector('#qs-prices tbody'); if (b) b.innerHTML = _qsPriceRowsHtml(); }
 function renderQuoteSettings() {
+  keepScrolls();
   const memo = quoteMemoTemplate();
   const ci = companyInfo();
   const coFields = [['name', '상호'], ['ceo', '대표'], ['bizno', '사업자등록번호'], ['addr', '주소'], ['tel', '연락처'], ['biztype', '업태·종목'], ['email', '이메일'], ['web', '홈페이지']];
@@ -4555,6 +4566,7 @@ function costRecalc() {
   if (el('ct-rate')) el('ct-rate').textContent = _costSupply > 0 ? ((margin / _costSupply * 100).toFixed(1) + '%') : '-';
 }
 function renderCostForm() {
+  keepScrolls();
   const q = (state.quotes || []).find(x => x.id === filters.costEdit); if (!q) { filters.costEdit = ''; render(); return; }
   _costSupply = +q.supply || 0;
   _costRev = { mat: 0, proc: 0, cons: 0, trans: 0 };
@@ -4751,6 +4763,7 @@ function crewSettleCard() {
 }
 
 function renderSettle() {
+  keepScrolls();
   const root = el('pg-settle'); if (!root) return;
   if (filters.costEdit) { if (!document.getElementById('cost-root')) renderCostForm(); return; }   // 원가 입력 폼(관리자)
   if (!tabAllowed('settle')) { root.innerHTML = `<div class="ph"><div><h2><i class="ti ti-report-money"></i>정산</h2></div></div><div class="empty"><i class="ti ti-lock"></i>정산·원가·마진은 관리자 또는 접근 권한이 있는 직원만 열람할 수 있습니다.</div>`; return; }
@@ -4856,6 +4869,7 @@ function renderSettle() {
 }
 
 function renderQuote() {
+  keepScrolls();
   if (filters.quoteSettings) { if (!document.getElementById('qset-root')) renderQuoteSettings(); return; }   // 설정 화면
   if (filters.quoteEdit) { if (!document.getElementById('qform-root')) renderQuoteForm(); return; }   // 편집 중엔 실시간 재렌더로 폼을 덮어쓰지 않음
   if (filters.taxEdit) { if (!document.getElementById('taxform-root')) renderTaxForm(); return; }   // 세금계산서 발행 화면
@@ -5611,6 +5625,7 @@ function basinFilteredList() {
   return l;
 }
 function renderBasin() {
+  keepScrolls();
   const f = filters.basinTab || 'all';
   const list = basinFilteredList();
   const chips = BASIN_FILTERS.map(x => {
@@ -6426,6 +6441,7 @@ function prefillHoldFromReq(id) {
   _holdReqLink = id;   // openHoldForm 이 먼저 초기화하므로 그 뒤에 설정
 }
 function renderHold() {
+  keepScrolls();
   const isResv = h => (h.status || '홀딩') === '홀딩';
   const released = state.holdings.filter(h => h.status === '해제');
   const active = state.holdings.filter(h => h.status !== '해제');
@@ -7038,6 +7054,7 @@ function chulgoWarehouseSection() {
     <div style="font-size:12px;color:var(--t3);margin:2px 0 8px"><span class="live-dot" style="background:#1D9E75;--pc:rgba(29,158,117,.6);width:7px;height:7px;display:inline-block;vertical-align:middle;margin-right:5px"></span>실시간 · 새 출고 지시 <b style="color:#c0341d">${newN}건</b></div>${box}${inBox}${chulgoCompletedSection()}`;
 }
 function renderChulgo() {
+  keepScrolls();
   const side = chulgoSide();
   const newN = (state.chulgoReqs || []).filter(r => (r.status || '') === '지시').length;
   el('pg-chulgo').innerHTML = `
@@ -7247,6 +7264,7 @@ function chulgoAlertNew() {
   try { if ('Notification' in window && Notification.permission === 'granted') new Notification('새 출고 지시' + (urgent ? ' ⚠️긴급' : ''), { body: (f.client || '') + ' · ' + (f.items || []).map(x => x.name).join(', ') + veh, tag: 'chulgo-' + (f.dispatchId || f.id) }); } catch (e) { }
 }
 function renderSettings() {
+  keepScrolls();
   el('pg-settings').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-settings"></i>설정</h2><p>${esc(me.name)} 님${isAdmin() ? ' · 관리자' : ''}</p></div></div>
     <div class="card">
