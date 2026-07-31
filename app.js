@@ -4870,6 +4870,40 @@ function renderQuote() {
   const catAgg = {}; QCATS.forEach(c => catAgg[c] = { sum: 0, cnt: 0 });
   all.forEach(q => { if (q.category && catAgg[q.category]) { catAgg[q.category].sum += (+q.supply || 0); catAgg[q.category].cnt++; } else { const cs = {}; (q.items || []).forEach(it => { const c = itemCategory(it.name); if (catAgg[c]) { catAgg[c].sum += Math.round(+it.amt || 0); cs[c] = 1; } }); Object.keys(cs).forEach(c => catAgg[c].cnt++); } });
   const catBreak = `<div class="card" style="margin-bottom:12px;padding:11px 14px"><div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:8px"><i class="ti ti-chart-pie"></i> 분류별 매출 · 견적건</div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${QCATS.map(c => `<div style="text-align:center;padding:7px 4px;background:var(--soft);border-radius:9px"><div style="font-size:10.5px;color:var(--t2);margin-bottom:2px">${c}</div><div style="font-size:14.5px;font-weight:800;color:var(--gd)">${fmtWon(catAgg[c].sum)}</div><div style="font-size:10px;color:var(--t3)">${catAgg[c].cnt}건</div></div>`).join('')}</div></div>`;
+  const view = filters.quoteView || 'all';
+  const _selQs = filters.quoteBundle ? (state.quotes || []).filter(x => _qSel.has(x.id)) : [];
+  const _selTotal = _selQs.reduce((a, q) => a + (+q.total || 0), 0);
+  const bundleBar = filters.quoteBundle ? `<div class="card" style="margin-bottom:10px;padding:11px 13px;border:1.5px solid var(--gd);background:#f2fbf6">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div style="font-size:12.5px"><b style="color:var(--gd)"><i class="ti ti-stack-2"></i> 청구 묶음</b> · ${_selQs.length ? `${esc(_qSelClient)} · <b>${_selQs.length}건</b> · 합계 <b style="color:var(--gd)">${fmtWon(_selTotal)}</b>원` : '같은 거래처 견적을 2건 이상 선택하세요'}</div>
+        <div style="display:flex;gap:6px">${_selQs.length ? `<button class="btn btn-sm" onclick="qSelClear()">선택 해제</button>` : ''}<button class="btn btn-sm btn-pri" ${_selQs.length >= 2 ? '' : 'disabled style="opacity:.5"'} onclick="printCombinedBill()"><i class="ti ti-printer"></i> 합산 청구서 출력</button></div>
+      </div></div>` : '';
+  const toggle = `<div style="display:flex;gap:6px;margin-bottom:10px">
+    <button class="btn btn-sm ${view === 'all' ? 'btn-pri' : ''}" onclick="filters.quoteView='all';renderQuote()">전체</button>
+    <button class="btn btn-sm ${view === 'month' ? 'btn-pri' : ''}" onclick="filters.quoteView='month';renderQuote()"><i class="ti ti-calendar-month"></i> 월별</button>
+    <button class="btn btn-sm ${view === 'day' ? 'btn-pri' : ''}" onclick="filters.quoteView='day';renderQuote()"><i class="ti ti-calendar-event"></i> 일별</button>
+    <button class="btn btn-sm ${filters.quoteBundle ? 'btn-pri' : ''}" style="margin-left:auto" onclick="quoteToggleBundle()"><i class="ti ti-stack-2"></i> 묶음청구</button></div>`;
+  el('pg-quote').innerHTML = `
+    <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
+      <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
+    <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
+      <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(unpaid)}</div><div class="l">미수금(미결제)</div></div>
+      <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행</div></div>
+      <div class="stat"><div class="ic g"><i class="ti ti-calendar-stats"></i></div><div class="v" style="font-size:19px">${fmtWon(monthSum)}</div><div class="l">이번 달 견적</div></div>
+    </div>
+    ${catBreak}
+    ${toggle}
+    ${bundleBar}
+    <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i>
+      <input id="q-search" placeholder="거래처·견적번호·자재 검색" value="${esc(filters.quoteSearch || '')}" oninput="filters.quoteSearch=this.value;quotesFilter()" autocomplete="off" lang="ko">
+      ${(filters.quoteSearch || '').trim() ? `<button class="search-x" onclick="filters.quoteSearch='';el('q-search').value='';quotesFilter()"><i class="ti ti-x"></i></button>` : ''}
+    </div>
+    <div id="q-listwrap">${_quoteListInner()}</div>`;
+}
+function _quoteListInner() {
+  const qy = (filters.quoteSearch || '').trim().toLowerCase();
+  const all = (state.quotes || []);
+  const ym = todayStr().slice(0, 7);
   let list = all.slice().sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
   if (qy) list = list.filter(q => (q.client || '').toLowerCase().includes(qy) || (q.docNo || '').toLowerCase().includes(qy) || (q.items || []).some(it => (it.name || '').toLowerCase().includes(qy)));
   const view = filters.quoteView || 'all';
@@ -4904,36 +4938,9 @@ function renderQuote() {
   } else {
     body = list.length ? list.map(quoteCardHtml).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${qy ? '검색 결과가 없습니다' : '작성한 견적이 없습니다. 견적 작성으로 시작하세요.'}</div>`;
   }
-  const _selQs = filters.quoteBundle ? (state.quotes || []).filter(x => _qSel.has(x.id)) : [];
-  const _selTotal = _selQs.reduce((a, q) => a + (+q.total || 0), 0);
-  const bundleBar = filters.quoteBundle ? `<div class="card" style="margin-bottom:10px;padding:11px 13px;border:1.5px solid var(--gd);background:#f2fbf6">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-        <div style="font-size:12.5px"><b style="color:var(--gd)"><i class="ti ti-stack-2"></i> 청구 묶음</b> · ${_selQs.length ? `${esc(_qSelClient)} · <b>${_selQs.length}건</b> · 합계 <b style="color:var(--gd)">${fmtWon(_selTotal)}</b>원` : '같은 거래처 견적을 2건 이상 선택하세요'}</div>
-        <div style="display:flex;gap:6px">${_selQs.length ? `<button class="btn btn-sm" onclick="qSelClear()">선택 해제</button>` : ''}<button class="btn btn-sm btn-pri" ${_selQs.length >= 2 ? '' : 'disabled style="opacity:.5"'} onclick="printCombinedBill()"><i class="ti ti-printer"></i> 합산 청구서 출력</button></div>
-      </div></div>` : '';
-  const toggle = `<div style="display:flex;gap:6px;margin-bottom:10px">
-    <button class="btn btn-sm ${view === 'all' ? 'btn-pri' : ''}" onclick="filters.quoteView='all';renderQuote()">전체</button>
-    <button class="btn btn-sm ${view === 'month' ? 'btn-pri' : ''}" onclick="filters.quoteView='month';renderQuote()"><i class="ti ti-calendar-month"></i> 월별</button>
-    <button class="btn btn-sm ${view === 'day' ? 'btn-pri' : ''}" onclick="filters.quoteView='day';renderQuote()"><i class="ti ti-calendar-event"></i> 일별</button>
-    <button class="btn btn-sm ${filters.quoteBundle ? 'btn-pri' : ''}" style="margin-left:auto" onclick="quoteToggleBundle()"><i class="ti ti-stack-2"></i> 묶음청구</button></div>`;
-  el('pg-quote').innerHTML = `
-    <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
-      <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
-    <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
-      <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(unpaid)}</div><div class="l">미수금(미결제)</div></div>
-      <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행</div></div>
-      <div class="stat"><div class="ic g"><i class="ti ti-calendar-stats"></i></div><div class="v" style="font-size:19px">${fmtWon(monthSum)}</div><div class="l">이번 달 견적</div></div>
-    </div>
-    ${catBreak}
-    ${toggle}
-    ${bundleBar}
-    <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i>
-      <input id="q-search" placeholder="거래처·견적번호·자재 검색" value="${esc(filters.quoteSearch || '')}" oninput="filters.quoteSearch=this.value;renderQuote()" autocomplete="off" lang="ko">
-      ${(filters.quoteSearch || '').trim() ? `<button class="search-x" onclick="filters.quoteSearch='';el('q-search').value='';renderQuote()"><i class="ti ti-x"></i></button>` : ''}
-    </div>
-    ${navBar}
-    <div id="q-list" data-keepscroll style="max-height:calc(100vh - 300px);min-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${body}</div>`;
+  return `${navBar}<div id="q-list" data-keepscroll style="max-height:calc(100vh - 300px);min-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${body}</div>`;
 }
+function quotesFilter() { const w = el('q-listwrap'); if (!w) { renderQuote(); return; } w.innerHTML = _quoteListInner(); }
 function quoteDocHtml(q) {
   if (q.category === '통관비용') return customsDocHtml(q);
   const e = s => esc(s == null ? '' : String(s));
