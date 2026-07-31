@@ -4770,6 +4770,7 @@ function renderQuote() {
 function quoteDocHtml(q) {
   if (q.category === '통관비용') return customsDocHtml(q);
   const e = s => esc(s == null ? '' : String(s));
+  const _staff = (state.members || []).find(m => _normName(m.name) === _normName(q.by || '')); const _staffPhone = (_staff && _staff.phone) || '';
   const items = q.items || []; const MIN = Math.max(6, items.length);
   let rows = items.map((it, i) => `<tr><td class="c">${i + 1}</td><td class="l">${e(it.name)}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}${it.unit ? ' ' + e(it.unit) : ''}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`).join('');
   for (let i = items.length; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
@@ -4786,7 +4787,7 @@ function quoteDocHtml(q) {
 .qhead .title{text-align:right}
 .qhead .title h1{margin:0;font-size:34px;font-weight:800;letter-spacing:15px;color:#201c17;line-height:1}
 .qhead .title .en{font-size:9.5px;letter-spacing:7px;color:#c2a06a;font-weight:600;margin-top:5px}
-.meta{display:flex;justify-content:flex-end;gap:22px;font-size:11px;color:#9a9086;margin:11px 0 18px;letter-spacing:.3px}
+.meta{display:flex;justify-content:space-between;align-items:baseline;gap:22px;font-size:11px;color:#9a9086;margin:11px 0 18px;letter-spacing:.3px}
 .meta b{color:#201c17;font-weight:600}
 .info{display:flex;gap:13px;margin-bottom:16px}
 .info .box{flex:1;border:1px solid #e6ddcf;border-radius:2px;overflow:hidden}
@@ -4819,10 +4820,10 @@ function quoteDocHtml(q) {
     <div class="brand"><img src="${DAWOO_LOGO}" alt="" style="height:42px;display:block"></div>
     <div class="title"><h1>견 적 서</h1></div>
   </div>
-  <div class="meta"><span>견적번호 <b>${e(q.docNo)}</b></span><span>견적일 <b>${e(q.date)}</b></span><span>유효기간 <b>${e(q.valid) || '-'}</b></span></div>
+  <div class="meta"><span style="color:#201c17;font-weight:600">견적 담당자 : ${e(q.by) || '-'}${_staffPhone ? ` <span style="color:#9a9086;font-weight:500">${e(_staffPhone)}</span>` : ''}</span><span style="display:flex;gap:22px"><span>견적번호 <b>${e(q.docNo)}</b></span><span>견적일 <b>${e(q.date)}</b></span><span>유효기간 <b>${e(q.valid) || '-'}</b></span></span></div>
   <div class="info">
     <div class="box"><div class="bh">수신</div><div class="bb"><div class="recip-name">${e(q.client)} 귀중</div>${q.attn ? `<div style="color:#555;margin-bottom:4px">${e(q.attn)}</div>` : ''}<div style="color:#666">아래와 같이 견적합니다.</div>${q.siteAddr ? `<div style="margin-top:11px;padding-top:9px;border-top:1px dashed #e0d6c4"><span style="color:#8a7350;font-weight:700;font-size:10px;letter-spacing:1.5px">현장 주소</span><div style="color:#332f28;margin-top:3px;line-height:1.5">${e(q.siteAddr)}</div></div>` : ''}</div></div>
-    <div class="box"><div class="bh">공급자</div><div class="bb">${co.stampImg ? `<img class="stampimg" src="${co.stampImg}">` : `<div class="stamp">DAWOO<br>(인)</div>`}<b style="font-size:13px;color:#111">${e(co.name)}</b><br>대표 ${e(co.ceo)}<br>사업자등록번호 ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}${q.by ? `<br><b style="color:#111">담당 ${e(q.by)}</b>` : ''}</div></div>
+    <div class="box"><div class="bh">공급자</div><div class="bb">${co.stampImg ? `<img class="stampimg" src="${co.stampImg}">` : `<div class="stamp">DAWOO<br>(인)</div>`}<b style="font-size:13px;color:#111">${e(co.name)}</b><br>대표 ${e(co.ceo)}<br>사업자등록번호 ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}${q.by ? `<br><b style="color:#111">담당 ${e(q.by)}${_staffPhone ? ' ' + e(_staffPhone) : ''}</b>` : ''}</div></div>
   </div>
   <table class="items"><colgroup><col style="width:7%"><col style="width:33%"><col style="width:22%"><col style="width:10%"><col style="width:14%"><col style="width:14%"></colgroup>
     <thead><tr><th>No</th><th>품목</th><th>규격</th><th>수량</th><th>단가</th><th>금액</th></tr></thead><tbody>${rows}</tbody></table>
@@ -7020,6 +7021,7 @@ function openMemberForm(id) {
       <div class="fld full"><label>이름<span class="req">*</span></label><input id="m-name" value="${esc(v.name || '')}" placeholder="이름"></div>
       <div class="fld"><label>권한</label><select id="m-role"><option value="staff" ${v.role === 'staff' ? 'selected' : ''}>직원</option><option value="admin" ${v.role === 'admin' ? 'selected' : ''}>관리자</option><option value="customer" ${v.role === 'customer' ? 'selected' : ''}>고객(거래처) · 재고조회만</option><option value="crew" ${v.role === 'crew' ? 'selected' : ''}>시공팀 · 시공 스케줄만</option></select></div>
       <div class="fld full"><label>로그인 이메일<span class="req">*</span></label><input id="m-email" type="email" value="${esc(v.email || '')}" autocapitalize="none" spellcheck="false" placeholder="예) hong@dawoo.com"></div>
+      <div class="fld full"><label>연락처 <span style="color:var(--t3);font-weight:500">(견적서 담당자 연락처로 표시)</span></label><input id="m-phone" value="${esc(v.phone || '')}" placeholder="예) 010-1234-5678"></div>
       <div class="fld full"><div class="perm-head"><label style="margin:0"><i class="ti ti-lock-access"></i> 메뉴 접근 권한 <span style="color:var(--t3);font-weight:500">— 직원 권한일 때 적용</span></label>
         <div class="perm-quick"><button type="button" onclick="menuPermAll(true)">전체 허용</button><button type="button" onclick="menuPermAll(false)">전체 해제</button></div></div>
         <div class="perm-grid">${ALL_TABS.filter(t => !ALWAYS_TABS.includes(t)).map(t => { const sens = RESTRICTED_TABS.includes(t); return `<div class="perm-row${sens ? ' sens' : ''}"><span class="perm-lab"><i class="ti ${TAB_ICONS[t] || 'ti-square'}"></i>${TAB_LABELS[t]}${sens ? '<span class="pbadge">민감</span>' : ''}</span><label class="swt"><input type="checkbox" class="m-menu" value="${t}" ${curMenus.includes(t) ? 'checked' : ''}><span class="track"></span></label></div>`; }).join('')}</div>
@@ -7067,7 +7069,7 @@ async function submitMember(id) {
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { toast('이메일 형식을 확인하세요'); return; }
   if (state.members.some(m => m.id !== id && (m.email || '').toLowerCase() === email)) { toast('이미 등록된 이메일입니다'); return; }
   const _menus = Array.from(document.querySelectorAll('.m-menu')).filter(c => c.checked).map(c => c.value);
-  const obj = { name, role: el('m-role').value, email };
+  const obj = { name, role: el('m-role').value, email, phone: (el('m-phone') && el('m-phone').value || '').trim() };
   if (obj.role === 'staff') obj.menus = _menus;
   const prevEmail = id ? ((state.members.find(m => m.id === id) || {}).email || '').toLowerCase() : '';
   if (id) await Store.update('members', id, obj); else await Store.add('members', obj);
