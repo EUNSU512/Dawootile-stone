@@ -3654,12 +3654,13 @@ function quoteGetPrice(client, name, typeOverride) {
 function quoteNextDocNo() { const d = todayStr().replace(/-/g, ''); const n = (state.quotes || []).filter(q => (q.docNo || '').startsWith('Q' + d)).length; return 'Q' + d + '-' + (n + 1); }
 let _qN = 0;
 function qRowHtml(d) {
-  d = d || {}; const i = _qN++; const inp = 'font-size:14px;padding:8px;border:1.5px solid var(--bd2);border-radius:8px';
+  d = d || {}; const i = _qN++; const inp = 'font-size:14px;padding:8px;border:1.5px solid var(--bd2);border-radius:8px'; const _isBasin = (d.name || '').includes('세면대');
   return `<div class="q-row" style="border:1px solid var(--bd2);border-radius:10px;padding:8px 9px;margin-bottom:8px">
     <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
       <input class="q-mat" list="q-mat-list" lang="ko" placeholder="자재명 (선택/입력)" value="${esc(d.name || '')}" onchange="quoteMatPick(this)" style="flex:2.4;min-width:0;${inp}">
       <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.q-row').remove();quoteRecalc()" aria-label="삭제"><i class="ti ti-x"></i></button>
     </div>
+    <div class="q-stone-wrap" style="margin-bottom:6px;display:${_isBasin ? 'block' : 'none'}"><select class="q-stone" style="width:100%;font-size:14px;padding:8px;border:1.5px solid var(--bd2);border-radius:8px;background:#fff"><option value="">— 석종(컬러) 선택 · 세면대 발주에 적용 —</option>${BASIN_STONES.map(st => `<option value="${esc(st.k)}" ${d.stone === st.k ? 'selected' : ''}>${esc(st.k)}${st.t ? ' · ' + st.t : ''}</option>`).join('')}</select></div>
     <div style="display:flex;gap:6px;align-items:center">
       <input class="q-spec" lang="en" placeholder="규격" value="${esc(d.spec || '')}" style="flex:1.7;min-width:0;${inp}">
       <input class="q-qty" inputmode="numeric" placeholder="수량" value="${esc(d.qty || '')}" oninput="quoteRecalc()" style="flex:1;min-width:44px;${inp};text-align:right">
@@ -3676,6 +3677,7 @@ function quoteMatPick(inp) {
   const client = (el('q-client') && el('q-client').value || '').trim();
   const type = el('q-ctype') ? el('q-ctype').value : '';
   const priceEl = row.querySelector('.q-price'); const p = quoteGetPrice(client, name, type); if (p && !_numv(priceEl.value)) priceEl.value = p;
+  const wrap = row.querySelector('.q-stone-wrap'); if (wrap) wrap.style.display = name.includes('세면대') ? 'block' : 'none';
   quoteRecalc();
 }
 function quoteClientChanged() {
@@ -3893,7 +3895,8 @@ function collectQItems() {
   document.querySelectorAll('#q-rows .q-row').forEach(r => {
     const name = (r.querySelector('.q-mat').value || '').trim(); const spec = (r.querySelector('.q-spec').value || '').trim();
     const qty = _numv(r.querySelector('.q-qty').value); const price = _numv(r.querySelector('.q-price').value);
-    if (name && qty > 0) items.push({ name, spec, unit: '', qty, price, amt: Math.round(qty * price) });
+    const stone = (r.querySelector('.q-stone') && r.querySelector('.q-stone').value) || '';
+    if (name && qty > 0) items.push(Object.assign({ name, spec, unit: '', qty, price, amt: Math.round(qty * price) }, stone ? { stone } : {}));
   });
   document.querySelectorAll('.qx-row').forEach(r => {
     const name = r.getAttribute('data-name'); const unit = r.getAttribute('data-unit') || ''; const qty = _numv(r.querySelector('.qx-qty').value); const price = _numv(r.querySelector('.qx-price').value);
@@ -3978,9 +3981,9 @@ function quoteRegister(id) {
   const hasBasin = (q.items || []).some(it => (it.name || '').includes('세면대'));
   const hasGagong = (q.items || []).some(it => marginCat(it.name) === '가공');
   if (hasBasin) {
-    let bi = (q.items || []).filter(it => (it.name || '').includes('세면대')).map(it => ({ stone: it.name, spec: it.spec || '', qty: it.qty || '', quoteNo: q.docNo || '' }));
+    let bi = (q.items || []).filter(it => (it.name || '').includes('세면대')).map(it => ({ stone: it.stone || '', spec: it.spec || '', qty: it.qty || '', quoteNo: q.docNo || '' }));
     if (!bi.length) bi = (q.items || []).map(it => ({ stone: it.name, spec: it.spec || '', qty: it.qty || '' }));
-    go('basin'); setTimeout(() => { try { openBasinForm(null, { vendor: q.client, items: bi }); } catch (e) { } }, 90);
+    go('basin'); setTimeout(() => { try { openBasinForm(null, { vendor: q.client, items: bi, quoteId: id }); } catch (e) { } }, 90);
     toast('세면대 발주로 불러왔습니다');
   } else if (hasGagong) {
     go('sites'); setTimeout(() => { try { openSiteForm(null, { name: q.client, address: q.siteAddr, quoteId: id }); } catch (e) { } }, 90);
@@ -3993,9 +3996,9 @@ function quoteToOrder(id) {
   const items = (q.items || []).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' }));
   const hasBasin = (q.items || []).some(it => (it.name || '').includes('세면대'));
   if (hasBasin) {
-    let bi = (q.items || []).filter(it => (it.name || '').includes('세면대')).map(it => ({ stone: it.name, spec: it.spec || '', qty: it.qty || '', quoteNo: q.docNo || '' }));
+    let bi = (q.items || []).filter(it => (it.name || '').includes('세면대')).map(it => ({ stone: it.stone || '', spec: it.spec || '', qty: it.qty || '', quoteNo: q.docNo || '' }));
     if (!bi.length) bi = (q.items || []).map(it => ({ stone: it.name, spec: it.spec || '', qty: it.qty || '' }));
-    go('basin'); setTimeout(() => { try { openBasinForm(null, { vendor: q.client, items: bi }); } catch (e) { } }, 90);
+    go('basin'); setTimeout(() => { try { openBasinForm(null, { vendor: q.client, items: bi, quoteId: id }); } catch (e) { } }, 90);
     toast('확정 · 세면대 발주로 불러왔습니다');
   } else if ((q.siteAddr || '').trim()) {
     go('sites'); setTimeout(() => { try { openSiteForm(null, { name: q.client, address: q.siteAddr, quoteId: id }); } catch (e) { } }, 90);
@@ -4467,6 +4470,7 @@ function quoteCardHtml(q) {
   const taxPill = q.taxInvoice ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="클릭 시 해제"><i class="ti ti-file-check"></i> 계산서 발행${q.taxDate ? ' ' + esc(q.taxDate.slice(5)) : ''}</button>` : `<button class="pill p-gray" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="발행으로 표시"><i class="ti ti-file-off"></i> 계산서 미발행</button>`;
   const shipBadge = q.shipped ? `<span class="pill p-done"><i class="ti ti-truck-delivery"></i> 출고 완료</span>` : '';
   const siteBadge = q.siteDone ? `<span class="pill p-done"><i class="ti ti-building-community"></i> 현장 등록 완료</span>` : '';
+  const basinBadge = q.basinDone ? `<span class="pill p-done"><i class="ti ti-bath"></i> 세면대 발주 완료</span>` : '';
   return `<div class="card" style="margin-bottom:10px;padding:12px 14px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="min-width:0"><div style="font-weight:700;font-size:14.5px">${esc(q.client || '-')}</div>
@@ -4474,9 +4478,9 @@ function quoteCardHtml(q) {
           <div style="font-size:12px;color:var(--t2);margin-top:3px">${esc(names)}</div></div>
         <div style="text-align:right;flex:none"><div style="font-size:17px;font-weight:800;color:var(--gd)">${fmtWon(q.total)}<span style="font-size:12px;font-weight:600">원</span></div><div style="font-size:10.5px;color:var(--t3)">VAT 포함</div>${_rem > 0 ? `<div style="font-size:11px;color:var(--gd);margin-top:5px">입금 ${fmtWon(_pa)}</div><div style="font-size:13.5px;font-weight:800;color:var(--red-t)">미수 ${fmtWon(_rem)}</div>` : (_pa > 0 ? `<div style="font-size:12px;font-weight:700;color:var(--gd);margin-top:5px"><i class="ti ti-check"></i> 결제완료</div>` : '')}</div>
       </div>
-      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${shipBadge}${siteBadge}</div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${shipBadge}${siteBadge}${basinBadge}</div>
       <div class="frm-foot" style="margin-top:9px;display:flex;align-items:center;gap:5px;flex-wrap:wrap">
-        ${(q.shipped || q.siteDone) ? '' : (q.ordered ? `<button class="btn btn-sm btn-pri" onclick="quoteRegister('${q.id}')"><i class="ti ${_regIcon}"></i>${_regLabel}</button><button class="btn btn-sm" style="color:var(--t3)" onclick="quoteCancelOrder('${q.id}')" title="확정 주문 취소"><i class="ti ti-arrow-back-up"></i>확정취소</button>` : `<button class="btn btn-sm btn-pri" onclick="quoteConfirmOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>`)}
+        ${(q.shipped || q.siteDone || q.basinDone) ? '' : (q.ordered ? `<button class="btn btn-sm btn-pri" onclick="quoteRegister('${q.id}')"><i class="ti ${_regIcon}"></i>${_regLabel}</button><button class="btn btn-sm" style="color:var(--t3)" onclick="quoteCancelOrder('${q.id}')" title="확정 주문 취소"><i class="ti ti-arrow-back-up"></i>확정취소</button>` : `<button class="btn btn-sm btn-pri" onclick="quoteConfirmOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>`)}
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}')"><i class="ti ti-edit"></i>수정</button>
         <button class="btn btn-sm" onclick="printQuote('${q.id}')"><i class="ti ti-printer"></i>인쇄</button>
         <span style="display:inline-flex;gap:2px;padding-left:6px;margin-left:2px;border-left:1px solid var(--bd)">
@@ -5611,7 +5615,9 @@ function collectBasinItems() {
   });
   return items;
 }
+let _basinFromQuote = '';
 function openBasinForm(id, pre) {
+  _basinFromQuote = (pre && pre.quoteId) || '';
   const b = id ? (state.basins || []).find(x => x.id === id) : null;
   const v = b || pre || {};
   const rows = basinItems(v);
@@ -5678,6 +5684,7 @@ async function submitBasin(id) {
   await ensureClient(vendor);   // 신규 거래처 자동 등록
   if (id) await Store.update('basins', id, obj);
   else await Store.add('basins', obj);
+  if (_basinFromQuote) { try { await Store.update('quotes', _basinFromQuote, { basinDone: true, basinDoneAt: Date.now() }); } catch (e) { } _basinFromQuote = ''; }
   closeModal();
   toast(id ? '수정되었습니다' : '세면대 발주가 등록되었습니다');
 }
