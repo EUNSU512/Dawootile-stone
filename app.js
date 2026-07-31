@@ -3889,7 +3889,6 @@ function renderQuoteForm() {
       </div>
       <div class="frm-foot" style="position:sticky;bottom:calc(66px + env(safe-area-inset-bottom));z-index:30;margin-top:14px;background:var(--card);border:1.5px solid var(--bd2);border-radius:13px;box-shadow:0 5px 20px rgba(0,0,0,.13);padding:9px 11px;display:flex;align-items:center;gap:7px">
         <div style="margin-right:auto;line-height:1.15;padding-left:2px"><div style="font-size:10.5px;color:var(--t3)">합계금액</div><b id="q-total-foot" style="font-size:17px;color:var(--gd)">0</b></div>
-        ${editing ? `<button class="btn" style="color:var(--red-t);border-color:#e6a9a9" onclick="delQuote('${q.id}')"><i class="ti ti-trash"></i></button>` : ''}
         <button class="btn" onclick="quoteCancel()"><i class="ti ti-list"></i>목록</button>
         <button class="btn btn-pri" style="flex:1.4" onclick="submitQuote('${editing ? q.id : ''}')"><i class="ti ti-check"></i>${editing ? '저장' : '견적 저장'}</button></div>
     </div>`;
