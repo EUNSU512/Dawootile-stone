@@ -2429,7 +2429,9 @@ async function delSite(id) {
 }
 
 /* 현장 등록/수정 폼 */
+let _siteFromQuote = '';
 function openSiteForm(id, pre) {
+  _siteFromQuote = (pre && pre.quoteId) || '';
   const s = id ? state.sites.find(x => x.id === id) : null;
   const v = s || Object.assign({ manager: me.name, orderType: '실측', stage: '접수', measureNeeded: true }, pre || {});
   _mrowPattern = false; _mrowDepot = false;
@@ -2562,6 +2564,7 @@ async function submitSite(id) {
     await Store.update('holdings', linkHoldId, upd);
   }
   _holdLinkSite = null;
+  if (_siteFromQuote) { try { await Store.update('quotes', _siteFromQuote, { siteDone: true, siteDoneAt: Date.now() }); } catch (e) { } _siteFromQuote = ''; }
   closeModal();
 }
 
@@ -3937,7 +3940,7 @@ function quoteRegister(id) {
     go('basin'); setTimeout(() => { try { openBasinForm(null, { vendor: q.client, items: bi }); } catch (e) { } }, 90);
     toast('세면대 발주로 불러왔습니다');
   } else if ((q.siteAddr || '').trim()) {
-    go('sites'); setTimeout(() => { try { openSiteForm(null, { name: q.client, address: q.siteAddr }); } catch (e) { } }, 90);
+    go('sites'); setTimeout(() => { try { openSiteForm(null, { name: q.client, address: q.siteAddr, quoteId: id }); } catch (e) { } }, 90);
     toast('현장 등록으로 이동');
   } else { openShipForm({ targetName: q.client, items: items, quoteId: id }); toast('출고 등록으로 불러왔습니다 · 확인 후 등록'); }
 }
@@ -3952,7 +3955,7 @@ function quoteToOrder(id) {
     go('basin'); setTimeout(() => { try { openBasinForm(null, { vendor: q.client, items: bi }); } catch (e) { } }, 90);
     toast('확정 · 세면대 발주로 불러왔습니다');
   } else if ((q.siteAddr || '').trim()) {
-    go('sites'); setTimeout(() => { try { openSiteForm(null, { name: q.client, address: q.siteAddr }); } catch (e) { } }, 90);
+    go('sites'); setTimeout(() => { try { openSiteForm(null, { name: q.client, address: q.siteAddr, quoteId: id }); } catch (e) { } }, 90);
     toast('확정 · 현장 등록으로 이동');
   } else { openShipForm({ targetName: q.client, items: items }); toast('확정 · 출고 등록으로 불러왔습니다 · 확인 후 등록'); }
 }
@@ -4420,6 +4423,7 @@ function quoteCardHtml(q) {
   const paidPill = (_tt > 0 && _pa >= _tt) ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 수정"><i class="ti ti-cash"></i> 결제완료</button>` : (_pa > 0 ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 수정"><i class="ti ti-cash"></i> 입금 ${fmtWon(_pa)} · 미수 ${fmtWon(_rem)}</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 입력"><i class="ti ti-cash"></i> 미결제</button>`);
   const taxPill = q.taxInvoice ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="클릭 시 해제"><i class="ti ti-file-check"></i> 계산서 발행${q.taxDate ? ' ' + esc(q.taxDate.slice(5)) : ''}</button>` : `<button class="pill p-gray" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="발행으로 표시"><i class="ti ti-file-off"></i> 계산서 미발행</button>`;
   const shipBadge = q.shipped ? `<span class="pill p-done"><i class="ti ti-truck-delivery"></i> 출고 완료</span>` : '';
+  const siteBadge = q.siteDone ? `<span class="pill p-done"><i class="ti ti-building-community"></i> 현장 등록 완료</span>` : '';
   return `<div class="card" style="margin-bottom:10px;padding:12px 14px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="min-width:0"><div style="font-weight:700;font-size:14.5px">${esc(q.client || '-')}</div>
@@ -4427,9 +4431,9 @@ function quoteCardHtml(q) {
           <div style="font-size:12px;color:var(--t2);margin-top:3px">${esc(names)}</div></div>
         <div style="text-align:right;flex:none"><div style="font-size:17px;font-weight:800;color:var(--gd)">${fmtWon(q.total)}<span style="font-size:12px;font-weight:600">원</span></div><div style="font-size:10.5px;color:var(--t3)">VAT 포함</div>${_rem > 0 ? `<div style="font-size:11px;color:var(--gd);margin-top:5px">입금 ${fmtWon(_pa)}</div><div style="font-size:13.5px;font-weight:800;color:var(--red-t)">미수 ${fmtWon(_rem)}</div>` : (_pa > 0 ? `<div style="font-size:12px;font-weight:700;color:var(--gd);margin-top:5px"><i class="ti ti-check"></i> 결제완료</div>` : '')}</div>
       </div>
-      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${shipBadge}</div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${shipBadge}${siteBadge}</div>
       <div class="frm-foot" style="margin-top:9px;display:flex;align-items:center;gap:5px;flex-wrap:wrap">
-        ${q.shipped ? '' : (q.ordered ? `<button class="btn btn-sm btn-pri" onclick="quoteRegister('${q.id}')"><i class="ti ${_regIcon}"></i>${_regLabel}</button>` : `<button class="btn btn-sm btn-pri" onclick="quoteConfirmOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>`)}
+        ${(q.shipped || q.siteDone) ? '' : (q.ordered ? `<button class="btn btn-sm btn-pri" onclick="quoteRegister('${q.id}')"><i class="ti ${_regIcon}"></i>${_regLabel}</button>` : `<button class="btn btn-sm btn-pri" onclick="quoteConfirmOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>`)}
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}')"><i class="ti ti-edit"></i>수정</button>
         <button class="btn btn-sm" onclick="printQuote('${q.id}')"><i class="ti ti-printer"></i>인쇄</button>
         <span style="display:inline-flex;gap:2px;padding-left:6px;margin-left:2px;border-left:1px solid var(--bd)">
