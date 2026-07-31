@@ -4816,8 +4816,9 @@ function quoteDocHtml(q) {
   if (q.category === '통관비용') return customsDocHtml(q);
   const e = s => esc(s == null ? '' : String(s));
   const _staff = (state.members || []).find(m => _normName(m.name) === _normName(q.by || '')); const _staffPhone = (_staff && _staff.phone) || '';
-  let _repLabel = '견적 담당자', _repName = q.by || '', _repPhone = _staffPhone;
-  if (q.useSalesRep) { const _cl = (state.clients || []).find(x => _normName(x.value) === _normName(q.client || '')); const _sr = _cl && _cl.salesRep; if (_sr) { _repLabel = '영업 담당자'; _repName = _sr; _repPhone = salesRepPhoneOf(_sr); } }
+  const _salesCl = (state.clients || []).find(x => _normName(x.value) === _normName(q.client || ''));
+  const _salesRep = (q.useSalesRep && _salesCl && _salesCl.salesRep) ? _salesCl.salesRep : '';
+  const _salesPhone = _salesRep ? salesRepPhoneOf(_salesRep) : '';
   const items = q.items || []; const MIN = Math.max(6, items.length);
   let rows = items.map((it, i) => `<tr><td class="c">${i + 1}</td><td class="l">${e(it.name)}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}${it.unit ? ' ' + e(it.unit) : ''}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`).join('');
   for (let i = items.length; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
@@ -4867,10 +4868,10 @@ function quoteDocHtml(q) {
     <div class="brand"><img src="${DAWOO_LOGO}" alt="" style="height:42px;display:block"></div>
     <div class="title"><h1>견 적 서</h1></div>
   </div>
-  <div class="meta"><span style="color:#201c17;font-weight:600">${e(_repLabel)} : ${e(_repName) || '-'}${_repPhone ? ` <span style="color:#9a9086;font-weight:500">${e(_repPhone)}</span>` : ''}</span><span style="display:flex;gap:22px"><span>견적번호 <b>${e(q.docNo)}</b></span><span>견적일 <b>${e(q.date)}</b></span><span>유효기간 <b>${e(q.valid) || '-'}</b></span></span></div>
+  <div class="meta"><span style="display:flex;flex-direction:column;gap:2px;color:#201c17;font-weight:600"><span>견적 담당자 : ${e(q.by) || '-'}${_staffPhone ? ` <span style="color:#9a9086;font-weight:500">${e(_staffPhone)}</span>` : ''}</span>${_salesRep ? `<span>영업담당자 : ${e(_salesRep)}${_salesPhone ? ` <span style="color:#9a9086;font-weight:500">${e(_salesPhone)}</span>` : ''}</span>` : ''}</span><span style="display:flex;gap:22px"><span>견적번호 <b>${e(q.docNo)}</b></span><span>견적일 <b>${e(q.date)}</b></span><span>유효기간 <b>${e(q.valid) || '-'}</b></span></span></div>
   <div class="info">
     <div class="box"><div class="bh">수신</div><div class="bb"><div class="recip-name">${e(q.client)} 귀중</div>${q.attn ? `<div style="color:#555;margin-bottom:4px">${e(q.attn)}</div>` : ''}<div style="color:#666">아래와 같이 견적합니다.</div>${q.siteAddr ? `<div style="margin-top:11px;padding-top:9px;border-top:1px dashed #e0d6c4"><span style="color:#8a7350;font-weight:700;font-size:10px;letter-spacing:1.5px">현장 주소</span><div style="color:#332f28;margin-top:3px;line-height:1.5">${e(q.siteAddr)}</div></div>` : ''}</div></div>
-    <div class="box"><div class="bh">공급자</div><div class="bb">${co.stampImg ? `<img class="stampimg" src="${co.stampImg}">` : `<div class="stamp">DAWOO<br>(인)</div>`}<b style="font-size:13px;color:#111">${e(co.name)}</b><br>대표 ${e(co.ceo)}<br>사업자등록번호 ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}${_repName ? `<br><b style="color:#111">담당 ${e(_repName)}${_repPhone ? ' ' + e(_repPhone) : ''}</b>` : ''}</div></div>
+    <div class="box"><div class="bh">공급자</div><div class="bb">${co.stampImg ? `<img class="stampimg" src="${co.stampImg}">` : `<div class="stamp">DAWOO<br>(인)</div>`}<b style="font-size:13px;color:#111">${e(co.name)}</b><br>대표 ${e(co.ceo)}<br>사업자등록번호 ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}</div></div>
   </div>
   <table class="items"><colgroup><col style="width:7%"><col style="width:33%"><col style="width:22%"><col style="width:10%"><col style="width:14%"><col style="width:14%"></colgroup>
     <thead><tr><th>No</th><th>품목</th><th>규격</th><th>수량</th><th>단가</th><th>금액</th></tr></thead><tbody>${rows}</tbody></table>
