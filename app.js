@@ -4689,7 +4689,7 @@ function crewPickTeam(v) { filters.crewTeam = v || ''; renderSettle(); }
 function downloadCrewLedger() {
   if (!isAdmin()) { toast('관리자만'); return; }
   if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후'); return; }
-  const sites = (state.sites || []).filter(s => (s.team || '').trim()).sort((a, b) => (a.team || '').localeCompare(b.team || '') || (b.constructDate || '').localeCompare(a.constructDate || ''));
+  const sites = (state.sites || []).filter(s => (s.team || '').trim() && !isSelfTeam(s.team)).sort((a, b) => (a.team || '').localeCompare(b.team || '') || (b.constructDate || '').localeCompare(a.constructDate || ''));
   if (!sites.length) { toast('시공팀 지정된 현장이 없습니다'); return; }
   const head = ['시공팀', '현장', '거래처', '시공일', '시공비', '정산여부', '정산일'];
   const aoa = [['시공비 정산 원장 (시공팀별)'], ['출력일 ' + todayStr()], [], head];
@@ -4701,7 +4701,7 @@ function downloadCrewLedger() {
   toast('시공비 정산 엑셀 다운로드');
 }
 function crewSettleCard() {
-  const sites = (state.sites || []).filter(s => (s.team || '').trim());
+  const sites = (state.sites || []).filter(s => (s.team || '').trim() && !isSelfTeam(s.team));
   const totUnpaid = sites.filter(s => !s.crewPaid).reduce((a, s) => a + (+s.crewFee || 0), 0);
   const totPaid = sites.filter(s => s.crewPaid).reduce((a, s) => a + (+s.crewFee || 0), 0);
   const onlyUnpaid = !!filters.crewUnpaidOnly;
