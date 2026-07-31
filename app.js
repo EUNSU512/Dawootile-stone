@@ -900,7 +900,7 @@ async function importClientsFull(input) {
     setTimeout(renderClients, 800);
   } catch (e) { toast('업로드 실패: ' + ((e && e.message) || e)); }
 }
-async function delClientC(id) { if (!isAdmin()) { toast('관리자만 삭제할 수 있습니다'); return; } const c = (state.clients || []).find(x => x.id === id); if (!c) return; if (!confirm((c.value || '') + ' 거래처를 삭제할까요?')) return; await Store.remove('clients', id); filters.clientDetail = ''; toast('삭제됨'); setTimeout(renderClients, 300); }
+async function delClientC(id) { if (!isAdmin()) { toast('관리자만 삭제할 수 있습니다'); return; } const c = (state.clients || []).find(x => x.id === id); if (!c) return; if (!confirm((c.value || '') + ' 거래처를 삭제할까요?')) return; const _box = el('cl-list'); const _sc = _box ? _box.scrollTop : 0; await Store.remove('clients', id); filters.clientDetail = ''; toast('삭제됨'); setTimeout(() => { render(); const b = el('cl-list'); if (b) b.scrollTop = _sc; }, 300); }
 function clientRowsHtml() {
   const q = (filters.clientSearch || '').trim().toLowerCase();
   let list = (state.clients || []).slice().sort((a, b) => (a.value || '').localeCompare(b.value || ''));
