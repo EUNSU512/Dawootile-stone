@@ -6698,7 +6698,9 @@ function chulgoTogglePack() {
 }
 function chulgoOfficeSection() {
   const queue = (state.chulgoReqs || []).filter(r => r.reqType === '출고' && ['대기열', '대기'].includes(r.status || '')).sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
-  const active = chulgoDispatchGroups().filter(g => g.status !== '완료');
+  const _todayCh = (function () { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); })();
+  const _gdayCh = g => { const t = +g.dispatchedAt || 0; if (!t) return ''; const d = new Date(t); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  const active = chulgoDispatchGroups().filter(g => g.status !== '완료' || _gdayCh(g) === _todayCh);
   const drivers = chulgoDispatchDrivers(), dests = chulgoDispatchDests();
   const times = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
   return `
@@ -6725,8 +6727,8 @@ function chulgoOfficeSection() {
       <textarea id="dsp-memo" lang="ko" placeholder="비고 · 특이사항 (창고 전달사항 · 요청서에 기재)" style="width:100%;font-size:15px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:10px;margin-bottom:10px;min-height:52px;resize:vertical"></textarea>
       <button class="btn btn-pri btn-block" onclick="issueDispatch()"><i class="ti ti-truck-delivery"></i>선택 항목 묶어 출고 지시 내리기 (창고 알림)</button>
     </div>
-    <div style="font-size:12px;font-weight:600;color:var(--t2);margin:2px 2px 6px">진행 중 지시</div>
-    ${active.length ? `<div id="chulgo-active" data-keepscroll style="max-height:40vh;overflow-y:auto;-webkit-overflow-scrolling:touch;border:0.5px solid var(--bd);border-radius:12px;padding:9px 9px 1px;background:#fff">${active.map(g => chulgoDispatchCard(g, false)).join('')}</div>` : `<div class="empty" style="padding:14px"><i class="ti ti-inbox"></i>진행 중 지시가 없습니다</div>`}
+    <div style="font-size:12px;font-weight:600;color:var(--t2);margin:2px 2px 6px"><i class="ti ti-calendar-event"></i> 오늘 출고 요청 목록 <span style="font-weight:500;color:var(--t3)">· ${esc(_todayCh.slice(5).replace('-', '/'))}</span></div>
+    ${active.length ? `<div id="chulgo-active" data-keepscroll style="max-height:40vh;overflow-y:auto;-webkit-overflow-scrolling:touch;border:0.5px solid var(--bd);border-radius:12px;padding:9px 9px 1px;background:#fff">${active.map(g => chulgoDispatchCard(g, false)).join('')}</div>` : `<div class="empty" style="padding:14px"><i class="ti ti-inbox"></i>오늘 출고 요청이 없습니다</div>`}
     ${chulgoCompletedSection()}
     <details style="margin-top:14px"><summary style="font-size:13px;color:var(--t2);cursor:pointer;padding:6px 2px"><i class="ti ti-plus"></i> 입고 · 입고알림 직접 등록</summary>
       <div class="card" style="padding:13px 15px;margin-top:8px">
