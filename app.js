@@ -5121,7 +5121,7 @@ function combinedBillDocHtml(qs) {
   <table class="items"><colgroup><col style="width:7%"><col style="width:33%"><col style="width:22%"><col style="width:10%"><col style="width:14%"><col style="width:14%"></colgroup>
     <thead><tr><th>No</th><th>품목</th><th>규격</th><th>수량</th><th>단가</th><th>금액</th></tr></thead><tbody>${rows}</tbody></table>
   <div class="bottom">
-    <div class="memo"><div class="mh">비 고</div><div class="mb">${qs.map(q => q.memo ? ('· ' + e(q.docNo) + ': ' + e(q.memo)) : '').filter(Boolean).join('<br>')}</div></div>
+    <div class="memo"><div class="mh">비 고</div><div class="mb">${[...new Set(qs.map(q => (q.memo || '').trim()).filter(Boolean))].map(m => e(m)).join('<br><br>')}</div></div>
     <table class="sum">
       <tr><td class="k">공급가액 합계</td><td class="v">${fmtWon(supply)} 원</td></tr>
       <tr><td class="k">부가세 (10%)</td><td class="v">${fmtWon(vat)} 원</td></tr>
