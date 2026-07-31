@@ -4650,6 +4650,72 @@ async function applyFixedToMonth() {
   toast(added > 0 ? (added + '개 고정지출 반영됨') : '이번 달은 이미 모두 반영됨'); renderSettle();
 }
 
+/* ===== 시공비 정산 (시공팀별 · 현장별) ===== */
+async function saveCrewFee(id, val) { if (!isAdmin()) { toast('관리자만'); return; } const amt = Math.round(_numv(val)); try { await Store.update('sites', id, { crewFee: amt }); } catch (e) { } }
+async function toggleCrewPaid(id) {
+  if (!isAdmin()) { toast('관리자만'); return; }
+  const s = (state.sites || []).find(x => x.id === id); if (!s) return;
+  const paid = !s.crewPaid;
+  try { await Store.update('sites', id, { crewPaid: paid, crewPaidDate: paid ? todayStr() : '' }); } catch (e) { }
+  toast(paid ? '시공비 정산 완료 표시' : '미정산으로 변경'); renderSettle();
+}
+function crewToggleUnpaid() { filters.crewUnpaidOnly = !filters.crewUnpaidOnly; renderSettle(); }
+function downloadCrewLedger() {
+  if (!isAdmin()) { toast('관리자만'); return; }
+  if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후'); return; }
+  const sites = (state.sites || []).filter(s => (s.team || '').trim()).sort((a, b) => (a.team || '').localeCompare(b.team || '') || (b.constructDate || '').localeCompare(a.constructDate || ''));
+  if (!sites.length) { toast('시공팀 지정된 현장이 없습니다'); return; }
+  const head = ['시공팀', '현장', '거래처', '시공일', '시공비', '정산여부', '정산일'];
+  const aoa = [['시공비 정산 원장 (시공팀별)'], ['출력일 ' + todayStr()], [], head];
+  let tPaid = 0, tUnpaid = 0;
+  sites.forEach(s => { const fee = +s.crewFee || 0; if (s.crewPaid) tPaid += fee; else tUnpaid += fee; aoa.push([s.team || '', s.name || '', s.client || '', s.constructDate || '', fee, s.crewPaid ? '정산완료' : '미정산', s.crewPaidDate || '']); });
+  aoa.push([]); aoa.push(['', '', '', '정산완료 합계', tPaid, '', '']); aoa.push(['', '', '', '미정산 합계', tUnpaid, '', '']);
+  const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 12 }, { wch: 20 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 9 }, { wch: 12 }];
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '시공비정산'); XLSX.writeFile(wb, '시공비정산_' + todayStr() + '.xlsx');
+  toast('시공비 정산 엑셀 다운로드');
+}
+function crewSettleCard() {
+  const sites = (state.sites || []).filter(s => (s.team || '').trim());
+  const totUnpaid = sites.filter(s => !s.crewPaid).reduce((a, s) => a + (+s.crewFee || 0), 0);
+  const totPaid = sites.filter(s => s.crewPaid).reduce((a, s) => a + (+s.crewFee || 0), 0);
+  const onlyUnpaid = !!filters.crewUnpaidOnly;
+  const byTeam = {}; sites.forEach(s => { const t = (s.team || '미지정'); (byTeam[t] = byTeam[t] || []).push(s); });
+  const teams = Object.keys(byTeam).sort((a, b) => a.localeCompare(b));
+  const inp = 'width:110px;text-align:right;font-size:13px;padding:6px 8px;border:1.5px solid var(--bd2);border-radius:8px';
+  const blocks = teams.map(t => {
+    let list = byTeam[t].slice().sort((a, b) => (b.constructDate || '').localeCompare(a.constructDate || ''));
+    if (onlyUnpaid) list = list.filter(s => !s.crewPaid);
+    if (!list.length) return '';
+    const tUnpaid = byTeam[t].filter(s => !s.crewPaid).reduce((a, s) => a + (+s.crewFee || 0), 0);
+    const tPaid = byTeam[t].filter(s => s.crewPaid).reduce((a, s) => a + (+s.crewFee || 0), 0);
+    const rows = list.map(s => {
+      const fee = +s.crewFee || 0;
+      return `<tr style="border-bottom:1px solid var(--soft)">
+        <td style="padding:6px 8px">${esc((s.constructDate || '').slice(5))}</td>
+        <td style="padding:6px 8px"><div style="font-weight:600">${esc(s.client || s.name || '')}</div><div style="font-size:10.5px;color:var(--t3)">${esc(s.name || '')}</div></td>
+        <td style="padding:6px 8px;text-align:right"><input inputmode="numeric" value="${fee || ''}" onchange="saveCrewFee('${s.id}',this.value)" placeholder="시공비" style="${inp}"></td>
+        <td style="padding:6px 8px;text-align:center"><button class="btn btn-sm ${s.crewPaid ? 'btn-pri' : ''}" style="${s.crewPaid ? 'background:#0f766e;border-color:#0f766e' : 'color:#b45309'}" onclick="toggleCrewPaid('${s.id}')">${s.crewPaid ? '정산완료' : '미정산'}</button></td>
+        <td style="padding:6px 8px;text-align:center;font-size:11px;color:var(--t3)">${s.crewPaid ? esc(s.crewPaidDate || '') : '-'}</td>
+      </tr>`;
+    }).join('');
+    return `<div style="margin-top:10px"><div style="display:flex;align-items:center;justify-content:space-between;background:var(--soft);border-radius:8px;padding:6px 10px;margin-bottom:4px">
+        <b style="font-size:13px">${esc(t)}${isSelfTeam(t) ? ' <span style="font-size:10px;color:var(--t3);font-weight:500">(자체)</span>' : ''}</b>
+        <span style="font-size:11.5px;color:var(--t3)">미정산 <b style="color:#c0341d">${fmtWon(tUnpaid)}</b> · 완료 <b style="color:#0f766e">${fmtWon(tPaid)}</b></span></div>
+      <table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="color:var(--t2);font-size:11px"><th style="padding:4px 8px;text-align:left">시공일</th><th style="padding:4px 8px;text-align:left">현장</th><th style="padding:4px 8px;text-align:right">시공비</th><th style="padding:4px 8px;text-align:center">정산</th><th style="padding:4px 8px;text-align:center">정산일</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  }).join('');
+  return `<div class="card" style="margin-bottom:12px;padding:13px 14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:6px">
+      <div style="font-size:11.5px;color:var(--t3);font-weight:700"><i class="ti ti-hammer"></i> 시공비 정산 (시공팀별 · 현장별)</div>
+      <div style="display:flex;gap:6px"><button class="btn btn-sm ${onlyUnpaid ? 'btn-pri' : ''}" onclick="crewToggleUnpaid()">미정산만</button><button class="btn btn-sm" onclick="downloadCrewLedger()"><i class="ti ti-download"></i>엑셀</button></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:6px">
+      <div style="text-align:center;padding:8px;background:#fdf0ea;border-radius:9px"><div style="font-size:10.5px;color:var(--t2)">미정산 합계</div><div style="font-size:15px;font-weight:800;color:#c0341d">${fmtWon(totUnpaid)}</div></div>
+      <div style="text-align:center;padding:8px;background:#eefaf5;border-radius:9px"><div style="font-size:10.5px;color:var(--t2)">정산완료 합계</div><div style="font-size:15px;font-weight:800;color:#0f766e">${fmtWon(totPaid)}</div></div>
+    </div>
+    <div data-keepscroll id="settle-crew-list" style="max-height:50vh;overflow:auto">${blocks || `<div style="font-size:12px;color:var(--t3);text-align:center;padding:14px">${onlyUnpaid ? '미정산 현장이 없습니다' : '시공팀이 지정된 현장이 없습니다'}</div>`}</div>
+  </div>`;
+}
+
 function renderSettle() {
   const root = el('pg-settle'); if (!root) return;
   if (filters.costEdit) { if (!document.getElementById('cost-root')) renderCostForm(); return; }   // 원가 입력 폼(관리자)
@@ -4752,7 +4818,7 @@ function renderSettle() {
     </div>
     <div style="font-size:10.5px;color:var(--t3);margin-top:7px">분류별 매출(견적) − 분류별 원가(자재·가공비·시공·운송). 가공 원가는 공장 견적 총액.</div>
   </div>` : '';
-  root.innerHTML = `<div class="ph"><div><h2><i class="ti ti-report-money"></i>정산</h2><p>원가 원장 · 회사지출 · 영업이익(마진)</p></div></div>${monthBar}${pnl}${marginCard}${expCatBar}${costLedger}${fxCard}${expForm}`;
+  root.innerHTML = `<div class="ph"><div><h2><i class="ti ti-report-money"></i>정산</h2><p>원가 원장 · 시공비 정산 · 회사지출 · 영업이익</p></div></div>${monthBar}${pnl}${marginCard}${expCatBar}${costLedger}${crewSettleCard()}${fxCard}${expForm}`;
 }
 
 function renderQuote() {
