@@ -6962,6 +6962,7 @@ function chulgoAlertNew() {
   const fresh = dispatched.filter(r => !_chulgoDispSeen.has(r.id) && (now - (+r.dispatchedAt || +r.createdAt || 0) < 120000) && _normName(r.dispatchedBy || r.sender) !== _normName((me && me.name) || ''));
   dispatched.forEach(r => _chulgoDispSeen.add(r.id));
   if (!fresh.length) return;
+  if (!_wantChulgoPush()) return;   // 기기별: '휴대폰 출고 지시 알림' 켠 기기에서만 알람 (전체 동기화 방지)
   if (_chAudio) { _chulgoArmed = true; chulgoStartAlarmLoop(); try { renderChulgo(); } catch (e) { } }   // 새 지시 오면 자동으로 알림 켜고 접수 전까지 반복
   const urgent = fresh.some(f => f.urgent);
   chulgoBeep(urgent ? 4 : 2);
