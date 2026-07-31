@@ -5562,7 +5562,7 @@ function printShipSlip(key) {
     <tfoot><tr><td class="c" colspan="4">합 계</td><td class="r">${totHebe.toFixed(2)}</td><td class="r">${totJang}</td><td></td></tr></tfoot>
   </table>
   <div class="bottom">
-    <table class="who"><tr><td class="wk">담당자</td><td>${e(g.by)}</td></tr>${(g.note && g.note.trim()) ? `<tr><td class="wk">메모</td><td style="white-space:pre-wrap">${e(g.note)}</td></tr>` : ''}</table>
+    <table class="who"><tr><td class="wk">담당자</td><td>${e(g.by)}</td></tr>${(() => { const notes = [...new Set(items.map(t => (t.note || '').trim()).filter(Boolean))]; return notes.length ? `<tr><td class="wk">메모</td><td style="white-space:pre-wrap">${notes.map(n => e(n)).join('\n')}</td></tr>` : ''; })()}</table>
     <div class="stamp">${stamp}</div>
   </div>
 </body></html>`;
