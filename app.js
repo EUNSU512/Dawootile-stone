@@ -3801,6 +3801,20 @@ function quoteExtraRefresh() {
   box.innerHTML = extraItemsFor(ctype).map(it => qxRowHtml(it, saved[it.name])).join('');
   quoteRecalc();
 }
+async function quoteAddExtraRow() {
+  const box = el('qx-rows-box'); if (!box) return;
+  const nm = (el('qx-newname') && el('qx-newname').value || '').trim();
+  if (!nm) { toast('항목명을 입력하세요'); return; }
+  const un = (el('qx-newunit') && el('qx-newunit').value || '').trim();
+  const pr = (el('qx-newprice') && el('qx-newprice').value || '').trim();
+  if (Array.from(box.querySelectorAll('.qx-row')).some(r => _normName(r.getAttribute('data-name')) === _normName(nm))) { toast('이미 있는 항목입니다'); return; }
+  box.insertAdjacentHTML('beforeend', qxRowHtml({ name: nm, unit: un }, { price: pr, qty: '' }));
+  if (el('qx-newname')) el('qx-newname').value = '';
+  if (el('qx-newunit')) el('qx-newunit').value = '';
+  if (el('qx-newprice')) el('qx-newprice').value = '';
+  quoteRecalc(); toast('항목 추가됨 · 수량 입력 시 견적서에 표시');
+  try { const list = extraItemsList().slice(); if (!list.some(x => _normName(x.name) === _normName(nm))) { list.push({ name: nm, unit: un }); await saveExtraItems(list); if (_numv(pr) > 0) await saveExtraPrices(Object.assign({}, extraPrices(), { [nm]: _numv(pr) })); } } catch (e) { }
+}
 function renderQuoteForm() {
   const id = filters.quoteEdit === 'new' ? '' : filters.quoteEdit;
   const copy = !!filters.quoteCopy;
@@ -3842,6 +3856,12 @@ function renderQuoteForm() {
           <div style="border:1px solid var(--bd2);border-radius:10px;padding:9px 11px">
             <div style="display:flex;gap:6px;font-size:11px;color:var(--t3);margin-bottom:5px;font-weight:600"><div style="flex:2.2">항목</div><div style="flex:1;text-align:right">수량</div><div style="width:24px;text-align:center">단위</div><div style="flex:1.3;text-align:right">단가</div><div style="flex:1.3;text-align:right">금액</div></div>
             <div id="qx-rows-box">${extraItemsFor((editing && v.ctype) || clientType(v.client || '') || '소비자').map(it => qxRowHtml(it, savedExtra[it.name])).join('')}</div>
+            <div style="display:flex;gap:5px;align-items:center;margin-top:8px;padding-top:8px;border-top:1px dashed var(--bd)">
+              <input id="qx-newname" lang="ko" placeholder="가공·부대 항목 직접 추가 (예: 모서리 R가공)" autocomplete="off" style="flex:2.2;min-width:0;font-size:13px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px">
+              <input id="qx-newunit" placeholder="단위" autocomplete="off" style="width:44px;font-size:13px;padding:7px 5px;border:1.5px solid var(--bd2);border-radius:8px;text-align:center">
+              <input id="qx-newprice" inputmode="numeric" placeholder="단가" autocomplete="off" style="width:74px;font-size:13px;padding:7px 7px;border:1.5px solid var(--bd2);border-radius:8px;text-align:right">
+              <button type="button" class="btn btn-sm btn-pri" style="flex:none" onclick="quoteAddExtraRow()"><i class="ti ti-plus"></i>추가</button>
+            </div>
           </div>
         </div>
         <div id="q-basin-note" style="display:none;margin-bottom:10px;border:2px solid #c0341d;border-radius:10px;background:#fff5f5;padding:10px 12px">
