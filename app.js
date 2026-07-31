@@ -4461,6 +4461,7 @@ function quoteMonthNav(delta) { const cur = filters.quoteMonth || todayStr().sli
 function quoteDayNav(delta) { const cur = filters.quoteDay || todayStr(); const d = new Date(cur + 'T00:00'); d.setDate(d.getDate() + delta); filters.quoteDay = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); renderQuote(); }
 function quoteCardHtml(q) {
   const when = qDate(q);
+  const _bundle = !!filters.quoteBundle; const _selQ = _qSel.has(q.id);
   const _hasBasin = (q.items || []).some(it => (it.name || '').includes('세면대'));
   const _hasGagong = (q.items || []).some(it => marginCat(it.name) === '가공');
   const _regLabel = _hasBasin ? '세면대 발주' : (_hasGagong ? '현장 등록' : '출고 등록');
@@ -4472,7 +4473,8 @@ function quoteCardHtml(q) {
   const shipBadge = q.shipped ? `<span class="pill p-done"><i class="ti ti-truck-delivery"></i> 출고 완료</span>` : '';
   const siteBadge = q.siteDone ? `<span class="pill p-done"><i class="ti ti-building-community"></i> 현장 등록 완료</span>` : '';
   const basinBadge = q.basinDone ? `<span class="pill p-done"><i class="ti ti-bath"></i> 세면대 발주 완료</span>` : '';
-  return `<div class="card" style="margin-bottom:10px;padding:12px 14px">
+  return `<div class="card" style="margin-bottom:10px;padding:12px 14px${_bundle && _selQ ? ';border:2px solid var(--gd);background:#f2fbf6' : ''}">
+      ${_bundle ? `<label style="display:flex;align-items:center;gap:8px;margin-bottom:9px;cursor:pointer;font-size:12.5px;font-weight:700;color:${_selQ ? 'var(--gd)' : 'var(--t2)'}"><input type="checkbox" ${_selQ ? 'checked' : ''} onchange="toggleQSel('${q.id}')" style="width:17px;height:17px"> 청구 묶음에 포함</label>` : ''}
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
         <div style="min-width:0"><div style="font-weight:700;font-size:14.5px">${esc(q.client || '-')}</div>
           <div style="font-size:11.5px;color:var(--t3);margin-top:2px">${esc(q.docNo || '')} · ${esc(when)} · ${(q.items || []).length}품목</div>
@@ -4897,10 +4899,18 @@ function renderQuote() {
   } else {
     body = list.length ? list.map(quoteCardHtml).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${qy ? '검색 결과가 없습니다' : '작성한 견적이 없습니다. 견적 작성으로 시작하세요.'}</div>`;
   }
+  const _selQs = filters.quoteBundle ? (state.quotes || []).filter(x => _qSel.has(x.id)) : [];
+  const _selTotal = _selQs.reduce((a, q) => a + (+q.total || 0), 0);
+  const bundleBar = filters.quoteBundle ? `<div class="card" style="margin-bottom:10px;padding:11px 13px;border:1.5px solid var(--gd);background:#f2fbf6">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div style="font-size:12.5px"><b style="color:var(--gd)"><i class="ti ti-stack-2"></i> 청구 묶음</b> · ${_selQs.length ? `${esc(_qSelClient)} · <b>${_selQs.length}건</b> · 합계 <b style="color:var(--gd)">${fmtWon(_selTotal)}</b>원` : '같은 거래처 견적을 2건 이상 선택하세요'}</div>
+        <div style="display:flex;gap:6px">${_selQs.length ? `<button class="btn btn-sm" onclick="qSelClear()">선택 해제</button>` : ''}<button class="btn btn-sm btn-pri" ${_selQs.length >= 2 ? '' : 'disabled style="opacity:.5"'} onclick="printCombinedBill()"><i class="ti ti-printer"></i> 합산 청구서 출력</button></div>
+      </div></div>` : '';
   const toggle = `<div style="display:flex;gap:6px;margin-bottom:10px">
     <button class="btn btn-sm ${view === 'all' ? 'btn-pri' : ''}" onclick="filters.quoteView='all';renderQuote()">전체</button>
     <button class="btn btn-sm ${view === 'month' ? 'btn-pri' : ''}" onclick="filters.quoteView='month';renderQuote()"><i class="ti ti-calendar-month"></i> 월별</button>
-    <button class="btn btn-sm ${view === 'day' ? 'btn-pri' : ''}" onclick="filters.quoteView='day';renderQuote()"><i class="ti ti-calendar-event"></i> 일별</button></div>`;
+    <button class="btn btn-sm ${view === 'day' ? 'btn-pri' : ''}" onclick="filters.quoteView='day';renderQuote()"><i class="ti ti-calendar-event"></i> 일별</button>
+    <button class="btn btn-sm ${filters.quoteBundle ? 'btn-pri' : ''}" style="margin-left:auto" onclick="quoteToggleBundle()"><i class="ti ti-stack-2"></i> 묶음청구</button></div>`;
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
       <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
@@ -4911,6 +4921,7 @@ function renderQuote() {
     </div>
     ${catBreak}
     ${toggle}
+    ${bundleBar}
     <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i>
       <input id="q-search" placeholder="거래처·견적번호·자재 검색" value="${esc(filters.quoteSearch || '')}" oninput="filters.quoteSearch=this.value;renderQuote()" autocomplete="off" lang="ko">
       ${(filters.quoteSearch || '').trim() ? `<button class="search-x" onclick="filters.quoteSearch='';el('q-search').value='';renderQuote()"><i class="ti ti-x"></i></button>` : ''}
@@ -5000,6 +5011,103 @@ function printQuote(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
   const w = window.open('', '_blank'); if (!w) { toast('팝업이 차단되었습니다. 팝업 허용 후 다시'); return; }
   w.document.write(quoteDocHtml(q)); w.document.close(); w.focus(); setTimeout(() => { try { w.print(); } catch (e) { } }, 500);
+}
+/* ===== 견적서 묶음 청구 (같은 거래처 여러 건 → 합산 청구서) ===== */
+let _qSel = new Set(); let _qSelClient = '';
+function quoteToggleBundle() { filters.quoteBundle = !filters.quoteBundle; if (!filters.quoteBundle) { _qSel.clear(); _qSelClient = ''; } renderQuote(); }
+function toggleQSel(id) {
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
+  if (_qSel.has(id)) { _qSel.delete(id); if (_qSel.size === 0) _qSelClient = ''; }
+  else {
+    if (_qSel.size === 0) { _qSelClient = q.client || ''; }
+    else if (_normName(q.client || '') !== _normName(_qSelClient)) { toast('같은 거래처 견적만 묶을 수 있습니다 · ' + _qSelClient); return; }
+    _qSel.add(id);
+  }
+  renderQuote();
+}
+function qSelClear() { _qSel.clear(); _qSelClient = ''; renderQuote(); }
+function printCombinedBill() {
+  const qs = (state.quotes || []).filter(x => _qSel.has(x.id));
+  if (qs.length < 2) { toast('2건 이상 선택하세요'); return; }
+  const w = window.open('', '_blank'); if (!w) { toast('팝업이 차단되었습니다. 팝업 허용 후 다시'); return; }
+  w.document.write(combinedBillDocHtml(qs)); w.document.close(); w.focus(); setTimeout(() => { try { w.print(); } catch (e) { } }, 500);
+}
+function combinedBillDocHtml(qs) {
+  const e = s => esc(s == null ? '' : String(s));
+  qs = qs.slice().sort((a, b) => (qDate(a) || '').localeCompare(qDate(b) || ''));
+  const co = companyInfo(); const client = qs[0].client || '';
+  const _staff = (state.members || []).find(m => _normName(m.name) === _normName(qs[0].by || '')); const _staffPhone = (_staff && _staff.phone) || '';
+  let supply = 0, vat = 0, disc = 0, total = 0, idx = 0, rows = '', hasBasin = false;
+  qs.forEach(q => {
+    supply += +q.supply || 0; vat += +q.vat || 0; disc += +q.discount || 0; total += +q.total || 0;
+    const its = q.items || []; if (hasBasinItems(its)) hasBasin = true;
+    rows += `<tr class="grp"><td colspan="6">견적 ${e(q.docNo)} · ${e(qDate(q))}${q.attn ? ' · ' + e(q.attn) : ''} &nbsp;—&nbsp; 소계 ${fmtWon(q.total)}원</td></tr>`;
+    its.forEach(it => { idx++; rows += `<tr><td class="c">${idx}</td><td class="l">${e(it.name)}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}${it.unit ? ' ' + e(it.unit) : ''}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`; });
+  });
+  const docNos = qs.map(q => q.docNo).filter(Boolean).join(', ');
+  const dRange = qs.length > 1 ? (qDate(qs[0]) + ' ~ ' + qDate(qs[qs.length - 1])) : qDate(qs[0]);
+  return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>청구서 ${e(client)} (${qs.length}건)</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@1.3.9/dist/web/static/pretendard.min.css">
+<style>*{box-sizing:border-box}html,body{margin:0;padding:0;background:#fff}
+@page{size:A4;margin:8mm}
+#page{width:718px;min-height:1047px;position:relative;margin:0 auto;background:#fff}
+#sheet{width:718px;padding:26px 28px;font-family:'Pretendard Variable',Pretendard,'맑은 고딕','Malgun Gothic','Apple SD Gothic Neo',sans-serif;color:#201c17;font-size:12.5px;-webkit-font-smoothing:antialiased}
+.qhead{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #201c17;padding-bottom:13px}
+.qhead .brand{font-size:16px;font-weight:700;color:#201c17;letter-spacing:.3px}
+.qhead .title h1{margin:0;font-size:34px;font-weight:800;letter-spacing:15px;color:#201c17;line-height:1}
+.meta{display:flex;justify-content:space-between;align-items:baseline;gap:22px;font-size:11px;color:#9a9086;margin:11px 0 18px;letter-spacing:.3px}
+.meta b{color:#201c17;font-weight:600}
+.info{display:flex;gap:13px;margin-bottom:16px}
+.info .box{flex:1;border:1px solid #e6ddcf;border-radius:2px;overflow:hidden}
+.info .bh{background:#f6f1e8;color:#8a7350;font-weight:700;font-size:10px;padding:7px 13px;border-bottom:1px solid #e6ddcf;letter-spacing:2px}
+.info .bb{padding:12px 14px;font-size:11.5px;line-height:1.65;position:relative;min-height:114px;color:#4a443c}
+.info .recip-name{font-size:16px;font-weight:700;margin-bottom:6px;color:#201c17}
+.stamp{position:absolute;right:16px;top:12px;width:72px;height:72px;border:2px solid #c2a06a;border-radius:50%;color:#c2a06a;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center;text-align:center;line-height:1.2;transform:rotate(-9deg);opacity:.9}
+.stampimg{position:absolute;right:14px;top:12px;width:88px;height:88px;object-fit:contain;opacity:.92;mix-blend-mode:multiply}
+.items{border-collapse:collapse;width:100%;table-layout:fixed;border-top:2px solid #201c17;border-bottom:2px solid #201c17}
+.items th{background:#201c17;color:#f3ece0;font-weight:600;font-size:11px;padding:10px 6px;letter-spacing:2px}
+.items td{border-bottom:1px solid #ece4d6;padding:9px 7px;font-size:12px;color:#332f28}
+.items tr.grp td{background:#f6f1e8;color:#8a7350;font-weight:700;font-size:11px;text-align:left;padding-left:12px;letter-spacing:1px}
+.items td.c{text-align:center}.items td.l{text-align:left;padding-left:12px;font-weight:600;color:#201c17}.items td.r{text-align:right;padding-right:12px}
+.bottom{display:flex;gap:15px;margin-top:16px;align-items:stretch}
+.bottom .memo{flex:1;border:1px solid #e6ddcf;border-radius:2px;overflow:hidden;display:flex;flex-direction:column}
+.memo .mh{background:#f6f1e8;color:#8a7350;font-weight:700;font-size:10px;padding:7px 13px;letter-spacing:2px}
+.memo .mb{padding:11px 13px;font-size:11px;line-height:1.6;flex:1;color:#4a443c}
+.sum{width:300px;border-collapse:collapse;align-self:flex-start}
+.sum td{padding:10px 14px;font-size:12.5px;border-bottom:1px solid #ece4d6}
+.sum .k{color:#8a8178;font-weight:500}.sum .v{text-align:right;font-weight:600;color:#201c17}
+.sum .tot td{background:#201c17;color:#fff;font-size:15px;font-weight:700;border:none;padding:13px 14px;letter-spacing:1px}
+.sum .tot td:last-child{color:#e2c48c}
+.notice{margin-top:15px;border:1px solid #cbb089;border-radius:2px;overflow:hidden}
+.notice .nh{background:#8a7350;color:#fff;font-weight:700;font-size:11.5px;padding:8px 13px;letter-spacing:1px}
+.notice ul{margin:0;padding:10px 12px 10px 30px;font-size:11px;line-height:1.75;color:#6b5a3c;font-weight:500;background:#faf6ee}
+.foot{margin-top:18px;border-top:1px solid #e6ddcf;padding-top:10px;font-size:9.5px;color:#b0a795;display:flex;justify-content:space-between;letter-spacing:.3px}
+@media print{html,body{background:#fff}#page{margin:0}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body>
+  <div id="page"><div id="sheet">
+  <div class="qhead">
+    <div class="brand"><img src="${DAWOO_LOGO}" alt="" style="height:42px;display:block"></div>
+    <div class="title"><h1>청 구 서</h1></div>
+  </div>
+  <div class="meta"><span style="display:flex;flex-direction:column;gap:2px;color:#201c17;font-weight:600"><span>담당자 : ${e(qs[0].by) || '-'}${_staffPhone ? ` <span style="color:#9a9086;font-weight:500">${e(_staffPhone)}</span>` : ''}</span><span style="color:#9a9086;font-weight:500">묶음 견적 : ${e(docNos)}</span></span><span style="display:flex;gap:22px"><span>견적 <b>${qs.length}건 묶음</b></span><span>기간 <b>${e(dRange)}</b></span><span>출력일 <b>${e(todayStr())}</b></span></span></div>
+  <div class="info">
+    <div class="box"><div class="bh">수신</div><div class="bb"><div class="recip-name">${e(client)} 귀중</div><div style="color:#666">아래 견적 ${qs.length}건을 합산하여 청구합니다.</div></div></div>
+    <div class="box"><div class="bh">공급자</div><div class="bb">${co.stampImg ? `<img class="stampimg" src="${co.stampImg}">` : `<div class="stamp">DAWOO<br>(인)</div>`}<b style="font-size:13px;color:#111">${e(co.name)}</b><br>대표 ${e(co.ceo)}<br>사업자등록번호 ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}</div></div>
+  </div>
+  <table class="items"><colgroup><col style="width:7%"><col style="width:33%"><col style="width:22%"><col style="width:10%"><col style="width:14%"><col style="width:14%"></colgroup>
+    <thead><tr><th>No</th><th>품목</th><th>규격</th><th>수량</th><th>단가</th><th>금액</th></tr></thead><tbody>${rows}</tbody></table>
+  <div class="bottom">
+    <div class="memo"><div class="mh">비 고</div><div class="mb">${qs.map(q => q.memo ? ('· ' + e(q.docNo) + ': ' + e(q.memo)) : '').filter(Boolean).join('<br>')}</div></div>
+    <table class="sum">
+      <tr><td class="k">공급가액 합계</td><td class="v">${fmtWon(supply)} 원</td></tr>
+      <tr><td class="k">부가세 (10%)</td><td class="v">${fmtWon(vat)} 원</td></tr>
+      ${disc > 0 ? `<tr><td class="k">할인 (D/C)</td><td class="v" style="color:#c0341d">- ${fmtWon(disc)} 원</td></tr>` : ''}
+      <tr class="tot"><td>청구 합계</td><td style="text-align:right">${fmtWon(total)} 원</td></tr>
+    </table>
+  </div>
+  ${hasBasin ? `<div class="notice"><div class="nh">⚠ 세면대 주문제작 특이사항 (필독)</div><ul>${BASIN_NOTICE.map(l => `<li>${e(l)}</li>`).join('')}</ul></div>` : ''}
+  <div class="foot"><span>※ 본 청구서는 상기 견적 ${qs.length}건을 합산한 것이며, 부가세 별도(공급가액 기준)로 산정되었습니다.</span><span>${e(co.name)}</span></div>
+  </div></div>
+</body></html>`;
 }
 function downloadQuotePng(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
