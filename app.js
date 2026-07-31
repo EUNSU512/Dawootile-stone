@@ -3695,7 +3695,8 @@ function quoteTruncate(place) {
   const rem = (_qRawTotal || 0) % place;
   if (el('q-dc')) el('q-dc').value = rem;
   quoteRecalc();
-  toast(fmtWon(place) + '원 단위 절삭 · 할인 ' + fmtWon(rem) + '원');
+  const unit = place === 1000 ? '천원' : place === 10000 ? '만원' : place === 100000 ? '십만원' : place === 1000000 ? '백만원' : (fmtWon(place) + '원');
+  toast(unit + ' 단위 내림 · 할인 ' + fmtWon(rem) + '원 → 합계 ' + fmtWon((_qRawTotal || 0) - rem) + '원');
 }
 function quoteDcClear() { if (el('q-dc')) el('q-dc').value = ''; quoteRecalc(); }
 function addQRow() { const c = el('q-rows'); if (c) { c.insertAdjacentHTML('beforeend', qRowHtml({})); } }
@@ -3816,11 +3817,11 @@ function renderQuoteForm() {
           <div style="display:flex;justify-content:space-between;font-size:14px;margin-bottom:6px"><span style="color:var(--t2)">부가세 (10%)</span><b id="q-vat">0</b></div>
           <div style="display:flex;justify-content:space-between;align-items:center;font-size:14px;margin-bottom:6px"><span style="color:var(--t2)">할인 (D/C)</span><input id="q-dc" inputmode="numeric" value="${esc(editing ? (v.discount || '') : '')}" oninput="quoteRecalc()" placeholder="0" style="width:130px;text-align:right;font-size:14px;padding:6px 9px;border:1.5px solid var(--bd2);border-radius:8px;color:#c0341d;font-weight:700"></div>
           <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:8px;justify-content:flex-end;align-items:center">
-            <span style="font-size:10.5px;color:var(--t3);margin-right:auto">끝자리 절삭</span>
-            <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" onclick="quoteTruncate(100)">100</button>
-            <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" onclick="quoteTruncate(1000)">1,000</button>
-            <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" onclick="quoteTruncate(10000)">1만</button>
-            <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" onclick="quoteTruncate(100000)">10만</button>
+            <span style="font-size:10.5px;color:var(--t3);margin-right:auto">합계 내림(절사)</span>
+            <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" onclick="quoteTruncate(1000)">천원</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" onclick="quoteTruncate(10000)">만원</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" onclick="quoteTruncate(100000)">십만원</button>
+            <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" onclick="quoteTruncate(1000000)">백만원</button>
             <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" onclick="quoteDcClear()">해제</button>
           </div>
           <div style="display:flex;justify-content:space-between;font-size:17px;border-top:1px solid var(--bd2);padding-top:8px"><span style="font-weight:700">합계금액</span><b id="q-total" style="color:var(--gd)">0</b></div>
