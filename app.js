@@ -791,7 +791,7 @@ function downloadClientLedger(id) {
 }
 function openClientDetail(id) { filters.clientDetail = id; renderClients(); if (el('pg-clients')) el('pg-clients').scrollIntoView({ block: 'start' }); }
 function clientsBack() { filters.clientDetail = ''; renderClients(); }
-function clientsFilter(v) { filters.clientSearch = v; renderClients(); }
+function clientsFilter(v) { filters.clientSearch = v; const box = el('cl-list'); if (box) box.innerHTML = clientRowsHtml(); else renderClients(); }
 async function addClientQuick() { const inpEl = el('cl-new'); const v = (inpEl && inpEl.value || '').trim(); if (!v) return; if ((state.clients || []).some(c => _normName(c.value) === _normName(v))) { toast('이미 있는 거래처'); return; } await Store.add('clients', { value: v }); if (inpEl) inpEl.value = ''; toast('거래처 등록됨'); setTimeout(renderClients, 300); }
 async function saveClientBizInfo(id) {
   const c = (state.clients || []).find(x => x.id === id); if (!c) return;
@@ -899,13 +899,11 @@ async function importClientsFull(input) {
   } catch (e) { toast('업로드 실패: ' + ((e && e.message) || e)); }
 }
 async function delClientC(id) { if (!isAdmin()) { toast('관리자만 삭제할 수 있습니다'); return; } const c = (state.clients || []).find(x => x.id === id); if (!c) return; if (!confirm((c.value || '') + ' 거래처를 삭제할까요?')) return; await Store.remove('clients', id); filters.clientDetail = ''; toast('삭제됨'); setTimeout(renderClients, 300); }
-function renderClients() {
-  if (filters.clientDetail) { renderClientDetail(); return; }
+function clientRowsHtml() {
   const q = (filters.clientSearch || '').trim().toLowerCase();
   let list = (state.clients || []).slice().sort((a, b) => (a.value || '').localeCompare(b.value || ''));
   if (q) list = list.filter(c => (c.value || '').toLowerCase().includes(q));
-  const allUnpaid = (state.clients || []).reduce((a, c) => a + clientStats(c.value).unpaid, 0);
-  const rows = list.length ? list.map(c => {
+  return list.length ? list.map(c => {
     const st = clientStats(c.value); const ti = c.taxInfo || {};
     return `<div class="card" style="margin-bottom:8px;padding:11px 13px;cursor:pointer" onclick="openClientDetail('${c.id}')">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
@@ -919,6 +917,11 @@ function renderClients() {
         </div>
       </div></div>`;
   }).join('') : `<div class="empty"><i class="ti ti-users"></i>${q ? '검색 결과가 없습니다' : '거래처가 없습니다'}</div>`;
+}
+function renderClients() {
+  if (filters.clientDetail) { renderClientDetail(); return; }
+  const allUnpaid = (state.clients || []).reduce((a, c) => a + clientStats(c.value).unpaid, 0);
+  const rows = clientRowsHtml();
   el('pg-clients').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-users"></i>거래처 관리</h2><p>유형 · 사업자정보 · 미수/매출</p></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(2,1fr);margin-bottom:12px">
