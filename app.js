@@ -4004,6 +4004,43 @@ function quoteRegister(id) {
     toast('가공 포함 · 현장 등록으로 이동');
   } else { openShipForm({ targetName: q.client, items: items, quoteId: id }); toast('출고 등록으로 불러왔습니다 · 확인 후 등록'); }
 }
+let _linkQuoteId = '';
+function quoteLinkSite(id) {
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
+  _linkQuoteId = id;
+  openModal(`
+    <div class="sheet-h"><h3><i class="ti ti-link"></i>기존 현장에 연결</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div class="frm">
+      <div style="font-size:12px;color:var(--t3);margin-bottom:9px">견적 <b>${esc(q.docNo || '')}</b> · ${esc(q.client || '')} 를 이미 등록된 현장에 연결합니다. 연결하면 <b>현장 등록 완료</b>로 표시됩니다.</div>
+      <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i><input id="lnk-search" placeholder="현장명·업체·주소 검색" oninput="quoteLinkSiteFilter()" autocomplete="off" lang="ko"></div>
+      <div id="lnk-list" data-keepscroll style="max-height:52vh;overflow:auto">${_linkSiteRows('')}</div>
+    </div>`);
+  setTimeout(() => { const inp = el('lnk-search'); if (inp) { inp.value = q.client || ''; quoteLinkSiteFilter(); } }, 30);
+}
+function _linkSiteRows(qy) {
+  qy = (qy || '').trim().toLowerCase();
+  let list = (state.sites || []).slice().sort((a, b) => (b.constructDate || '').localeCompare(a.constructDate || '') || (+b.createdAt || 0) - (+a.createdAt || 0));
+  if (qy) list = list.filter(x => ((x.name || '') + (x.client || '') + (x.address || '') + (x.region || '')).toLowerCase().includes(qy));
+  list = list.slice(0, 80);
+  if (!list.length) return `<div class="empty"><i class="ti ti-building-community"></i>연결할 현장이 없습니다</div>`;
+  return list.map(x => `<div style="display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid var(--soft)">
+    <div style="min-width:0;flex:1"><div style="font-weight:700;font-size:13.5px">${esc(x.name || x.client || '-')}</div>
+      <div style="font-size:11px;color:var(--t3)">${esc(x.client || '')}${x.constructDate ? ' · 시공 ' + esc(x.constructDate) : ''}${x.team ? ' · ' + esc(x.team) : ''}</div>
+      ${x.address ? `<div style="font-size:11px;color:var(--t3)">${esc(x.address)}</div>` : ''}</div>
+    <button class="btn btn-sm btn-pri" style="flex:none" onclick="quoteLinkSiteDo('${x.id}')"><i class="ti ti-link"></i>연결</button></div>`).join('');
+}
+function quoteLinkSiteFilter() { const w = el('lnk-list'); if (w) w.innerHTML = _linkSiteRows(el('lnk-search') ? el('lnk-search').value : ''); }
+async function quoteLinkSiteDo(siteId) {
+  const id = _linkQuoteId; const q = (state.quotes || []).find(x => x.id === id); const st = (state.sites || []).find(x => x.id === siteId);
+  if (!q || !st) { toast('연결 대상을 찾을 수 없습니다'); return; }
+  if (!confirm('견적 ' + (q.docNo || '') + ' 을(를)\\n현장 "' + (st.name || st.client || '') + '" 에 연결할까요?')) return;
+  try {
+    const nos = Array.isArray(st.quoteNos) ? st.quoteNos.slice() : []; if (q.docNo && !nos.includes(q.docNo)) nos.push(q.docNo);
+    await Store.update('sites', siteId, { quoteNos: nos, linkedQuoteId: id });
+    await Store.update('quotes', id, { siteDone: true, siteDoneAt: Date.now(), siteId: siteId, siteName: st.name || st.client || '' });
+  } catch (e) { }
+  closeModal(); toast('현장에 연결됨 · 현장 등록 완료'); try { renderQuote(); } catch (e) { }
+}
 function quoteToOrder(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
   try { Store.update('quotes', id, { ordered: true, orderedAt: Date.now(), shipped: true, shipStartedAt: q.shipStartedAt || Date.now() }); } catch (e) { }
@@ -4498,7 +4535,7 @@ function quoteCardHtml(q) {
       </div>
       <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${shipBadge}${siteBadge}${basinBadge}</div>
       <div class="frm-foot" style="margin-top:9px;display:flex;align-items:center;gap:5px;flex-wrap:wrap">
-        ${(q.shipped || q.siteDone || q.basinDone) ? '' : (q.ordered ? `<button class="btn btn-sm btn-pri" onclick="quoteRegister('${q.id}')"><i class="ti ${_regIcon}"></i>${_regLabel}</button><button class="btn btn-sm" style="color:var(--t3)" onclick="quoteCancelOrder('${q.id}')" title="확정 주문 취소"><i class="ti ti-arrow-back-up"></i>확정취소</button>` : `<button class="btn btn-sm btn-pri" onclick="quoteConfirmOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>`)}
+        ${(q.shipped || q.siteDone || q.basinDone) ? '' : (q.ordered ? `<button class="btn btn-sm btn-pri" onclick="quoteRegister('${q.id}')"><i class="ti ${_regIcon}"></i>${_regLabel}</button><button class="btn btn-sm" onclick="quoteLinkSite('${q.id}')" title="이미 등록된 현장에 연결"><i class="ti ti-link"></i>현장 연결</button><button class="btn btn-sm" style="color:var(--t3)" onclick="quoteCancelOrder('${q.id}')" title="확정 주문 취소"><i class="ti ti-arrow-back-up"></i>확정취소</button>` : `<button class="btn btn-sm btn-pri" onclick="quoteConfirmOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>`)}
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}')"><i class="ti ti-edit"></i>수정</button>
         <button class="btn btn-sm" onclick="printQuote('${q.id}')"><i class="ti ti-printer"></i>인쇄</button>
         <span style="display:inline-flex;gap:2px;padding-left:6px;margin-left:2px;border-left:1px solid var(--bd)">
