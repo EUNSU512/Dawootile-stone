@@ -71,6 +71,11 @@ input,select,textarea{font-family:inherit}
 .tb-logo small{display:block;font-size:10px;color:rgba(255,255,255,.72);font-weight:500;margin-top:1px}
 .tb-right{display:flex;align-items:center;gap:8px}
 .sync-dot{display:flex;align-items:center;gap:5px;font-size:11px;color:#fff;padding:5px 10px;background:rgba(255,255,255,.15);border-radius:20px;font-weight:500}
+.bell-btn{position:relative;background:rgba(255,255,255,.15);border:none;color:#fff;cursor:pointer;padding:6px 8px;border-radius:20px;display:flex;align-items:center;justify-content:center}
+.bell-btn:hover{background:rgba(255,255,255,.28)}
+.bell-btn i{font-size:18px}
+.bell-dot{position:absolute;top:2px;right:2px;width:10px;height:10px;border-radius:50%;background:#ff3b30;border:1.5px solid #fff;animation:bellpulse 1.6s infinite}
+@keyframes bellpulse{0%{box-shadow:0 0 0 0 rgba(255,59,48,.6)}70%{box-shadow:0 0 0 6px rgba(255,59,48,0)}100%{box-shadow:0 0 0 0 rgba(255,59,48,0)}}
 .sync-dot .d{width:7px;height:7px;border-radius:50%;background:#7BEFC6;box-shadow:0 0 0 0 rgba(123,239,198,.7);animation:pulse 2s infinite}
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(123,239,198,.6)}70%{box-shadow:0 0 0 6px rgba(123,239,198,0)}100%{box-shadow:0 0 0 0 rgba(123,239,198,0)}}
 .sync-dot.local .d{background:#FAC775;animation:none}
@@ -447,6 +452,7 @@ body.cust-mode .wrap{padding-bottom:24px}
     </div>
     <div class="tb-right">
       <span class="sync-dot" id="sync"><span class="d"></span><span id="sync-t">실시간</span></span>
+      <button class="bell-btn" id="bell-btn" onclick="openSiteAlerts()" aria-label="현장 알림" title="현장 일정 알림"><i class="ti ti-bell"></i><span class="bell-dot" id="bell-dot" style="display:none"></span></button>
       <span class="tb-user"><span class="av" id="me-av"></span><span id="me-nm"></span></span>
     </div>
   </div>

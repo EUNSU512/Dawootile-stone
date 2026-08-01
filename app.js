@@ -1024,6 +1024,7 @@ function render() {
   if (_renderTimer) { clearTimeout(_renderTimer); _renderTimer = null; }
   // 스크롤 위치 보존(재렌더로 스크롤이 위로 튕기는 것 방지) — data-keepscroll + id 붙은 요소
   keepScrolls();
+  try { updateBellDot(); } catch (e) { }
   if (isCustomerRole()) { renderCustomerStock(); return; }   // 고객: 재고 조회 전용
   if (isCrewRole()) { renderCrewSchedule(); return; }        // 시공팀: 시공 스케줄 전용
   applyMenuPerms();
@@ -1904,6 +1905,37 @@ function renderHome() {
     </div>`;
 }
 /* ---------- 긴급 알림: 생성 + 기기별 '확인(숨김)' ---------- */
+function siteAlertList() {
+  const out = [];
+  (state.sites || []).forEach(s => {
+    if (s.stage === '완료') return;
+    const d = daysFromNow(s.constructDate);
+    if (d == null) return;
+    if (d < 0) out.push({ site: s, d: d, over: true });
+    else if (d <= 3) out.push({ site: s, d: d, over: false });
+  });
+  return out.sort((a, b) => a.d - b.d);
+}
+function updateBellDot() {
+  const dot = el('bell-dot'); if (!dot) return;
+  let n = 0; try { n = siteAlertList().length; } catch (e) { }
+  dot.style.display = n > 0 ? 'block' : 'none';
+}
+function openSiteAlerts() {
+  const list = siteAlertList();
+  openModal(`
+    <div class="sheet-h"><h3><i class="ti ti-bell-ringing"></i>현장 일정 알림</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div class="frm">
+      <div style="font-size:12px;color:var(--t3);margin-bottom:8px">시공일이 임박(3일 이내)했거나 지난 현장입니다. 항목을 누르면 현장 상세로 이동합니다.</div>
+      ${list.length ? list.map(a => { const s = a.site; const col = (a.over || a.d <= 1) ? '#e0281d' : '#b45309'; const dlabel = a.over ? ('지연 ' + Math.abs(a.d) + '일') : (a.d === 0 ? '오늘 시공' : 'D-' + a.d);
+        return `<div onclick="closeModal();go('sites');setTimeout(()=>{try{openSiteDetail('${s.id}')}catch(e){}},120)" style="display:flex;align-items:center;gap:10px;padding:11px 10px;border-bottom:1px solid var(--soft);cursor:pointer">
+          <span style="width:10px;height:10px;border-radius:50%;background:${col};flex:none"></span>
+          <div style="flex:1;min-width:0"><div style="font-weight:700;font-size:14px">${esc(s.name || s.client || '-')}</div>
+            <div style="font-size:11.5px;color:var(--t3)">${esc(s.client || '')}${s.team ? ' · ' + esc(s.team) : ''} · 시공 ${esc(s.constructDate || '')}</div></div>
+          <span style="font-weight:800;font-size:13px;color:${col};flex:none">${dlabel}</span></div>`; }).join('')
+        : `<div class="empty"><i class="ti ti-circle-check"></i>임박하거나 지난 현장 일정이 없습니다</div>`}
+    </div>`);
+}
 function buildAlerts() {
   const alerts = [];
   const lowItems = state.inventory.filter(i => { const s = stockState(i).k; return s === '부족' || s === '없음'; });
