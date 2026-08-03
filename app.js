@@ -3781,7 +3781,23 @@ function qRowHtml(d) {
       <input class="q-price" inputmode="numeric" placeholder="단가" value="${esc(d.price || '')}" oninput="quoteRecalc()" style="flex:1.3;min-width:56px;${inp};text-align:right">
       <div class="q-amt" style="flex:1.4;min-width:62px;text-align:right;font-weight:700;padding:8px 2px;color:var(--t1);font-size:14px">0</div>
     </div>
+    <div class="q-hebe" style="display:${_isBasin ? 'none' : 'flex'};gap:6px;align-items:center;margin-top:6px">
+      <span style="white-space:nowrap;font-size:12px;color:var(--t3)"><i class="ti ti-ruler-2" style="font-size:12px;vertical-align:-1px"></i> ㎡당 단가</span>
+      <input class="q-hebeprice" inputmode="numeric" placeholder="헤베당 단가 입력 → 장당 자동" oninput="quoteHebeToPrice(this)" style="flex:1;min-width:0;font-size:13px;padding:6px 8px;border:1.5px solid var(--bd2);border-radius:8px;text-align:right">
+      <span class="q-hebe-hint" style="white-space:nowrap;font-size:11px;color:var(--t3)"></span>
+    </div>
   </div>`;
+}
+function quoteHebeToPrice(inp) {
+  const row = inp.closest('.q-row'); if (!row) return;
+  const name = (row.querySelector('.q-mat').value || '').trim();
+  const it = (state.inventory || []).find(x => _normName(x.name) === _normName(name));
+  const hpj = it ? (+it.hebePerJang || 0) : 0;
+  const hint = row.querySelector('.q-hebe-hint'); const v = _numv(inp.value);
+  if (hpj > 0) {
+    if (v > 0) { const per = Math.round(v * hpj); const pe = row.querySelector('.q-price'); if (pe) pe.value = per; if (hint) hint.textContent = '장당 ' + fmtWon(per) + '원 · 1장 ' + hpj + '㎡'; quoteRecalc(); }
+    else if (hint) hint.textContent = '1장 ' + hpj + '㎡';
+  } else if (hint) { hint.textContent = name ? '㎡/장 정보 없음' : ''; }
 }
 function quoteMatPick(inp) {
   const row = inp.closest('.q-row'); if (!row) return; const name = (inp.value || '').trim();
@@ -3794,6 +3810,8 @@ function quoteMatPick(inp) {
   const wrap = row.querySelector('.q-stone-wrap'); if (wrap) wrap.style.display = name.includes('세면대') ? 'block' : 'none';
   const avEl = row.querySelector('.q-avail'); if (avEl) avEl.innerHTML = qAvailText(name);
   const bc = row.querySelector('.q-bcalc'); if (bc) { const on = name.includes('세면대'); bc.style.display = on ? 'block' : 'none'; if (on) basinCalcRow(row); }
+  const hb = row.querySelector('.q-hebe'); if (hb) hb.style.display = name.includes('세면대') ? 'none' : 'flex';
+  const hh = row.querySelector('.q-hebe-hint'); if (hh) { const hpj = it ? (+it.hebePerJang || 0) : 0; hh.textContent = hpj > 0 ? ('1장 ' + hpj + '㎡') : ''; }
   quoteRecalc();
 }
 function quoteClientChanged() {
