@@ -7079,14 +7079,50 @@ function chulgoTogglePack() {
   if (!on) { b.style.background = '#e6f0ff'; b.style.borderColor = '#2f6fed'; b.style.color = '#1b4fb0'; b.innerHTML = '<i class="ti ti-package"></i> 포장 건 · 표시됨 ✓'; }
   else { b.style.background = ''; b.style.borderColor = ''; b.style.color = ''; b.innerHTML = '<i class="ti ti-package"></i> 포장 건 — 누르면 표시'; }
 }
+function registeredDrivers() { const m = (state.appmeta || []).find(x => x.key === 'drivers'); return (((m && m.list) || []).filter(Boolean)).slice().sort((a, b) => a.localeCompare(b)); }
+async function driverAdd() { const inp = el('drv-new'); const v = (inp && inp.value || '').trim(); if (!v) { toast('기사명을 입력하세요'); return; } const m = (state.appmeta || []).find(x => x.key === 'drivers'); const list = (((m && m.list) || [])).slice(); if (list.includes(v)) { toast('이미 등록된 기사입니다'); return; } list.push(v); if (m) await Store.update('appmeta', m.id, { list }); else await Store.add('appmeta', { key: 'drivers', list }); toast('기사 등록됨 · ' + v); setTimeout(openDriverMgr, 160); }
+async function driverDel(name) { const m = (state.appmeta || []).find(x => x.key === 'drivers'); if (!m) return; if (!confirm('기사 "' + name + '" 을(를) 삭제할까요?')) return; const list = ((m.list) || []).filter(x => x !== name); await Store.update('appmeta', m.id, { list }); toast('삭제됨'); setTimeout(openDriverMgr, 160); }
+function openDriverMgr() {
+  const list = registeredDrivers();
+  openModal(`
+    <div class="sheet-h"><h3><i class="ti ti-steering-wheel"></i>기사 관리</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div class="frm">
+      <div style="font-size:12px;color:var(--t3);margin-bottom:9px">등록된 기사만 배차·기사별 보기에 사용됩니다.</div>
+      <div style="display:flex;gap:8px;margin-bottom:11px"><input id="drv-new" lang="ko" placeholder="기사명 입력" style="flex:1;font-size:15px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:10px"><button class="btn btn-pri" style="flex:none" onclick="driverAdd()"><i class="ti ti-plus"></i>등록</button></div>
+      <div data-keepscroll id="drv-list" style="max-height:50vh;overflow:auto">${list.length ? list.map(n => `<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 6px;border-bottom:1px solid var(--soft)"><span style="font-weight:600"><i class="ti ti-user" style="color:var(--t3);font-size:14px"></i> ${esc(n)}</span><button class="btn btn-sm" style="color:var(--red-t)" onclick='driverDel(${JSON.stringify(n)})'><i class="ti ti-trash"></i></button></div>`).join('') : '<div class="empty"><i class="ti ti-user-off"></i>등록된 기사가 없습니다</div>'}</div>
+    </div>`);
+}
+function driverGroupsHtml(name) {
+  const gs = chulgoDispatchGroups().filter(g => (g.driver || '') === name).sort((a, b) => (+b.dispatchedAt || 0) - (+a.dispatchedAt || 0));
+  if (!gs.length) return `<div style="font-size:12px;color:var(--t3);margin-top:8px">${esc(name)} 기사의 출고 건이 없습니다.</div>`;
+  const rows = gs.map(g => {
+    const day = g.dispatchedAt ? new Date(+g.dispatchedAt).toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' }) : '';
+    const clients = [...new Set(g.reqs.map(r => r.client).filter(Boolean))].join(', ');
+    const itemN = g.reqs.reduce((a, r) => a + ((r.items || []).length), 0);
+    const cls = g.status === '완료' ? 'p-done' : (g.status === '확인' ? 'p-prog' : 'p-hold');
+    const dest = g.companyDispatch ? '업체 배차' : (g.dispatchDest || '');
+    return `<div style="display:flex;align-items:center;gap:8px;padding:9px 6px;border-bottom:1px solid var(--soft)">
+      <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px">${esc(clients || '-')}</div><div style="font-size:11px;color:var(--t3)">${esc(day)}${g.loadTime ? ' · 상차 ' + esc(g.loadTime) : ''} · ${itemN}품목${dest ? ' · → ' + esc(dest) : ''}</div></div>
+      <span class="pill ${cls}" style="flex:none">${esc(g.status)}</span></div>`;
+  }).join('');
+  const doneN = gs.filter(g => g.status === '완료').length;
+  return `<div style="font-size:11.5px;color:var(--t3);margin:8px 2px 4px">총 <b>${gs.length}</b>건 · 완료 ${doneN} · 진행 ${gs.length - doneN}</div><div data-keepscroll id="drv-groups" style="max-height:44vh;overflow:auto;border:0.5px solid var(--bd);border-radius:10px">${rows}</div>`;
+}
 function chulgoOfficeSection() {
   const queue = (state.chulgoReqs || []).filter(r => r.reqType === '출고' && ['대기열', '대기'].includes(r.status || '')).sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
   const _todayCh = (function () { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); })();
   const _gdayCh = g => { const t = +g.dispatchedAt || 0; if (!t) return ''; const d = new Date(t); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
   const active = chulgoDispatchGroups().filter(g => g.status !== '완료' || _gdayCh(g) === _todayCh);
-  const drivers = chulgoDispatchDrivers(), dests = chulgoDispatchDests();
+  const drivers = registeredDrivers(), dests = chulgoDispatchDests();
   const times = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
+  const regDrivers2 = registeredDrivers(); const dsel = filters.chulgoDriver || '';
+  const driverView = `<div class="card" style="padding:12px 14px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px"><div style="font-weight:700;font-size:14px"><i class="ti ti-steering-wheel" style="color:var(--blue)"></i> 기사별 출고 보기</div><button class="btn btn-sm" onclick="openDriverMgr()"><i class="ti ti-user-cog"></i>기사 관리</button></div>
+      <select onchange="filters.chulgoDriver=this.value;renderChulgo()" style="width:100%;font-size:15px;padding:9px 10px;border:1.5px solid var(--bd2);border-radius:10px"><option value="">기사 선택 — 전체</option>${regDrivers2.map(d => `<option value="${esc(d)}" ${dsel === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select>
+      ${dsel ? driverGroupsHtml(dsel) : (regDrivers2.length ? '<div style="font-size:11.5px;color:var(--t3);margin-top:7px">기사를 선택하면 해당 기사의 출고 건이 표시됩니다.</div>' : '<div style="font-size:12px;color:var(--t3);margin-top:7px">등록된 기사가 없습니다. [기사 관리]에서 추가하세요.</div>')}
+    </div>`;
   return `
+    ${driverView}
     <div class="card" style="padding:13px 15px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:3px"><div style="font-weight:700;font-size:14px"><i class="ti ti-list-check" style="color:var(--blue)"></i> 출고 대기열 <span style="font-size:12px;color:var(--t3)">(${queue.length}건)</span></div>${isAdmin() && queue.length ? `<button class="btn btn-ghost btn-sm" style="flex:none;color:var(--gd)" onclick="chulgoQueueCompleteAll()" title="이미 기출고된 대기열 전체를 완료 처리(관리자)"><i class="ti ti-checks"></i> 전체 완료</button>` : ''}</div>
       <div style="font-size:11.5px;color:var(--t3);margin-bottom:9px">출고 탭에서 출고를 등록하면 여기에 쌓입니다. 묶을 항목을 체크하고 배차 정보를 넣어 <b>출고 지시</b>를 내리면 창고에 소리로 알림이 갑니다.${isAdmin() ? ' <span style="color:var(--gd)">관리자는 각 건의 ✓로 바로 완료 처리할 수 있습니다.</span>' : ''}</div>
@@ -7096,8 +7132,8 @@ function chulgoOfficeSection() {
           <option value="">기사 선택</option>
           <option value="__company">🚚 업체 배차 (출고지 생략 가능)</option>
           ${drivers.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}
-          <option value="__other">＋ 기타 (직접 입력)</option>
         </select>
+        <button type="button" class="btn btn-sm" onclick="openDriverMgr()" title="기사 등록·관리" style="flex:none;padding:0 12px"><i class="ti ti-user-cog"></i></button>
         <select id="dsp-time" style="flex:1;min-width:0;font-size:15px;padding:9px 10px;border:1.5px solid var(--bd2);border-radius:10px">
           <option value="">상차 시간</option>
           ${times.map(h => `<option>${h}</option>`).join('')}
