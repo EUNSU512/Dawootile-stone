@@ -3696,6 +3696,68 @@ function quoteGetPrice(client, name, typeOverride) {
 }
 function quoteNextDocNo() { const d = todayStr().replace(/-/g, ''); const n = (state.quotes || []).filter(q => (q.docNo || '').startsWith('Q' + d)).length; return 'Q' + d + '-' + (n + 1); }
 let _qN = 0;
+/* ===== 세면대 단가 자동계산 (dawoo-basin-price 이식 · 직원용) ===== */
+const BC_SIZES = [["800*550*180",380000,50000,80000,800],["900*550*180",400000,50000,80000,900],["1000*550*180",420000,50000,80000,1000],["1100*550*180",440000,60000,100000,1100],["1200*550*180",470000,60000,100000,1200],["1300*550*180",500000,60000,100000,1300],["1400*550*180",540000,70000,110000,1400],["1500*550*180",580000,70000,110000,1500],["1600*550*180",620000,90000,130000,1600],["1700*550*180",670000,90000,130000,1700],["1800*550*180",720000,90000,130000,1800],["1900*550*180",770000,100000,140000,1900],["2000 이상 (별도 견적)",null,null,null,2000]];
+const BC_MARKUP = { dist: 60000, interior: 240000, consumer: 440000 };
+const BC_NATL = [[300000,400000,600000],[500000,600000,660000],[800000,900000,1100000]];
+const BC_STD = [[420000,540000,680000],[420000,540000,680000],[360000,460000,580000]];
+const BC_ROUND = [[400000,450000,550000],[480000,550000,650000]];
+const BC_BIZ = { dist: 0, interior: 1, consumer: 2 };
+function basinCalcHtml(isBasin) {
+  const sizeOpts = BC_SIZES.map((x, i) => `<option value="${i}">${esc(x[0])}</option>`).join('');
+  const inp = 'font-size:13px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px;background:#fff';
+  return `<div class="q-bcalc" style="display:${isBasin ? 'block' : 'none'};margin-bottom:8px;border:1.5px solid #f0c060;background:#fffaf0;border-radius:10px;padding:9px 10px">
+    <div style="font-size:11.5px;font-weight:700;color:#8a5a00;margin-bottom:7px"><i class="ti ti-calculator"></i> 세면대 단가 자동계산 <span style="font-weight:500;color:var(--t3)">· 직원용 (적용 후 수동 수정 가능)</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+      <select class="bc-cat" onchange="basinCalcRow(this.closest('.q-row'))" style="${inp}"><option value="mono">모놀리스(주문제작)</option><option value="natl">국내제작(조건별)</option><option value="std">규격 600×470×200</option><option value="round">라운드형</option></select>
+      <select class="bc-biz" onchange="basinCalcRow(this.closest('.q-row'))" style="${inp}"><option value="dist">유통 업체</option><option value="interior">인테리어 업체</option><option value="consumer" selected>소비자</option></select>
+      <select class="bc-size bc-mono" onchange="basinCalcRow(this.closest('.q-row'))" style="${inp}">${sizeOpts}</select>
+      <select class="bc-mat bc-mono" onchange="basinCalcRow(this.closest('.q-row'))" style="${inp}"><option value="base">15티 열성형</option><option value="front">팬텀 화이트</option><option value="back">아스펜라이트그레이</option><option value="back">알래스카</option></select>
+      <select class="bc-skirt bc-mono" onchange="basinCalcRow(this.closest('.q-row'))" style="${inp}"><option value="-30000">상판만(-3만)</option><option value="0" selected>치마 180 기본</option><option value="30000">200~250(+3만)</option><option value="60000">251~300(+6만)</option><option value="90000">301~350(+9만)</option><option value="120000">351~400(+12만)</option><option value="150000">401~450(+15만)</option><option value="180000">451~500(+18만)</option></select>
+      <select class="bc-ball bc-mono" onchange="basinCalcRow(this.closest('.q-row'))" style="${inp}"><option value="0">1볼 기본</option><option value="150000">2볼(+15만)</option></select>
+      <select class="bc-std" onchange="basinCalcRow(this.closest('.q-row'))" style="display:none;${inp}"><option value="0">팬텀 아이보리</option><option value="1">키프로스 라이트 그레이</option><option value="2">화이트 트라버티노</option></select>
+      <select class="bc-natl" onchange="basinCalcRow(this.closest('.q-row'))" style="display:none;${inp}"><option value="0">1200 상판 즉시출고</option><option value="1">1200 이하 주문발주</option><option value="2">1200이하·치마200이하</option></select>
+      <select class="bc-round" onchange="basinCalcRow(this.closest('.q-row'))" style="display:none;${inp}"><option value="0">600×470×150</option><option value="1">800×470×150</option></select>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+      <div style="flex:1"><span style="font-size:11px;color:var(--t3)">계산 단가</span> <b class="bc-total" style="font-size:15px;color:var(--gd)">-</b> <span style="font-size:10.5px;color:var(--t3)">(VAT 별도)</span></div>
+      <button type="button" class="btn btn-sm btn-pri" onclick="basinApply(this)"><i class="ti ti-check"></i>단가 적용</button>
+    </div>
+  </div>`;
+}
+function basinCalcRow(row) {
+  if (!row) return;
+  const q = cls => row.querySelector('.' + cls);
+  const cat = q('bc-cat') ? q('bc-cat').value : 'mono';
+  const biz = q('bc-biz') ? q('bc-biz').value : 'consumer';
+  row.querySelectorAll('.bc-mono').forEach(e => e.style.display = cat === 'mono' ? '' : 'none');
+  const sd = (cls, on) => { const e = q(cls); if (e) e.style.display = on ? '' : 'none'; };
+  sd('bc-std', cat === 'std'); sd('bc-natl', cat === 'natl'); sd('bc-round', cat === 'round');
+  const bi = BC_BIZ[biz]; let total = null, note = '';
+  if (cat === 'natl') total = BC_NATL[+q('bc-natl').value][bi];
+  else if (cat === 'std') total = BC_STD[+q('bc-std').value][bi];
+  else if (cat === 'round') total = BC_ROUND[+q('bc-round').value][bi];
+  else {
+    const x = BC_SIZES[+q('bc-size').value], base = x[1], width = x[4];
+    if (base === null) note = '별도 견적 (2000↑)';
+    else if (q('bc-mat').value !== 'base' && width >= 1600) note = '제작 불가 (12티 1600↑)';
+    else {
+      const matAdd = q('bc-mat').value === 'front' ? x[2] : (q('bc-mat').value === 'back' ? x[3] : 0);
+      const skirtBase = +q('bc-skirt').value, extra = Math.max(0, Math.ceil(width / 1000) - 1);
+      const skirtAdd = skirtBase === 0 ? 0 : skirtBase * (1 + extra);
+      total = base + BC_MARKUP[biz] + matAdd + skirtAdd + (+q('bc-ball').value);
+    }
+  }
+  const tEl = q('bc-total');
+  if (tEl) { if (total != null) { tEl.textContent = fmtWon(total) + '원'; tEl.dataset.v = total; } else { tEl.textContent = note || '-'; tEl.dataset.v = ''; } }
+}
+function basinApply(btn) {
+  const row = btn.closest('.q-row'); if (!row) return;
+  const tEl = row.querySelector('.bc-total'); const v = tEl && tEl.dataset.v;
+  if (!v) { toast('계산 가능한 단가가 없습니다'); return; }
+  const p = row.querySelector('.q-price'); if (p) p.value = v;
+  quoteRecalc(); toast('단가 적용됨 · ' + fmtWon(+v) + '원');
+}
 function qAvailText(name) {
   const it = (state.inventory || []).find(x => _normName(x.name) === _normName((name || '').trim()));
   if (!it) return '';
@@ -3712,6 +3774,7 @@ function qRowHtml(d) {
     </div>
     <div class="q-avail" style="font-size:11.5px;margin:-2px 2px 6px;min-height:14px">${qAvailText(d.name)}</div>
     <div class="q-stone-wrap" style="margin-bottom:6px;display:${_isBasin ? 'block' : 'none'}"><select class="q-stone" style="width:100%;font-size:14px;padding:8px;border:1.5px solid var(--bd2);border-radius:8px;background:#fff"><option value="">— 석종(컬러) 선택 · 세면대 발주에 적용 —</option>${BASIN_STONES.map(st => `<option value="${esc(st.k)}" ${d.stone === st.k ? 'selected' : ''}>${esc(st.k)}${st.t ? ' · ' + st.t : ''}</option>`).join('')}</select></div>
+    ${basinCalcHtml(_isBasin)}
     <div style="display:flex;gap:6px;align-items:center">
       <input class="q-spec" lang="en" placeholder="규격" value="${esc(d.spec || '')}" style="flex:1.7;min-width:0;${inp}">
       <input class="q-qty" inputmode="numeric" placeholder="수량" value="${esc(d.qty || '')}" oninput="quoteRecalc()" style="flex:1;min-width:44px;${inp};text-align:right">
@@ -3730,6 +3793,7 @@ function quoteMatPick(inp) {
   const priceEl = row.querySelector('.q-price'); const p = quoteGetPrice(client, name, type); if (p && !_numv(priceEl.value)) priceEl.value = p;
   const wrap = row.querySelector('.q-stone-wrap'); if (wrap) wrap.style.display = name.includes('세면대') ? 'block' : 'none';
   const avEl = row.querySelector('.q-avail'); if (avEl) avEl.innerHTML = qAvailText(name);
+  const bc = row.querySelector('.q-bcalc'); if (bc) { const on = name.includes('세면대'); bc.style.display = on ? 'block' : 'none'; if (on) basinCalcRow(row); }
   quoteRecalc();
 }
 function quoteClientChanged() {
