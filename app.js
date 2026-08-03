@@ -6741,7 +6741,7 @@ function chulgoReqCard(r, forWarehouse) {
   const sub = [r.schedDate ? '예정 ' + r.schedDate : '', r.companyDispatch ? '🚚 업체 배차' : (r.driver ? '기사 ' + r.driver : ''), r.loadTime ? '상차 ' + r.loadTime : '', r.dispatchDest ? '→ ' + r.dispatchDest : ''].filter(Boolean).join(' · ');
   return `<div class="card" style="margin-bottom:9px;padding:12px 14px;border-left:4px solid ${r.urgent ? '#e23b3b' : 'var(--bd2)'}">
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-      <div style="min-width:0"><div style="font-weight:700;font-size:14px">${urgBadge}${esc(r.reqType || '출고')} · ${esc(r.client || '-')}${flTxt ? ` <span style="font-size:10.5px;color:var(--blue)">[${flTxt}]</span>` : ''}</div>
+      <div style="min-width:0"><div style="font-weight:700;font-size:14px">${urgBadge}${esc(r.reqType || '출고')}${r.alertKind ? ' · ' + esc(r.alertKind) : ''}${r.fromWarehouse ? ' <span style="font-size:9.5px;color:#fff;background:#8a5a00;padding:1px 5px;border-radius:6px;vertical-align:1px">창고→사무실</span>' : ''} · ${esc(r.client || '-')}${flTxt ? ` <span style="font-size:10.5px;color:var(--blue)">[${flTxt}]</span>` : ''}</div>
         <div style="font-size:11.5px;color:var(--t3);margin-top:2px">${esc(r.docNo || '')} · ${esc(r.sender || '')} · ${when}</div></div>
       <span class="pill ${cls}" style="flex:none">${esc(st)}</span>
     </div>
@@ -7116,6 +7116,11 @@ function chulgoOfficeSection() {
   const drivers = registeredDrivers(), dests = chulgoDispatchDests();
   const times = ['08:00', '09:00', '10:00', '11:00', '12:00', '13:00', '14:00', '15:00', '16:00', '17:00'];
   const regDrivers2 = registeredDrivers(); const dsel = filters.chulgoDriver || '';
+  const whAlerts = (state.chulgoReqs || []).filter(r => r.reqType === '입고알림' && r.fromWarehouse && (r.status || '') === '대기열').sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
+  const whAlertCard = whAlerts.length ? `<div class="card" style="padding:12px 14px;margin-bottom:12px;border:1.5px solid #f0c060;background:#fffaf0">
+      <div style="font-weight:700;font-size:14px;margin-bottom:8px;color:#8a5a00"><i class="ti ti-bell-ringing"></i> 창고 입고 알림 <span style="background:#e0281d;color:#fff;border-radius:9px;padding:0 7px;font-size:11px">${whAlerts.length}</span></div>
+      <div data-keepscroll id="wh-alert-list" style="max-height:38vh;overflow:auto">${whAlerts.map(r => chulgoReqCard(r, true)).join('')}</div>
+    </div>` : '';
   const driverView = `<div class="card" style="padding:12px 14px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px"><div style="font-weight:700;font-size:14px"><i class="ti ti-steering-wheel" style="color:var(--blue)"></i> 기사별 출고 보기</div><button class="btn btn-sm" onclick="openDriverMgr()"><i class="ti ti-user-cog"></i>기사 관리</button></div>
       <select onchange="filters.chulgoDriver=this.value;renderChulgo()" style="width:100%;font-size:15px;padding:9px 10px;border:1.5px solid var(--bd2);border-radius:10px"><option value="">기사 선택 — 전체</option>${regDrivers2.map(d => `<option value="${esc(d)}" ${dsel === d ? 'selected' : ''}>${esc(d)}</option>`).join('')}</select>
@@ -7123,6 +7128,7 @@ function chulgoOfficeSection() {
     </div>`;
   return `
     ${driverView}
+    ${whAlertCard}
     <div class="card" style="padding:13px 15px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:3px"><div style="font-weight:700;font-size:14px"><i class="ti ti-list-check" style="color:var(--blue)"></i> 출고 대기열 <span style="font-size:12px;color:var(--t3)">(${queue.length}건)</span></div>${isAdmin() && queue.length ? `<button class="btn btn-ghost btn-sm" style="flex:none;color:var(--gd)" onclick="chulgoQueueCompleteAll()" title="이미 기출고된 대기열 전체를 완료 처리(관리자)"><i class="ti ti-checks"></i> 전체 완료</button>` : ''}</div>
       <div style="font-size:11.5px;color:var(--t3);margin-bottom:9px">출고 탭에서 출고를 등록하면 여기에 쌓입니다. 묶을 항목을 체크하고 배차 정보를 넣어 <b>출고 지시</b>를 내리면 창고에 소리로 알림이 갑니다.${isAdmin() ? ' <span style="color:var(--gd)">관리자는 각 건의 ✓로 바로 완료 처리할 수 있습니다.</span>' : ''}</div>
@@ -7180,8 +7186,34 @@ function chulgoWarehouseSection() {
   const alarmBtn = _chulgoArmed
     ? `<button class="btn btn-sm btn-block" style="margin-bottom:9px;background:var(--gl2);border-color:var(--gbd);color:var(--gd)" onclick="chulgoDisarmAudio()"><i class="ti ti-bell-ringing"></i> 🔔 알림 소리 <b>켜짐</b> · 눌러서 끄기 <span style="font-weight:500;color:var(--t3)">(새 지시가 오면 접수할 때까지 울려요)</span></button>`
     : `<button class="btn btn-sm btn-block" style="margin-bottom:9px;background:#fff6e6;border-color:#f0c060;color:#8a5a00" onclick="chulgoPrimeAudio()"><i class="ti ti-bell-off"></i> 알림 소리 <b>꺼짐</b> · 눌러서 켜기 <span style="font-weight:500;color:var(--t3)">(이 기기 · 새 지시가 오면 소리로 알려요)</span></button>`;
+  const whSendCard = `<div class="card" style="padding:13px 15px;margin-bottom:12px;border:1.5px solid #f0c060;background:#fffaf0">
+      <div style="font-weight:700;font-size:14px;margin-bottom:9px;color:#8a5a00"><i class="ti ti-send"></i> 사무실로 입고 알림 보내기</div>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <select id="wh-kind" style="flex:1.2;min-width:0;font-size:15px;padding:9px 10px;border:1.5px solid var(--bd2);border-radius:10px;background:#fff"><option>A형 파렛트 입고</option><option>자재 환불</option><option>일반 입고</option><option>파손·불량</option><option>기타</option></select>
+        <input id="wh-client" lang="ko" placeholder="거래처(선택)" style="flex:1;min-width:0;font-size:15px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:10px">
+      </div>
+      <input id="wh-content" lang="ko" placeholder="내용 (예: A형 파렛트 20개 입고 / OO자재 3장 환불 사유)" style="width:100%;font-size:15px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:10px;margin-bottom:8px">
+      <textarea id="wh-memo" lang="ko" placeholder="메모(선택)" style="width:100%;font-size:15px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:10px;margin-bottom:10px;min-height:48px"></textarea>
+      <button class="btn btn-pri btn-block" onclick="submitWhAlert()"><i class="ti ti-bell-plus"></i>사무실로 알림 전송</button>
+    </div>`;
   return `${alarmBtn}
-    <div style="font-size:12px;color:var(--t3);margin:2px 0 8px"><span class="live-dot" style="background:#1D9E75;--pc:rgba(29,158,117,.6);width:7px;height:7px;display:inline-block;vertical-align:middle;margin-right:5px"></span>실시간 · 새 출고 지시 <b style="color:#c0341d">${newN}건</b></div>${box}${inBox}${chulgoCompletedSection()}`;
+    <div style="font-size:12px;color:var(--t3);margin:2px 0 8px"><span class="live-dot" style="background:#1D9E75;--pc:rgba(29,158,117,.6);width:7px;height:7px;display:inline-block;vertical-align:middle;margin-right:5px"></span>실시간 · 새 출고 지시 <b style="color:#c0341d">${newN}건</b></div>${whSendCard}${box}${inBox}${chulgoCompletedSection()}`;
+}
+async function submitWhAlert() {
+  const kind = (el('wh-kind') && el('wh-kind').value) || '입고 알림';
+  const content = (el('wh-content') && el('wh-content').value || '').trim();
+  const client = (el('wh-client') && el('wh-client').value || '').trim();
+  const memo = (el('wh-memo') && el('wh-memo').value || '').trim();
+  if (!content) { toast('내용을 입력하세요'); return; }
+  if (_busy) return; _busy = true;
+  try {
+    const docNo = chulgoNextDocNo('입고알림');
+    await Store.add('chulgoReqs', { docNo, reqType: '입고알림', alertKind: kind, client, items: [{ name: content, qty: '', unit: '', spec: '' }], memo, status: '대기열', fromWarehouse: true, sender: (me && me.name) || '', createdAt: Date.now() });
+    try { notifyChulgoDispatch('[창고 알림] ' + kind + ' · ' + content + (client ? ' · ' + client : '')); } catch (e) { }
+    toast('사무실로 입고 알림 전송됨 🔔');
+    if (el('wh-content')) el('wh-content').value = ''; if (el('wh-memo')) el('wh-memo').value = '';
+    renderChulgo();
+  } finally { setTimeout(() => { _busy = false; }, 600); }
 }
 function renderChulgo() {
   keepScrolls();
