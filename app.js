@@ -3695,6 +3695,13 @@ function quoteGetPrice(client, name, typeOverride) {
 }
 function quoteNextDocNo() { const d = todayStr().replace(/-/g, ''); const n = (state.quotes || []).filter(q => (q.docNo || '').startsWith('Q' + d)).length; return 'Q' + d + '-' + (n + 1); }
 let _qN = 0;
+function qAvailText(name) {
+  const it = (state.inventory || []).find(x => _normName(x.name) === _normName((name || '').trim()));
+  if (!it) return '';
+  const av = availJang(it); const hebe = +(av * (+it.hebePerJang || 0)).toFixed(1);
+  const col = av <= 0 ? '#c0341d' : (av <= (+it.safeJang || 0) ? '#b45309' : '#0f766e');
+  return `<span style="color:${col};font-weight:600"><i class="ti ti-packages" style="font-size:12px;vertical-align:-1px"></i> 가용 ${av}장${hebe ? ` · ${hebe}㎡` : ''}${av <= 0 ? ' (재고 없음)' : ''}</span>`;
+}
 function qRowHtml(d) {
   d = d || {}; const i = _qN++; const inp = 'font-size:14px;padding:8px;border:1.5px solid var(--bd2);border-radius:8px'; const _isBasin = (d.name || '').includes('세면대');
   return `<div class="q-row" style="border:1px solid var(--bd2);border-radius:10px;padding:8px 9px;margin-bottom:8px">
@@ -3702,6 +3709,7 @@ function qRowHtml(d) {
       <input class="q-mat" list="q-mat-list" lang="ko" placeholder="자재명 (선택/입력)" value="${esc(d.name || '')}" onchange="quoteMatPick(this)" style="flex:2.4;min-width:0;${inp}">
       <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.q-row').remove();quoteRecalc()" aria-label="삭제"><i class="ti ti-x"></i></button>
     </div>
+    <div class="q-avail" style="font-size:11.5px;margin:-2px 2px 6px;min-height:14px">${qAvailText(d.name)}</div>
     <div class="q-stone-wrap" style="margin-bottom:6px;display:${_isBasin ? 'block' : 'none'}"><select class="q-stone" style="width:100%;font-size:14px;padding:8px;border:1.5px solid var(--bd2);border-radius:8px;background:#fff"><option value="">— 석종(컬러) 선택 · 세면대 발주에 적용 —</option>${BASIN_STONES.map(st => `<option value="${esc(st.k)}" ${d.stone === st.k ? 'selected' : ''}>${esc(st.k)}${st.t ? ' · ' + st.t : ''}</option>`).join('')}</select></div>
     <div style="display:flex;gap:6px;align-items:center">
       <input class="q-spec" lang="en" placeholder="규격" value="${esc(d.spec || '')}" style="flex:1.7;min-width:0;${inp}">
@@ -3720,6 +3728,7 @@ function quoteMatPick(inp) {
   const type = el('q-ctype') ? el('q-ctype').value : '';
   const priceEl = row.querySelector('.q-price'); const p = quoteGetPrice(client, name, type); if (p && !_numv(priceEl.value)) priceEl.value = p;
   const wrap = row.querySelector('.q-stone-wrap'); if (wrap) wrap.style.display = name.includes('세면대') ? 'block' : 'none';
+  const avEl = row.querySelector('.q-avail'); if (avEl) avEl.innerHTML = qAvailText(name);
   quoteRecalc();
 }
 function quoteClientChanged() {
