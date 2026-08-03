@@ -4015,6 +4015,20 @@ function quoteConfirmOrder(id) {
   try { Store.update('quotes', id, { ordered: true, orderedAt: Date.now() }); } catch (e) { }
   toast('확정 주문 · 진행중 발주로 전환됨'); try { renderQuote(); } catch (e) { }
 }
+function quoteMarkDone(id) {
+  if (!isAdmin()) { toast('관리자만 가능합니다'); return; }
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
+  if (!confirm('이 견적을 바로 완료 처리할까요?\n(출고/현장/발주 등록 없이 완료로 표시됩니다)')) return;
+  try { Store.update('quotes', id, { ordered: true, manualDone: true, manualDoneAt: Date.now() }); } catch (e) { }
+  toast('완료 처리됨'); try { renderQuote(); } catch (e) { }
+}
+function quoteUnmarkDone(id) {
+  if (!isAdmin()) { toast('관리자만 가능합니다'); return; }
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
+  if (!confirm('완료를 취소하고 진행중(확정 주문) 상태로 되돌릴까요?')) return;
+  try { Store.update('quotes', id, { manualDone: false, manualDoneAt: 0 }); } catch (e) { }
+  toast('완료 취소됨'); try { renderQuote(); } catch (e) { }
+}
 function quoteCancelOrder(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
   if (!confirm('확정 주문을 취소할까요?\n(미확정 상태로 되돌립니다)')) return;
@@ -4557,6 +4571,7 @@ function quoteCardHtml(q) {
   const shipBadge = q.shipped ? `<span class="pill p-done"><i class="ti ti-truck-delivery"></i> 출고 완료</span>` : '';
   const siteBadge = q.siteDone ? `<span class="pill p-done"><i class="ti ti-building-community"></i> 현장 등록 완료</span>` : '';
   const basinBadge = q.basinDone ? `<span class="pill p-done"><i class="ti ti-bath"></i> 세면대 발주 완료</span>` : '';
+  const doneBadge = q.manualDone ? `<span class="pill p-done"><i class="ti ti-checks"></i> 완료</span>` : '';
   return `<div class="card" style="margin-bottom:10px;padding:12px 14px${_bundle && _selQ ? ';border:2px solid var(--gd);background:#f2fbf6' : ''}">
       ${_bundle ? `<label style="display:flex;align-items:center;gap:8px;margin-bottom:9px;cursor:pointer;font-size:12.5px;font-weight:700;color:${_selQ ? 'var(--gd)' : 'var(--t2)'}"><input type="checkbox" ${_selQ ? 'checked' : ''} onchange="toggleQSel('${q.id}')" style="width:17px;height:17px"> 청구 묶음에 포함</label>` : ''}
       <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
@@ -4565,9 +4580,9 @@ function quoteCardHtml(q) {
           <div style="font-size:12px;color:var(--t2);margin-top:3px">${esc(names)}</div></div>
         <div style="text-align:right;flex:none"><div style="font-size:17px;font-weight:800;color:var(--gd)">${fmtWon(q.total)}<span style="font-size:12px;font-weight:600">원</span></div><div style="font-size:10.5px;color:var(--t3)">VAT 포함</div>${_rem > 0 ? `<div style="font-size:11px;color:var(--gd);margin-top:5px">입금 ${fmtWon(_pa)}</div><div style="font-size:13.5px;font-weight:800;color:var(--red-t)">미수 ${fmtWon(_rem)}</div>` : (_pa > 0 ? `<div style="font-size:12px;font-weight:700;color:var(--gd);margin-top:5px"><i class="ti ti-check"></i> 결제완료</div>` : '')}</div>
       </div>
-      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${shipBadge}${siteBadge}${basinBadge}</div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${shipBadge}${siteBadge}${basinBadge}${doneBadge}</div>
       <div class="frm-foot" style="margin-top:9px;display:flex;align-items:center;gap:5px;flex-wrap:wrap">
-        ${(q.shipped || q.siteDone || q.basinDone) ? '' : (q.ordered ? `<button class="btn btn-sm btn-pri" onclick="quoteRegister('${q.id}')"><i class="ti ${_regIcon}"></i>${_regLabel}</button><button class="btn btn-sm" onclick="quoteLinkSite('${q.id}')" title="이미 등록된 현장에 연결"><i class="ti ti-link"></i>현장 연결</button><button class="btn btn-sm" style="color:var(--t3)" onclick="quoteCancelOrder('${q.id}')" title="확정 주문 취소"><i class="ti ti-arrow-back-up"></i>확정취소</button>` : `<button class="btn btn-sm btn-pri" onclick="quoteConfirmOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>`)}
+        ${(q.shipped || q.siteDone || q.basinDone) ? '' : (q.manualDone ? (isAdmin() ? `<button class="btn btn-sm" style="color:var(--t3)" onclick="quoteUnmarkDone('${q.id}')" title="완료 취소"><i class="ti ti-arrow-back-up"></i>완료 취소</button>` : '') : (q.ordered ? `<button class="btn btn-sm btn-pri" onclick="quoteRegister('${q.id}')"><i class="ti ${_regIcon}"></i>${_regLabel}</button><button class="btn btn-sm" onclick="quoteLinkSite('${q.id}')" title="이미 등록된 현장에 연결"><i class="ti ti-link"></i>현장 연결</button>${isAdmin() ? `<button class="btn btn-sm" style="color:#0f766e;border-color:#0f766e" onclick="quoteMarkDone('${q.id}')" title="바로 완료 처리 (관리자)"><i class="ti ti-checks"></i>완료 처리</button>` : ''}<button class="btn btn-sm" style="color:var(--t3)" onclick="quoteCancelOrder('${q.id}')" title="확정 주문 취소"><i class="ti ti-arrow-back-up"></i>확정취소</button>` : `<button class="btn btn-sm btn-pri" onclick="quoteConfirmOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>`))}
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}')"><i class="ti ti-edit"></i>수정</button>
         <button class="btn btn-sm" onclick="printQuote('${q.id}')"><i class="ti ti-printer"></i>인쇄</button>
         <span style="display:inline-flex;gap:2px;padding-left:6px;margin-left:2px;border-left:1px solid var(--bd)">
