@@ -7242,13 +7242,26 @@ async function cancelChulgoStock(r) {
   if (!r.sourceShipId) return;
   const key = r.sourceShipId;
   const txns = (state.transactions || []).filter(t => t.type === 'out' && (t.shipId || t.id) === key);
+  // 출고 정보 보관(트랜잭션 삭제 전) — 홀딩 복귀용
+  const shipItems = txns.map(t => ({ name: t.itemName || '', jang: +t.jang || 0, hebe: +t.hebe || 0, lot: t.lot || '', pattern: t.pattern || '', vendor: t.targetName || r.client || '', useDate: t.date || '' })).filter(x => x.name && x.jang > 0);
+  // 재고 복구 + 출고 내역 제거
   for (const t of txns) { if (t.itemId) { const it = state.inventory.find(i => i.id === t.itemId); if (it) await Store.update('inventory', it.id, { jang: (+it.jang || 0) + (+t.jang || 0) }); } await Store.remove('transactions', t.id); }
+  // 홀딩 복귀: 원래 홀딩에서 나온 출고면 그 홀딩을 '홀딩'으로 되돌림
+  const linkedHolds = (state.holdings || []).filter(h => h.confirmShipId === key);
   try { await revertHoldsForShip(key); } catch (e) { }
+  // 홀딩 출처가 아니었던 출고(견적·직접출고 등)는 새 홀딩으로 복귀
+  if (!linkedHolds.length && shipItems.length) {
+    const vendor = shipItems[0].vendor || r.client || '';
+    const items = shipItems.map(x => ({ materialName: x.name, jang: x.jang, hebe: x.hebe, lot: x.lot, pattern: x.pattern }));
+    try {
+      await Store.add('holdings', { vendor: vendor, items: items, materialName: items[0].materialName, jang: items[0].jang, hebe: items[0].hebe, useDate: shipItems[0].useDate || '', status: '홀딩', note: '출고 대기열 취소 · 홀딩 복귀' });
+    } catch (e) { }
+  }
 }
 async function delChulgoReq(id) {
   const r = (state.chulgoReqs || []).find(x => x.id === id); if (!r) return;
   const isOut = r.reqType === '출고' && (r.sourceShipId || r.sourceBasinId);
-  const msg = r.sourceBasinId ? '이 세면대 출고를 취소할까요?\n· 발주가 완료 이전 단계로 되돌아가고\n· 대기열/지시에서 제거됩니다.' : (isOut ? '이 출고를 취소할까요?\n· 재고가 복구되고\n· 출고 내역·대기열/지시에서 함께 제거됩니다.' : '이 항목을 삭제할까요?');
+  const msg = r.sourceBasinId ? '이 세면대 출고를 취소할까요?\n· 발주가 완료 이전 단계로 되돌아가고\n· 대기열/지시에서 제거됩니다.' : (isOut ? '이 출고를 취소하고 홀딩으로 되돌릴까요?\n· 재고가 복구되고\n· 홀딩(예약)으로 복귀되며\n· 출고 내역·대기열/지시에서 함께 제거됩니다.' : '이 항목을 삭제할까요?');
   if (!confirm(msg)) return;
   if (isOut) await cancelChulgoStock(r);
   await Store.remove('chulgoReqs', id);
