@@ -1025,6 +1025,7 @@ function render() {
   // 스크롤 위치 보존(재렌더로 스크롤이 위로 튕기는 것 방지) — data-keepscroll + id 붙은 요소
   keepScrolls();
   try { updateBellDot(); } catch (e) { }
+  try { updateChatBadges(); } catch (e) { }
   if (isCustomerRole()) { renderCustomerStock(); return; }   // 고객: 재고 조회 전용
   if (isCrewRole()) { renderCrewSchedule(); return; }        // 시공팀: 시공 스케줄 전용
   applyMenuPerms();
@@ -7287,6 +7288,15 @@ async function cancelDispatch(dispatchId) {
 let _chulgoChatOpen = '';
 function chulgoMineSide() { return chulgoSide() === 'warehouse' ? 'wh' : 'office'; }
 function chulgoUnread(r) { const mine = chulgoMineSide(); const other = mine === 'wh' ? 'office' : 'wh'; const rt = mine === 'wh' ? (+r.readWh || 0) : (+r.readOffice || 0); return (r.chats || []).filter(m => m.side === other && (+m.at || 0) > rt).length; }
+function chulgoUnreadTotal() { try { return (state.chulgoReqs || []).reduce((a, r) => a + chulgoUnread(r), 0); } catch (e) { return 0; } }
+function updateChatBadges() {
+  let n = 0; try { n = chulgoUnreadTotal(); } catch (e) { }
+  document.querySelectorAll('[data-tab="chulgo"]').forEach(btn => {
+    let b = btn.querySelector('.nav-chat-badge');
+    if (n > 0) { if (!b) { b = document.createElement('span'); b.className = 'nav-chat-badge'; btn.appendChild(b); } b.textContent = n > 99 ? '99+' : String(n); b.style.display = 'inline-flex'; }
+    else if (b) { b.style.display = 'none'; }
+  });
+}
 function chulgoChatThreadHtml(r) {
   const mine = chulgoMineSide(); const msgs = r.chats || [];
   if (!msgs.length) return `<div style="text-align:center;color:var(--t3);font-size:12.5px;padding:22px">아직 메시지가 없습니다. 첫 메시지를 보내보세요.</div>`;
