@@ -5046,7 +5046,7 @@ function quoteDocHtml(q) {
   const _salesRep = (q.useSalesRep && _salesCl && _salesCl.salesRep) ? _salesCl.salesRep : '';
   const _salesPhone = _salesRep ? salesRepPhoneOf(_salesRep) : '';
   const items = q.items || []; const MIN = Math.max(6, items.length);
-  let rows = items.map((it, i) => `<tr><td class="c">${i + 1}</td><td class="l">${e(it.name)}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}${it.unit ? ' ' + e(it.unit) : ''}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`).join('');
+  let rows = items.map((it, i) => `<tr><td class="c">${i + 1}</td><td class="l">${e(it.name)}${it.stone ? `<div style="font-size:10.5px;color:#8a7350;font-weight:600">석종(자재): ${e(it.stone)}</div>` : ''}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}${it.unit ? ' ' + e(it.unit) : ''}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`).join('');
   for (let i = items.length; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
   const co = companyInfo();
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>견적서 ${e(q.client)} ${e(q.docNo)}</title>
@@ -5151,7 +5151,7 @@ function combinedBillDocHtml(qs) {
     supply += +q.supply || 0; vat += +q.vat || 0; disc += +q.discount || 0; total += +q.total || 0;
     const its = q.items || []; if (hasBasinItems(its)) hasBasin = true;
     rows += `<tr class="grp"><td colspan="6">견적 ${e(q.docNo)} · ${e(qDate(q))}${q.attn ? ' · ' + e(q.attn) : ''} &nbsp;—&nbsp; 소계 ${fmtWon(q.total)}원</td></tr>`;
-    its.forEach(it => { idx++; rows += `<tr><td class="c">${idx}</td><td class="l">${e(it.name)}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}${it.unit ? ' ' + e(it.unit) : ''}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`; });
+    its.forEach(it => { idx++; rows += `<tr><td class="c">${idx}</td><td class="l">${e(it.name)}${it.stone ? `<div style="font-size:10.5px;color:#8a7350;font-weight:600">석종(자재): ${e(it.stone)}</div>` : ''}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}${it.unit ? ' ' + e(it.unit) : ''}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`; });
   });
   const docNos = qs.map(q => q.docNo).filter(Boolean).join(', ');
   const dRange = qs.length > 1 ? (qDate(qs[0]) + ' ~ ' + qDate(qs[qs.length - 1])) : qDate(qs[0]);
