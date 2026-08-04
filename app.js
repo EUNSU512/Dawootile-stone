@@ -743,7 +743,7 @@ function go(t) {
   if (isRestrictedRole()) t = 'stock';   // 고객·시공팀은 전용 화면만
   else if (!tabAllowed(t)) t = 'home';   // 접근 권한 없는 메뉴 차단
   filters.costEdit = '';   // 원가 입력 폼은 메뉴 이동 시 항상 닫기
-  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; }   // 견적 화면 상태 초기화
+  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; filters.priceSheet = false; }   // 견적 화면 상태 초기화
   if (t !== 'clients') filters.clientDetail = '';
   tab = t;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -4332,6 +4332,107 @@ async function lookupBizInfo() {
   } catch (e) { toast('조회 오류: ' + ((e && e.message) || e)); }
 }
 /* ── 견적 기본설정: 비고 양식 · 거래처 유형 · 자재별 유형단가 ── */
+let _sheetImg = '';
+function sheetItems() { return (state.appmeta || []).filter(x => x.key === 'sheetItem').slice().sort((a, b) => (+a.ord || 0) - (+b.ord || 0)); }
+function openPriceSheet() { if (isCustomerRole()) { toast('권한이 없습니다'); return; } filters.priceSheet = true; filters.sheetEdit = ''; _sheetImg = ''; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
+function priceSheetClose() { filters.priceSheet = false; filters.sheetEdit = ''; _sheetImg = ''; renderQuote(); }
+function sheetImgPick(input) {
+  const f = input.files && input.files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = e => { const img = new Image(); img.onload = () => {
+    const max = 240; let w = img.width, h = img.height; const s = Math.min(1, max / Math.max(w, h)); w = Math.round(w * s); h = Math.round(h * s);
+    const c = document.createElement('canvas'); c.width = w; c.height = h; c.getContext('2d').drawImage(img, 0, 0, w, h);
+    _sheetImg = c.toDataURL('image/jpeg', 0.72);
+    const pv = el('ps-img-preview'); if (pv) { pv.src = _sheetImg; pv.style.display = 'block'; }
+    input.value = '';
+  }; img.src = e.target.result; };
+  rd.readAsDataURL(f);
+}
+async function sheetSave() {
+  const g = id => (el(id) && el(id).value || '').trim();
+  const name = g('ps-name'); if (!name) { toast('제품명(국문)을 입력하세요'); return; }
+  const obj = { key: 'sheetItem', name, nameEn: g('ps-nameEn'), sizeMm: g('ps-size') || '1600X3200', thickness: g('ps-thick') || '12', body: g('ps-body'), pattern: g('ps-pattern'), finish: g('ps-finish'), m2: _numv(g('ps-m2')), jang: _numv(g('ps-jang')), brand: !!(el('ps-brand') && el('ps-brand').checked) };
+  if (_sheetImg) obj.img = _sheetImg;
+  const eid = filters.sheetEdit;
+  if (_busy) return; _busy = true;
+  try {
+    if (eid) { const cur = (state.appmeta || []).find(x => x.id === eid) || {}; if (!obj.img && cur.img) obj.img = cur.img; obj.ord = cur.ord || Date.now(); obj.createdAt = cur.createdAt || Date.now(); await Store.update('appmeta', eid, obj); }
+    else { obj.ord = Date.now(); obj.createdAt = Date.now(); await Store.add('appmeta', obj); }
+    filters.sheetEdit = ''; _sheetImg = ''; toast('저장됨'); renderPriceSheet();
+  } finally { setTimeout(() => { _busy = false; }, 500); }
+}
+function sheetEdit(id) { filters.sheetEdit = id; _sheetImg = ''; renderPriceSheet(); if (el('psheet-root')) el('psheet-root').scrollIntoView({ block: 'start' }); }
+async function sheetDel(id) { if (!confirm('이 단가표 자재를 삭제할까요?')) return; await Store.remove('appmeta', id); if (filters.sheetEdit === id) filters.sheetEdit = ''; toast('삭제됨'); renderPriceSheet(); }
+function renderPriceSheet() {
+  const items = sheetItems();
+  const ev = filters.sheetEdit ? (state.appmeta || []).find(x => x.id === filters.sheetEdit) : null; const v = ev || {};
+  const imgPrev = _sheetImg || v.img || '';
+  const inp = 'width:100%;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px';
+  const rows = items.length ? items.map((it) => `<div style="display:flex;align-items:center;gap:9px;padding:8px 6px;border-bottom:1px solid var(--soft);${it.brand ? 'background:#fff8e1' : ''}">
+      <div style="width:46px;height:34px;flex:none;border:1px solid var(--bd);border-radius:5px;overflow:hidden;background:#fff">${it.img ? `<img src="${it.img}" style="width:100%;height:100%;object-fit:cover">` : ''}</div>
+      <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px">${esc(it.name)}${it.brand ? ' <span style="font-size:10px;color:#b45309">타브랜드</span>' : ''}</div><div style="font-size:11px;color:var(--t3)">${esc(it.nameEn || '')} · ${esc(it.sizeMm || '')}·${esc(it.thickness || '')}T · M2 ${fmtWon(it.m2)} / 장 ${fmtWon(it.jang)}</div></div>
+      <button class="btn btn-sm" onclick="sheetEdit('${it.id}')"><i class="ti ti-edit"></i></button>
+      <button class="btn btn-sm" style="color:var(--red-t)" onclick="sheetDel('${it.id}')"><i class="ti ti-trash"></i></button>
+    </div>`).join('') : '<div class="empty"><i class="ti ti-photo"></i>등록된 단가표 자재가 없습니다</div>';
+  el('pg-quote').innerHTML = `
+    <div id="psheet-root">
+    <div class="ph"><div><h2><i class="ti ti-photo"></i>단가표 관리</h2><p>자재 사진·속성·단가 등록 → 언제든 인쇄/다운로드 (직원용)</p></div>
+      <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="priceSheetClose()"><i class="ti ti-arrow-left"></i>견적</button><button class="btn btn-pri btn-sm" onclick="printPriceSheet()"><i class="ti ti-printer"></i>단가표 인쇄/다운로드</button></div></div>
+    <div class="card" style="padding:14px 16px;margin-bottom:12px">
+      <div style="font-weight:700;font-size:14px;margin-bottom:10px">${ev ? '자재 수정' : '자재 등록'}</div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <div style="flex:none;text-align:center">
+          <img id="ps-img-preview" src="${imgPrev}" style="width:110px;height:80px;object-fit:cover;border:1px solid var(--bd);border-radius:8px;background:#fafafa;display:${imgPrev ? 'block' : 'none'}">
+          <label class="btn btn-sm" style="margin-top:6px;cursor:pointer;display:block"><i class="ti ti-upload"></i>사진<input type="file" accept="image/*" onchange="sheetImgPick(this)" style="display:none"></label>
+        </div>
+        <div style="flex:1;min-width:240px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <input id="ps-name" lang="ko" placeholder="제품명(국문) *" value="${esc(v.name || '')}" style="${inp}">
+          <input id="ps-nameEn" placeholder="제품명(영문)" value="${esc(v.nameEn || '')}" style="${inp}">
+          <input id="ps-size" placeholder="Size(mm)" value="${esc(v.sizeMm || '1600X3200')}" style="${inp}">
+          <input id="ps-thick" placeholder="Thickness(mm)" value="${esc(v.thickness || '12')}" style="${inp}">
+          <input id="ps-body" lang="ko" placeholder="Body (예: 68°화이트바디)" value="${esc(v.body || '')}" style="${inp}">
+          <input id="ps-pattern" lang="ko" placeholder="Pattern (예: A,B Book Match)" value="${esc(v.pattern || '')}" style="${inp}">
+          <input id="ps-finish" lang="ko" placeholder="Finish (예: 폴리싱)" value="${esc(v.finish || '')}" style="${inp}">
+          <label style="display:flex;align-items:center;gap:8px;font-size:13px;background:var(--soft);border-radius:9px;padding:0 10px"><input type="checkbox" id="ps-brand" ${v.brand ? 'checked' : ''} style="width:17px;height:17px"> 타브랜드(노랑)</label>
+          <input id="ps-m2" inputmode="numeric" placeholder="판매단가 M2당" value="${v.m2 ? esc(v.m2) : ''}" style="${inp}">
+          <input id="ps-jang" inputmode="numeric" placeholder="판매단가 장당" value="${v.jang ? esc(v.jang) : ''}" style="${inp}">
+        </div>
+      </div>
+      <div class="frm-foot" style="margin-top:12px">${ev ? `<button class="btn" onclick="filters.sheetEdit='';_sheetImg='';renderPriceSheet()">취소</button>` : ''}<button class="btn btn-pri" style="flex:1" onclick="sheetSave()"><i class="ti ti-check"></i>${ev ? '수정 저장' : '자재 등록'}</button></div>
+    </div>
+    <div class="card" style="padding:12px 14px">
+      <div style="font-weight:700;font-size:14px;margin-bottom:8px">등록 자재 <span style="color:var(--t3);font-weight:500">${items.length}개</span></div>
+      <div data-keepscroll id="ps-list" style="max-height:48vh;overflow:auto">${rows}</div>
+    </div>
+    </div>`;
+}
+function printPriceSheet() {
+  const items = sheetItems();
+  if (!items.length) { toast('등록된 자재가 없습니다'); return; }
+  const e = s => esc(s == null ? '' : String(s));
+  const co = companyInfo();
+  const rows = items.map((it, i) => `<tr${it.brand ? ' style="background:#fff8e1"' : ''}>
+    <td class="c">${i + 1}</td>
+    <td class="l"><b>${e(it.name)}</b>${it.nameEn ? `<div style="font-size:10px;color:#777">${e(it.nameEn)}</div>` : ''}</td>
+    <td class="c">${it.img ? `<img src="${it.img}" style="width:70px;height:48px;object-fit:cover;border:1px solid #ddd">` : ''}</td>
+    <td class="c">${e(it.sizeMm)}</td><td class="c">${e(it.thickness)}</td><td class="c">${e(it.body)}</td><td class="c">${e(it.pattern)}</td><td class="c">${e(it.finish)}</td>
+    <td class="r">${it.m2 ? '₩' + fmtWon(it.m2) : ''}</td><td class="r">${it.jang ? '₩' + fmtWon(it.jang) : ''}</td></tr>`).join('');
+  const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${e(co.name)} 단가표</title>
+<style>*{box-sizing:border-box;margin:0;padding:0}body{font-family:'맑은 고딕','Malgun Gothic',sans-serif;color:#1a1a1a;padding:18px 22px}
+.hd{text-align:center;margin-bottom:8px}.hd img{height:44px}.hd .t{font-weight:800;font-size:16px;letter-spacing:2px;margin-top:4px}
+.note{font-size:11px;color:#555;text-align:center;border:1px solid #ddd;padding:6px;margin:8px 0}
+table{border-collapse:collapse;width:100%}th,td{border:1px solid #999;padding:6px 5px;font-size:11px;vertical-align:middle}
+th{background:#f1efe8;font-weight:700}td.c{text-align:center}td.l{text-align:left;padding-left:8px}td.r{text-align:right;padding-right:8px;font-weight:700}
+@media print{@page{size:A4;margin:8mm}*{-webkit-print-color-adjust:exact;print-color-adjust:exact}}</style></head><body>
+<div class="hd"><img src="${DAWOO_LOGO}" alt=""><div class="t">SLAB PRICE LIST</div></div>
+<div class="note">※ 사이즈가 병기된 제품은 디자인으로 출시된 제품입니다. 노란색 표시는 시니소가 아닌 타브랜드 제품입니다. · 부가세 별도</div>
+<table><thead><tr><th>No</th><th>Product Name</th><th>Photo</th><th>Size(mm)</th><th>Thickness(mm)</th><th>Body</th><th>Pattern</th><th>Finish</th><th>판매단가(M2당)</th><th>판매단가(장당)</th></tr></thead><tbody>${rows}</tbody></table>
+<div style="text-align:right;font-size:10px;color:#888;margin-top:8px">${e(co.name)} · 출력일 ${todayStr()}</div>
+<script>window.addEventListener('load',function(){setTimeout(function(){try{window.print()}catch(e){}},450)});</script>
+</body></html>`;
+  const w = window.open('', '_blank'); if (!w) { toast('팝업이 차단되었습니다. 팝업 허용 후 다시'); return; }
+  w.document.write(html); w.document.close(); w.focus();
+}
 function openQuoteSettings() { filters.quoteSettings = true; renderQuote(); }
 function quoteSettingsClose() { filters.quoteSettings = false; renderQuote(); }
 async function saveQuoteMemo() {
@@ -5079,6 +5180,7 @@ function renderSettle() {
 function renderQuote() {
   keepScrolls();
   if (filters.quoteSettings) { if (!document.getElementById('qset-root')) renderQuoteSettings(); return; }   // 설정 화면
+  if (filters.priceSheet) { if (!document.getElementById('psheet-root')) renderPriceSheet(); return; }   // 단가표 관리
   if (filters.quoteEdit) { if (!document.getElementById('qform-root')) renderQuoteForm(); return; }   // 편집 중엔 실시간 재렌더로 폼을 덮어쓰지 않음
   if (filters.taxEdit) { if (!document.getElementById('taxform-root')) renderTaxForm(); return; }   // 세금계산서 발행 화면
   if (filters.costEdit) { if (!document.getElementById('cost-root')) renderCostForm(); return; }   // 원가 정리(관리자)
@@ -5106,7 +5208,7 @@ function renderQuote() {
     <button class="btn btn-sm ${filters.quoteBundle ? 'btn-pri' : ''}" style="margin-left:auto" onclick="quoteToggleBundle()"><i class="ti ti-stack-2"></i> 묶음청구</button></div>`;
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
-      <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
+      <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="openPriceSheet()"><i class="ti ti-photo"></i>단가표</button><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
       <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(unpaid)}</div><div class="l">미수금(미결제)</div></div>
       <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행</div></div>
