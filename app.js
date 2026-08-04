@@ -128,10 +128,10 @@ function isCustomerRole() { return me && me.role === 'customer'; }  // 고객(�
 function isCrewRole() { return me && me.role === 'crew'; }  // 시공팀 — 자기 시공 스케줄만
 function isRestrictedRole() { return isCustomerRole() || isCrewRole(); }
 /* ===== 메뉴 접근 권한 (직원별) ===== */
-const TAB_LABELS = { home: '홈', sites: '현장', stock: '재고·입고', ship: '출고', chulgo: '출고관리', hold: '홀딩', basin: '세면대 발주', quote: '견적서', clients: '거래처', settle: '정산', settings: '설정' };
-const TAB_ICONS = { sites: 'ti-building-community', stock: 'ti-packages', ship: 'ti-truck-delivery', chulgo: 'ti-clipboard-list', hold: 'ti-lock-square-rounded', basin: 'ti-bath', quote: 'ti-file-invoice', clients: 'ti-users', settle: 'ti-report-money' };
+const TAB_LABELS = { home: '홈', sites: '현장', stock: '재고·입고', ship: '출고', chulgo: '출고관리', hold: '홀딩', basin: '세면대 발주', quote: '견적서', clients: '거래처', archive: '자료실', settle: '정산', settings: '설정' };
+const TAB_ICONS = { sites: 'ti-building-community', stock: 'ti-packages', ship: 'ti-truck-delivery', chulgo: 'ti-clipboard-list', hold: 'ti-lock-square-rounded', basin: 'ti-bath', quote: 'ti-file-invoice', clients: 'ti-users', archive: 'ti-folder', settle: 'ti-report-money' };
 function menuPermAll(on) { document.querySelectorAll('.m-menu').forEach(c => { c.checked = !!on; }); }
-const ALL_TABS = ['home', 'sites', 'stock', 'ship', 'chulgo', 'hold', 'basin', 'quote', 'clients', 'settle', 'settings'];
+const ALL_TABS = ['home', 'sites', 'stock', 'ship', 'chulgo', 'hold', 'basin', 'quote', 'clients', 'archive', 'settle', 'settings'];
 const ALWAYS_TABS = ['home', 'settings'];
 const RESTRICTED_TABS = ['settle'];
 function liveMe() { if (!me) return null; return (state.members || []).find(x => (x.email || '').toLowerCase() === (me.email || '').toLowerCase()) || me; }
@@ -743,7 +743,7 @@ function go(t) {
   if (isRestrictedRole()) t = 'stock';   // 고객·시공팀은 전용 화면만
   else if (!tabAllowed(t)) t = 'home';   // 접근 권한 없는 메뉴 차단
   filters.costEdit = '';   // 원가 입력 폼은 메뉴 이동 시 항상 닫기
-  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; filters.priceSheet = false; }   // 견적 화면 상태 초기화
+  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; }   // 견적 화면 상태 초기화
   if (t !== 'clients') filters.clientDetail = '';
   tab = t;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -1038,6 +1038,7 @@ function render() {
   else if (tab === 'chulgo') renderChulgo();
   else if (tab === 'quote') renderQuote();
   else if (tab === 'clients') renderClients();
+  else if (tab === 'archive') renderArchive();
   else if (tab === 'settle') renderSettle();
   else if (tab === 'settings') renderSettings();
 }
@@ -4352,8 +4353,6 @@ function sheetNamePick() {
   const jangVal = _numv(jangEl ? jangEl.value : 0) || jang;
   if (m2El && !_numv(m2El.value) && hpj > 0 && jangVal > 0) m2El.value = Math.round(jangVal / hpj);
 }
-function openPriceSheet() { if (isCustomerRole()) { toast('권한이 없습니다'); return; } filters.priceSheet = true; filters.sheetEdit = ''; _sheetImg = ''; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
-function priceSheetClose() { filters.priceSheet = false; filters.sheetEdit = ''; _sheetImg = ''; renderQuote(); }
 function sheetImgPick(input) {
   const f = input.files && input.files[0]; if (!f) return;
   const rd = new FileReader();
@@ -4376,12 +4375,12 @@ async function sheetSave() {
   try {
     if (eid) { const cur = (state.appmeta || []).find(x => x.id === eid) || {}; if (!obj.img && cur.img) obj.img = cur.img; obj.ord = cur.ord || Date.now(); obj.createdAt = cur.createdAt || Date.now(); await Store.update('appmeta', eid, obj); }
     else { obj.ord = Date.now(); obj.createdAt = Date.now(); await Store.add('appmeta', obj); }
-    filters.sheetEdit = ''; _sheetImg = ''; toast('저장됨'); renderPriceSheet();
+    filters.sheetEdit = ''; _sheetImg = ''; toast('저장됨'); renderArchive();
   } finally { setTimeout(() => { _busy = false; }, 500); }
 }
-function sheetEdit(id) { filters.sheetEdit = id; _sheetImg = ''; renderPriceSheet(); if (el('psheet-root')) el('psheet-root').scrollIntoView({ block: 'start' }); }
-async function sheetDel(id) { if (!confirm('이 단가표 자재를 삭제할까요?')) return; await Store.remove('appmeta', id); if (filters.sheetEdit === id) filters.sheetEdit = ''; toast('삭제됨'); renderPriceSheet(); }
-function renderPriceSheet() {
+function sheetEdit(id) { filters.sheetEdit = id; _sheetImg = ''; renderArchive(); if (el('psheet-root')) el('psheet-root').scrollIntoView({ block: 'start' }); }
+async function sheetDel(id) { if (!confirm('이 단가표 자재를 삭제할까요?')) return; await Store.remove('appmeta', id); if (filters.sheetEdit === id) filters.sheetEdit = ''; toast('삭제됨'); renderArchive(); }
+function renderArchive() {
   const items = sheetItems();
   const ev = filters.sheetEdit ? (state.appmeta || []).find(x => x.id === filters.sheetEdit) : null; const v = ev || {};
   const imgPrev = _sheetImg || v.img || '';
@@ -4392,10 +4391,10 @@ function renderPriceSheet() {
       <button class="btn btn-sm" onclick="sheetEdit('${it.id}')"><i class="ti ti-edit"></i></button>
       <button class="btn btn-sm" style="color:var(--red-t)" onclick="sheetDel('${it.id}')"><i class="ti ti-trash"></i></button>
     </div>`).join('') : '<div class="empty"><i class="ti ti-photo"></i>등록된 단가표 자재가 없습니다</div>';
-  el('pg-quote').innerHTML = `
+  el('pg-archive').innerHTML = `
     <div id="psheet-root">
-    <div class="ph"><div><h2><i class="ti ti-photo"></i>단가표 관리</h2><p>자재 사진·속성·단가 등록 → 언제든 인쇄/다운로드 (직원용)</p></div>
-      <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="priceSheetClose()"><i class="ti ti-arrow-left"></i>견적</button><button class="btn btn-pri btn-sm" onclick="printPriceSheet()"><i class="ti ti-printer"></i>단가표 인쇄/다운로드</button></div></div>
+    <div class="ph"><div><h2><i class="ti ti-folder"></i>자료실 · 단가표</h2><p>자재 사진·속성·단가 등록 → 언제든 인쇄/다운로드 (직원용)</p></div>
+      <div style="display:flex;gap:6px"><button class="btn btn-pri btn-sm" onclick="printPriceSheet()"><i class="ti ti-printer"></i>단가표 인쇄/다운로드</button></div></div>
     <div class="card" style="padding:14px 16px;margin-bottom:12px">
       <div style="font-weight:700;font-size:14px;margin-bottom:10px">${ev ? '자재 수정' : '자재 등록'}</div>
       <div style="display:flex;gap:12px;flex-wrap:wrap">
@@ -4416,7 +4415,7 @@ function renderPriceSheet() {
           <input id="ps-jang" inputmode="numeric" placeholder="판매단가 장당" value="${v.jang ? esc(v.jang) : ''}" style="${inp}">
         </div>
       </div>
-      <div class="frm-foot" style="margin-top:12px">${ev ? `<button class="btn" onclick="filters.sheetEdit='';_sheetImg='';renderPriceSheet()">취소</button>` : ''}<button class="btn btn-pri" style="flex:1" onclick="sheetSave()"><i class="ti ti-check"></i>${ev ? '수정 저장' : '자재 등록'}</button></div>
+      <div class="frm-foot" style="margin-top:12px">${ev ? `<button class="btn" onclick="filters.sheetEdit='';_sheetImg='';renderArchive()">취소</button>` : ''}<button class="btn btn-pri" style="flex:1" onclick="sheetSave()"><i class="ti ti-check"></i>${ev ? '수정 저장' : '자재 등록'}</button></div>
     </div>
     <div class="card" style="padding:12px 14px">
       <div style="font-weight:700;font-size:14px;margin-bottom:8px">등록 자재 <span style="color:var(--t3);font-weight:500">${items.length}개</span></div>
@@ -5198,7 +5197,6 @@ function renderSettle() {
 function renderQuote() {
   keepScrolls();
   if (filters.quoteSettings) { if (!document.getElementById('qset-root')) renderQuoteSettings(); return; }   // 설정 화면
-  if (filters.priceSheet) { if (!document.getElementById('psheet-root')) renderPriceSheet(); return; }   // 단가표 관리
   if (filters.quoteEdit) { if (!document.getElementById('qform-root')) renderQuoteForm(); return; }   // 편집 중엔 실시간 재렌더로 폼을 덮어쓰지 않음
   if (filters.taxEdit) { if (!document.getElementById('taxform-root')) renderTaxForm(); return; }   // 세금계산서 발행 화면
   if (filters.costEdit) { if (!document.getElementById('cost-root')) renderCostForm(); return; }   // 원가 정리(관리자)
@@ -5226,7 +5224,7 @@ function renderQuote() {
     <button class="btn btn-sm ${filters.quoteBundle ? 'btn-pri' : ''}" style="margin-left:auto" onclick="quoteToggleBundle()"><i class="ti ti-stack-2"></i> 묶음청구</button></div>`;
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
-      <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="openPriceSheet()"><i class="ti ti-photo"></i>단가표</button><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
+      <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
       <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(unpaid)}</div><div class="l">미수금(미결제)</div></div>
       <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행</div></div>
