@@ -3814,11 +3814,40 @@ function quoteMatPick(inp) {
   const hh = row.querySelector('.q-hebe-hint'); if (hh) { const hpj = it ? (+it.hebePerJang || 0) : 0; hh.textContent = hpj > 0 ? ('1장 ' + hpj + '㎡') : ''; }
   quoteRecalc();
 }
+function quoteHoldBoxHtml(client) {
+  client = (client || '').trim();
+  if (!client) return '<div style="font-size:12px;color:var(--t3);padding:4px 2px">거래처를 입력하면 홀딩 자재가 표시됩니다.</div>';
+  const hs = (state.holdings || []).filter(h => _normName(h.vendor || '') === _normName(client) && (h.status || '홀딩') === '홀딩');
+  if (!hs.length) return '<div style="font-size:12px;color:var(--t3);padding:4px 2px">이 거래처의 홀딩 자재가 없습니다.</div>';
+  return hs.map(h => {
+    const items = holdItems(h);
+    const label = items.map(it => `${esc(it.materialName)} ${it.jang}장`).join(', ');
+    const enc = encodeURIComponent(JSON.stringify(items.map(it => ({ name: it.materialName, qty: it.jang, spec: it.lot || '' }))));
+    return `<div style="display:flex;align-items:center;gap:8px;padding:8px 6px;border-bottom:1px solid var(--soft)">
+      <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px"><i class="ti ti-lock" style="font-size:12px;color:var(--blue)"></i> ${label}</div><div style="font-size:11px;color:var(--t3)">${h.useDate ? '사용예정 ' + esc(h.useDate) : ''}${h.note ? ' · ' + esc(h.note) : ''}</div></div>
+      <button type="button" class="btn btn-sm btn-pri" onclick="quoteAddHold('${enc}')"><i class="ti ti-plus"></i>견적에 추가</button></div>`;
+  }).join('');
+}
+function quoteAddHold(enc) {
+  let items = []; try { items = JSON.parse(decodeURIComponent(enc)); } catch (e) { }
+  const c = el('q-rows'); if (!c) return;
+  const rows = c.querySelectorAll('.q-row');
+  if (rows.length === 1) { const nm = rows[0].querySelector('.q-mat'); if (nm && !nm.value.trim()) rows[0].remove(); }
+  items.forEach(it => { c.insertAdjacentHTML('beforeend', qRowHtml({ name: it.name, qty: it.qty, spec: it.spec })); });
+  const client = (el('q-client') && el('q-client').value || '').trim(); const type = el('q-ctype') ? el('q-ctype').value : '';
+  c.querySelectorAll('.q-row').forEach(r => {
+    const nm = (r.querySelector('.q-mat').value || '').trim(); if (!nm) return;
+    const pe = r.querySelector('.q-price'); if (pe && !_numv(pe.value)) { const pr = quoteGetPrice(client, nm, type); if (pr) pe.value = pr; }
+    const av = r.querySelector('.q-avail'); if (av) av.innerHTML = qAvailText(nm);
+  });
+  quoteRecalc(); toast('홀딩 자재를 견적에 추가했습니다');
+}
 function quoteClientChanged() {
   const client = (el('q-client') && el('q-client').value || '').trim();
   const cs = el('q-ctype'); if (cs) cs.value = clientType(client);
   quoteRefillPrices();
   quoteExtraRefresh();
+  const hb = el('q-holdbox'); if (hb) hb.innerHTML = quoteHoldBoxHtml(client);
 }
 function quoteTypeChanged() { quoteRefillPrices(); quoteExtraRefresh(); }
 function quoteRefillPrices() {
@@ -3984,6 +4013,9 @@ function renderQuoteForm() {
         <div class="fld full" style="margin-bottom:10px"><label>수신·참조 <span style="color:var(--t3);font-weight:500">(담당자·현장 등, 선택)</span></label><input id="q-attn" lang="ko" placeholder="예: 홍길동 과장 / OO현장" value="${esc(v.attn || '')}"></div>
         <div class="fld full" style="margin-bottom:10px;background:var(--soft);border-radius:10px;padding:9px 12px"><label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:600;margin:0"><input type="checkbox" id="q-userep" ${editing && v.useSalesRep ? 'checked' : ''} style="width:18px;height:18px"> 영업담당자로 표기 <span style="font-weight:400;color:var(--t3);font-size:12px">(견적 담당자 대신 거래처 영업담당자 이름·연락처 표시)</span></label></div>
         <div class="fld full" style="margin-bottom:10px"><label>현장 주소 <span style="color:var(--t3);font-weight:500">(선택 · 견적서 수신란에 표시)</span></label><input id="q-site" lang="ko" placeholder="예: OO시 OO구 OO동 OO현장" value="${esc(v.siteAddr || '')}"></div>
+        <div class="fld full" style="margin-bottom:10px"><label><i class="ti ti-lock" style="font-size:13px;color:var(--blue)"></i> 이 거래처 홀딩 자재 불러오기 <span style="color:var(--t3);font-weight:500">(눌러서 견적에 추가 → 확정 후 출고)</span></label>
+          <div id="q-holdbox" style="border:1px solid var(--bd2);border-radius:10px;padding:4px 10px;max-height:26vh;overflow:auto">${quoteHoldBoxHtml(v.client || '')}</div>
+        </div>
         <div class="fld full" style="margin-bottom:10px"><label>견적 품목 <span class="req">*</span> <span style="color:var(--t3);font-weight:500">(자재 선택 시 규격·단가 자동 · 단가 수정 가능)</span></label>
           <div id="q-rows">${rows}</div>
           <datalist id="q-mat-list">${matOpts}</datalist>
