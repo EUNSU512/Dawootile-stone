@@ -4334,6 +4334,24 @@ async function lookupBizInfo() {
 /* ── 견적 기본설정: 비고 양식 · 거래처 유형 · 자재별 유형단가 ── */
 let _sheetImg = '';
 function sheetItems() { return (state.appmeta || []).filter(x => x.key === 'sheetItem').slice().sort((a, b) => (+a.ord || 0) - (+b.ord || 0)); }
+function sheetMatNames() {
+  const set = new Set();
+  (state.inventory || []).forEach(x => { if (x.name) set.add(x.name); });
+  (state.priceList || []).forEach(x => { if (x.itemName) set.add(x.itemName); });
+  (state.appmeta || []).filter(x => x.key === 'sheetItem').forEach(x => { if (x.name) set.add(x.name); });
+  return [...set].sort((a, b) => a.localeCompare(b));
+}
+function sheetNamePick() {
+  const nm = (el('ps-name') && el('ps-name').value || '').trim(); if (!nm) return;
+  const it = (state.inventory || []).find(x => _normName(x.name) === _normName(nm));
+  const pl = (state.priceList || []).find(x => _normName(x.itemName) === _normName(nm));
+  const hpj = it ? (+it.hebePerJang || 0) : 0;
+  const jangEl = el('ps-jang'), m2El = el('ps-m2');
+  let jang = 0; if (pl) jang = +pl.consumer || +pl.interior || +pl.dist || 0;
+  if (jangEl && !_numv(jangEl.value) && jang > 0) jangEl.value = jang;
+  const jangVal = _numv(jangEl ? jangEl.value : 0) || jang;
+  if (m2El && !_numv(m2El.value) && hpj > 0 && jangVal > 0) m2El.value = Math.round(jangVal / hpj);
+}
 function openPriceSheet() { if (isCustomerRole()) { toast('권한이 없습니다'); return; } filters.priceSheet = true; filters.sheetEdit = ''; _sheetImg = ''; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
 function priceSheetClose() { filters.priceSheet = false; filters.sheetEdit = ''; _sheetImg = ''; renderQuote(); }
 function sheetImgPick(input) {
@@ -4386,7 +4404,7 @@ function renderPriceSheet() {
           <label class="btn btn-sm" style="margin-top:6px;cursor:pointer;display:block"><i class="ti ti-upload"></i>사진<input type="file" accept="image/*" onchange="sheetImgPick(this)" style="display:none"></label>
         </div>
         <div style="flex:1;min-width:240px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <input id="ps-name" lang="ko" placeholder="제품명(국문) *" value="${esc(v.name || '')}" style="${inp}">
+          <div style="grid-column:1 / -1">${searchBox('ps-name', '자재명 검색·선택 (기존 자재) *', v.name || '', 'sheetMatNames', 'sheetNamePick')}<div style="font-size:11px;color:var(--t3);margin-top:3px">이미 등록된 자재를 고르면 장당·㎡ 단가가 자동 입력됩니다. 사진·Body·Pattern·Finish만 추가하세요.</div></div>
           <input id="ps-nameEn" placeholder="제품명(영문)" value="${esc(v.nameEn || '')}" style="${inp}">
           <input id="ps-size" placeholder="Size(mm)" value="${esc(v.sizeMm || '1600X3200')}" style="${inp}">
           <input id="ps-thick" placeholder="Thickness(mm)" value="${esc(v.thickness || '12')}" style="${inp}">
