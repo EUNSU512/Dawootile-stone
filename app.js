@@ -1466,16 +1466,25 @@ function availJang(it) { return (+it.jang || 0) - heldJangFor(it.name) - Math.ma
 /* 롯트별 재고: 입고(+) − 출고(−). 자재명 기준(띄어쓰기 무시). 롯트 미입력은 '(미지정)' */
 function lotStock(name) {
   if (!name) return [];
-  const key = _normName(name); const m = {};
+  const key = _normName(name); const m = {}; let floatOut = 0;
   state.transactions.forEach(t => {
     if (_normName(t.itemName) !== key) return;
-    const lot = (t.lot || '').trim() || '(미지정)';
-    if (!m[lot]) m[lot] = { lot, inQty: 0, outQty: 0, adjQty: 0 };
-    if (t.type === 'in') m[lot].inQty += (+t.jang || 0);
+    const lotName = (t.lot || '').trim();
+    if (t.type === 'out' && !lotName) { floatOut += (+t.jang || 0); return; }   // 롯트 미지정 출고 → 나중에 롯트별로 배분
+    const lot = lotName || '(미지정)';
+    if (!m[lot]) m[lot] = { lot, inQty: 0, outQty: 0, adjQty: 0, firstIn: '' };
+    if (t.type === 'in') { m[lot].inQty += (+t.jang || 0); const d = t.date || ''; if (d && (!m[lot].firstIn || d < m[lot].firstIn)) m[lot].firstIn = d; }
     else if (t.type === 'out') m[lot].outQty += (+t.jang || 0);
     else if (t.type === 'adjust') m[lot].adjQty += (+t.jang || 0);   // 재고 조정(±)
   });
-  return Object.values(m).map(x => ({ lot: x.lot, inQty: x.inQty, outQty: x.outQty, remain: x.inQty - x.outQty + x.adjQty }))
+  let arr = Object.values(m).map(x => ({ lot: x.lot, inQty: x.inQty, outQty: x.outQty, adjQty: x.adjQty, firstIn: x.firstIn, remain: x.inQty - x.outQty + x.adjQty }));
+  // 롯트 미지정 출고분을 입고 오래된 롯트부터(FIFO) 차감 → 롯트 합계 = 실제 총재고
+  if (floatOut > 0) {
+    const order = arr.slice().sort((a, b) => (a.firstIn || '').localeCompare(b.firstIn || ''));
+    for (const l of order) { if (floatOut <= 0) break; const take = Math.min(floatOut, Math.max(0, l.remain)); l.remain -= take; l.outQty += take; floatOut -= take; }
+    if (floatOut > 0 && order.length) { const last = order[order.length - 1]; last.remain -= floatOut; last.outQty += floatOut; floatOut = 0; }
+  }
+  return arr.map(x => ({ lot: x.lot, inQty: x.inQty, outQty: x.outQty, remain: x.remain }))
     .filter(x => x.inQty > 0 || x.adjQty !== 0 || x.remain !== 0)
     .sort((a, b) => b.remain - a.remain);
 }
