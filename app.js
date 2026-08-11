@@ -4171,11 +4171,12 @@ function quoteCancelOrder(id) {
 }
 function quoteRegister(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
-  const items = (q.items || []).filter(it => marginCat(it.name) === '자재').map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' }));   // 출고엔 자재만 (가공·운송 제외)
-  const hasBasin = (q.items || []).some(it => (it.name || '').includes('세면대'));
+  const isOrderBasin = n => (n || '').includes('세면대') && /주문제작|비규격/.test(n || '');   // 주문제작·비규격 세면대만 발주. 그 외 재고 세면대는 바로 출고
+  const items = (q.items || []).filter(it => marginCat(it.name) === '자재' || ((it.name || '').includes('세면대') && !isOrderBasin(it.name))).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' }));   // 출고엔 자재 + 재고 세면대 (가공·운송·주문제작세면대 제외)
+  const hasBasinOrder = (q.items || []).some(it => isOrderBasin(it.name));
   const hasGagong = (q.items || []).some(it => marginCat(it.name) === '가공');
-  if (hasBasin) {
-    let bi = (q.items || []).filter(it => (it.name || '').includes('세면대')).map(it => ({ stone: it.stone || '', spec: it.spec || '', qty: it.qty || '', quoteNo: q.docNo || '' }));
+  if (hasBasinOrder) {
+    let bi = (q.items || []).filter(it => isOrderBasin(it.name)).map(it => ({ stone: it.stone || '', spec: it.spec || '', qty: it.qty || '', quoteNo: q.docNo || '' }));
     if (!bi.length) bi = (q.items || []).map(it => ({ stone: it.name, spec: it.spec || '', qty: it.qty || '' }));
     go('basin'); setTimeout(() => { try { openBasinForm(null, { vendor: q.client, items: bi, quoteId: id }); } catch (e) { } }, 90);
     toast('세면대 발주로 불러왔습니다');
@@ -4811,7 +4812,7 @@ function quoteDayNav(delta) { const cur = filters.quoteDay || todayStr(); const 
 function quoteCardHtml(q) {
   const when = qDate(q);
   const _bundle = !!filters.quoteBundle; const _selQ = _qSel.has(q.id);
-  const _hasBasin = (q.items || []).some(it => (it.name || '').includes('세면대'));
+  const _hasBasin = (q.items || []).some(it => (it.name || '').includes('세면대') && /주문제작|비규격/.test(it.name || ''));
   const _hasGagong = (q.items || []).some(it => marginCat(it.name) === '가공');
   const _regLabel = _hasBasin ? '세면대 발주' : (_hasGagong ? '현장 등록' : '출고 등록');
   const _regIcon = _hasBasin ? 'ti-bath' : (_hasGagong ? 'ti-building-community' : 'ti-truck-delivery');
