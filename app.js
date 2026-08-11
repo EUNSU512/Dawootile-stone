@@ -4222,6 +4222,14 @@ async function quoteLinkSiteDo(siteId) {
   } catch (e) { }
   closeModal(); toast('현장에 연결됨 · 현장 등록 완료'); try { renderQuote(); } catch (e) { }
 }
+function quoteToHold(id) {
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
+  const isOrderBasin = n => (n || '').includes('세면대') && /주문제작|비규격/.test(n || '');
+  const items = (q.items || []).filter(it => marginCat(it.name) === '자재' || ((it.name || '').includes('세면대') && !isOrderBasin(it.name))).map(it => ({ materialName: it.name, jang: it.qty, lot: '' }));
+  if (!items.length) { toast('홀딩할 자재가 없습니다 (가공·운송·주문제작 세면대 제외)'); return; }
+  go('hold'); setTimeout(() => { try { openHoldForm('', { vendor: q.client, items: items, note: '견적 ' + (q.docNo || '') + ' 홀딩' }); } catch (e) { } }, 90);
+  toast('홀딩 등록으로 불러왔습니다 · 확인 후 등록');
+}
 function quoteToOrder(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
   try { Store.update('quotes', id, { ordered: true, orderedAt: Date.now(), shipped: true, shipStartedAt: q.shipStartedAt || Date.now() }); } catch (e) { }
@@ -4837,6 +4845,7 @@ function quoteCardHtml(q) {
         ${(q.shipped || q.siteDone || q.basinDone) ? '' : (q.manualDone ? (isAdmin() ? `<button class="btn btn-sm" style="color:var(--t3)" onclick="quoteUnmarkDone('${q.id}')" title="완료 취소"><i class="ti ti-arrow-back-up"></i>완료 취소</button>` : '') : (q.ordered ? `<button class="btn btn-sm btn-pri" onclick="quoteRegister('${q.id}')"><i class="ti ${_regIcon}"></i>${_regLabel}</button><button class="btn btn-sm" onclick="quoteLinkSite('${q.id}')" title="이미 등록된 현장에 연결"><i class="ti ti-link"></i>현장 연결</button>${isAdmin() ? `<button class="btn btn-sm" style="color:#0f766e;border-color:#0f766e" onclick="quoteMarkDone('${q.id}')" title="바로 완료 처리 (관리자)"><i class="ti ti-checks"></i>완료 처리</button>` : ''}<button class="btn btn-sm" style="color:var(--t3)" onclick="quoteCancelOrder('${q.id}')" title="확정 주문 취소"><i class="ti ti-arrow-back-up"></i>확정취소</button>` : `<button class="btn btn-sm btn-pri" onclick="quoteConfirmOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>`))}
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}')"><i class="ti ti-edit"></i>수정</button>
         <button class="btn btn-sm" onclick="printQuote('${q.id}')"><i class="ti ti-printer"></i>인쇄</button>
+        <button class="btn btn-sm" onclick="quoteToHold('${q.id}')" title="이 견적 자재를 홀딩(예약)"><i class="ti ti-lock"></i>홀딩</button>
         <span style="display:inline-flex;gap:2px;padding-left:6px;margin-left:2px;border-left:1px solid var(--bd)">
           <button class="btn btn-sm btn-ghost" title="엑셀 저장" onclick="downloadQuoteXls('${q.id}')"><i class="ti ti-file-spreadsheet"></i></button>
           <button class="btn btn-sm btn-ghost" title="PNG 저장" onclick="downloadQuotePng('${q.id}')"><i class="ti ti-photo"></i></button>
