@@ -4469,30 +4469,50 @@ th{background:#f1efe8;font-weight:700}td.c{text-align:center}td.l{text-align:lef
   w.document.write(html); w.document.close(); w.focus();
 }
 let _cutSheet = { L: 3200, W: 1600 };
-function openCutSim() { if (isCustomerRole()) { toast('권한이 없습니다'); return; } filters.cutSim = true; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
+let _cutGroups = []; let _cutCid = 0;
+function openCutSim() { if (isCustomerRole()) { toast('권한이 없습니다'); return; } _cutGroups = []; _cutCid = 0; filters.cutSim = true; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
 function cutSimClose() { filters.cutSim = false; renderQuote(); }
 function cutRowHtml(p) {
-  p = p || {}; const inp = 'width:100%;font-size:14px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px;text-align:center';
-  return `<tr class="cut-row">
+  p = p || {}; const cid = p.cid != null ? p.cid : (++_cutCid); const inp = 'width:100%;font-size:14px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px;text-align:center';
+  return `<tr class="cut-row" data-cid="${cid}">
     <td><input class="ct-l" inputmode="numeric" placeholder="길이" value="${p.l != null ? esc(p.l) : ''}" style="${inp}"></td>
     <td style="text-align:center;color:var(--t3);width:16px">×</td>
     <td><input class="ct-w" inputmode="numeric" placeholder="폭" value="${p.w != null ? esc(p.w) : ''}" style="${inp}"></td>
     <td style="width:70px"><input class="ct-q" inputmode="numeric" placeholder="수량" value="${p.q != null ? esc(p.q) : '1'}" style="${inp}"></td>
-    <td><input class="ct-g" lang="ko" placeholder="무늬연결(같은 글자끼리)" value="${esc(p.g || '')}" style="width:100%;font-size:13px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px"></td>
+    <td style="width:44px;text-align:center"><input type="checkbox" class="ct-sel" style="width:17px;height:17px" title="무늬연결 선택"></td>
     <td style="width:44px;text-align:center"><input type="checkbox" class="ct-rot" ${p.rot === false ? '' : 'checked'} style="width:17px;height:17px" title="가로세로 회전 허용"></td>
     <td style="width:34px;text-align:center"><button type="button" class="btn btn-sm btn-ghost" onclick="this.closest('.cut-row').remove()"><i class="ti ti-x"></i></button></td>
   </tr>`;
+}
+function _rowDims(cid) { const r = document.querySelector('.cut-row[data-cid="' + cid + '"]'); if (!r) return null; return { l: _numv(r.querySelector('.ct-l').value), w: _numv(r.querySelector('.ct-w').value) }; }
+function cutMakeGroup() {
+  const sel = [...document.querySelectorAll('.cut-row')].filter(r => { const c = r.querySelector('.ct-sel'); return c && c.checked; });
+  if (sel.length < 2) { toast('연결할 부재를 2개 이상 체크하세요'); return; }
+  const items = sel.map(r => ({ cid: r.getAttribute('data-cid'), l: _numv(r.querySelector('.ct-l').value), w: _numv(r.querySelector('.ct-w').value) }));
+  if (items.some(x => !(x.l > 0 && x.w > 0))) { toast('치수가 없는 부재가 있습니다'); return; }
+  const sameW = items.every(x => Math.abs(x.w - items[0].w) < 0.01);
+  const sameL = items.every(x => Math.abs(x.l - items[0].l) < 0.01);
+  let dir; if (sameW) dir = 'W'; else if (sameL) dir = 'L'; else { toast('폭이 같거나 기장이 같은 부재끼리만 무늬연결됩니다'); return; }
+  _cutGroups.push({ cids: items.map(x => x.cid), dir });
+  sel.forEach(r => { const c = r.querySelector('.ct-sel'); if (c) c.checked = false; });
+  const gb = el('cut-groups'); if (gb) gb.innerHTML = cutGroupsInner();
+  toast(dir === 'W' ? '폭 방향 무늬연결 생성' : '기장 방향 무늬연결 생성');
+}
+function cutDelGroup(i) { _cutGroups.splice(i, 1); const gb = el('cut-groups'); if (gb) gb.innerHTML = cutGroupsInner(); }
+function cutGroupsInner() {
+  if (!_cutGroups.length) return '<span style="font-size:11.5px;color:var(--t3)">연결 없음 · 부재를 체크하고 [선택 연결]을 누르세요 (폭 같으면 폭방향 · 기장 같으면 기장방향)</span>';
+  return _cutGroups.map((g, i) => { const dims = g.cids.map(_rowDims).filter(Boolean).map(d => d.l + '×' + d.w).join(' + '); return `<span style="display:inline-flex;align-items:center;gap:6px;background:#eaf3ff;border:1px solid #b5d4f4;border-radius:8px;padding:4px 9px;margin:3px 3px 0 0;font-size:12px;color:#185fa5"><i class="ti ti-link"></i>${g.dir === 'W' ? '폭 연결' : '기장 연결'}: ${esc(dims)} <i class="ti ti-x" style="cursor:pointer;color:var(--red-t)" onclick="cutDelGroup(${i})"></i></span>`; }).join('');
 }
 function addCutRow() { const b = el('cut-parts'); if (b) { const grain = el('cut-grain') && el('cut-grain').checked; b.insertAdjacentHTML('beforeend', cutRowHtml({ rot: !grain })); } }
 function cutGrainToggle() { const on = el('cut-grain') && el('cut-grain').checked; document.querySelectorAll('.ct-rot').forEach(c => c.checked = !on); }
 function _collectCutParts() {
   const parts = [];
-  document.querySelectorAll('.cut-row').forEach(r => {
+  document.querySelectorAll('.cut-row').forEach((r, i) => {
     const l = _numv(r.querySelector('.ct-l').value), w = _numv(r.querySelector('.ct-w').value);
     const q = Math.max(1, Math.round(_numv(r.querySelector('.ct-q').value) || 0) || 1);
-    const g = (r.querySelector('.ct-g').value || '').trim();
     const rot = r.querySelector('.ct-rot') ? r.querySelector('.ct-rot').checked : true;
-    if (l > 0 && w > 0) parts.push({ l, w, q, g, rot });
+    const cid = r.getAttribute('data-cid');
+    if (l > 0 && w > 0) parts.push({ cid, l, w, q, rot, idx: i + 1 });
   });
   return parts;
 }
@@ -4520,7 +4540,7 @@ function _packOrder(order, Ws, Hs, kerf) {
     for (const f of sh.free) { for (const o of orients) { const ol = o[0], ow = o[1]; if (ol <= f.w + 0.01 && ow <= f.h + 0.01) { const score = Math.min(f.w - ol, f.h - ow); if (!best || score < best.score) best = { f, ol, ow, score }; } } }
     if (!best) return false;
     const R = { x: best.f.x, y: best.f.y, w: best.ol, h: best.ow };
-    sh.placed.push({ x: R.x, y: R.y, l: best.ol, w: best.ow, idx: pc.idx });
+    sh.placed.push({ x: R.x, y: R.y, l: best.ol, w: best.ow, idx: pc.idx, subs: pc.subs });
     const nf = [];
     for (const f of sh.free) {
       if (R.x < f.x + f.w - 0.01 && R.x + R.w > f.x + 0.01 && R.y < f.y + f.h - 0.01 && R.y + R.h > f.y + 0.01) {
@@ -4537,15 +4557,11 @@ function _packOrder(order, Ws, Hs, kerf) {
   for (const pc of order) {
     let ok = false;
     for (const sh of sheets) { if (place(sh, pc)) { ok = true; break; } }
-    if (!ok) { const sh = { placed: [], free: [{ x: 0, y: 0, w: Ws, h: Hs }] }; sheets.push(sh); if (!place(sh, pc)) sh.placed.push({ x: 0, y: 0, l: Math.min(pc.l, Ws), w: Math.min(pc.w, Hs), idx: pc.idx, over: true }); }
+    if (!ok) { const sh = { placed: [], free: [{ x: 0, y: 0, w: Ws, h: Hs }] }; sheets.push(sh); if (!place(sh, pc)) sh.placed.push({ x: 0, y: 0, l: Math.min(pc.l, Ws), w: Math.min(pc.w, Hs), idx: pc.idx, subs: pc.subs, over: true }); }
   }
   return sheets;
 }
-function packCut(Ws, Hs, parts, kerf) {
-  const pieces = [];
-  parts.forEach((p, i) => { for (let k = 0; k < p.q; k++) pieces.push({ l: p.l, w: p.w, idx: i + 1, g: p.g || '', rot: p.rot !== false }); });
-  const grouped = pieces.filter(p => p.g).sort((a, b) => a.g < b.g ? -1 : (a.g > b.g ? 1 : 0));
-  const ung = pieces.filter(p => !p.g);
+function _packPieces(Ws, Hs, pieces, kerf) {
   const strategies = [
     a => a.slice().sort((x, y) => (y.l * y.w) - (x.l * x.w)),
     a => a.slice().sort((x, y) => Math.max(y.l, y.w) - Math.max(x.l, x.w)),
@@ -4555,7 +4571,7 @@ function packCut(Ws, Hs, parts, kerf) {
   ];
   let best = null;
   for (const st of strategies) {
-    const order = grouped.concat(st(ung));
+    const order = st(pieces.slice());
     const sheets = _packOrder(order, Ws, Hs, kerf);
     let freeArea = 0; sheets.forEach(sh => sh.free.forEach(f => freeArea += f.w * f.h));
     if (!best || sheets.length < best.n || (sheets.length === best.n && freeArea < best.fa)) best = { n: sheets.length, fa: freeArea, sheets };
@@ -4567,7 +4583,12 @@ function cutSheetSvg(sh, Ws, Hs, n) {
   const colors = ['#FCE9B8', '#D8ECB0', '#F7C9A8', '#C9DAF0', '#E8CDEA', '#CDEAE0', '#F5D0D0', '#D0E8F0'];
   const rects = sh.placed.map(pc => {
     const x = pc.x * sc, y = pc.y * sc, w = pc.l * sc, h = pc.w * sc;
-    const c = pc.over ? '#f2b0b0' : colors[(pc.idx - 1) % colors.length];
+    if (pc.subs && pc.subs.length) {
+      const inner = pc.subs.map(sp => { const sx = (pc.x + sp.x) * sc, sy = (pc.y + sp.y) * sc, sw = sp.l * sc, sh2 = sp.w * sc; const cc = colors[((sp.idx || 1) - 1) % colors.length];
+        return `<rect x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${sw.toFixed(1)}" height="${sh2.toFixed(1)}" fill="${cc}" stroke="#555" stroke-width="0.7"/>` + (sw > 40 && sh2 > 16 ? `<text x="${(sx + sw / 2).toFixed(1)}" y="${(sy + sh2 / 2 + 3).toFixed(1)}" text-anchor="middle" font-size="10" fill="#333">${sp.l}×${sp.w}${sp.idx ? ' #' + sp.idx : ''}</text>` : ''); }).join('');
+      return `<g>${inner}<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="none" stroke="#185fa5" stroke-width="1.8" stroke-dasharray="5 3"/></g>`;
+    }
+    const c = pc.over ? '#f2b0b0' : colors[((pc.idx || 1) - 1) % colors.length];
     return `<g><rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="${c}" stroke="#555" stroke-width="0.7"/>` +
       (w > 40 && h > 16 ? `<text x="${(x + w / 2).toFixed(1)}" y="${(y + h / 2 + 3).toFixed(1)}" text-anchor="middle" font-size="10" fill="#333">${pc.l}×${pc.w}${pc.idx ? ' #' + pc.idx : ''}</text>` : '') + `</g>`;
   }).join('');
@@ -4579,7 +4600,19 @@ function runCutSim() {
   const kerf = _numv(el('cut-kerf') && el('cut-kerf').value) || 0;
   const parts = _collectCutParts();
   if (!parts.length) { toast('부재 치수를 입력하세요'); return; }
-  const sheets = packCut(Ws, Hs, parts, kerf);
+  const rem = {}; const dimOf = {}; parts.forEach(p => { rem[p.cid] = p.q; dimOf[p.cid] = p; });
+  const pieces = [];
+  _cutGroups.forEach(g => {
+    const mem = g.cids.map(c => dimOf[c]).filter(Boolean);
+    if (mem.length < 2 || mem.some(m => rem[m.cid] < 1)) return;
+    mem.forEach(m => rem[m.cid] -= 1);
+    let L, W; const subs = [];
+    if (g.dir === 'W') { const w = mem[0].w; let x = 0; mem.forEach((m, i) => { if (i > 0) x += kerf; subs.push({ x: x, y: 0, l: m.l, w: w, idx: m.idx }); x += m.l; }); L = x; W = w; }
+    else { const l = mem[0].l; let yy = 0; mem.forEach((m, i) => { if (i > 0) yy += kerf; subs.push({ x: 0, y: yy, l: l, w: m.w, idx: m.idx }); yy += m.w; }); L = l; W = yy; }
+    pieces.push({ l: L, w: W, idx: 0, rot: false, subs });
+  });
+  parts.forEach(p => { for (let k = 0; k < rem[p.cid]; k++) pieces.push({ l: p.l, w: p.w, idx: p.idx, rot: p.rot }); });
+  const sheets = _packPieces(Ws, Hs, pieces, kerf);
   let partArea = 0, cutLen = 0, over = false;
   parts.forEach(p => { partArea += p.l * p.w * p.q; cutLen += 2 * (p.l + p.w) * p.q; const big = Math.max(p.l, p.w), small = Math.min(p.l, p.w); if (big > Math.max(Ws, Hs) + 0.001 || small > Math.min(Ws, Hs) + 0.001) over = true; });
   const sheetArea = sheets.length * Ws * Hs;
@@ -4612,7 +4645,9 @@ function renderCutSim() {
     </div>
     <div class="card" style="padding:13px 15px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-weight:700;font-size:13.5px">부재 목록 (길이 × 폭 × 수량)</div><button class="btn btn-sm" onclick="addCutRow()"><i class="ti ti-plus"></i>행 추가</button></div>
-      <table style="width:100%;border-collapse:collapse"><thead><tr style="font-size:11px;color:var(--t3)"><th style="padding:2px 4px;text-align:center">길이</th><th></th><th style="padding:2px 4px;text-align:center">폭</th><th style="padding:2px 4px;text-align:center">수량</th><th style="padding:2px 4px;text-align:center">무늬연결</th><th style="padding:2px 4px;text-align:center" title="가로세로 회전 허용">회전</th><th></th></tr></thead><tbody id="cut-parts">${rows}</tbody></table>
+      <table style="width:100%;border-collapse:collapse"><thead><tr style="font-size:11px;color:var(--t3)"><th style="padding:2px 4px;text-align:center">길이</th><th></th><th style="padding:2px 4px;text-align:center">폭</th><th style="padding:2px 4px;text-align:center">수량</th><th style="padding:2px 4px;text-align:center" title="무늬연결 선택">연결</th><th style="padding:2px 4px;text-align:center" title="가로세로 회전 허용">회전</th><th></th></tr></thead><tbody id="cut-parts">${rows}</tbody></table>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn btn-sm" onclick="cutMakeGroup()"><i class="ti ti-link"></i>선택 연결 (무늬)</button><span style="font-size:11px;color:var(--t3)">체크한 부재를 연결 · 폭 같으면 폭방향, 기장 같으면 기장방향 자동</span></div>
+      <div id="cut-groups" style="margin-top:6px">${cutGroupsInner()}</div>
       <button class="btn btn-pri btn-block" style="margin-top:11px" onclick="runCutSim()"><i class="ti ti-player-play"></i>재단 시뮬레이션 실행</button>
     </div>
     <div id="cut-result"></div>
