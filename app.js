@@ -6675,7 +6675,7 @@ async function submitShip() {
     // 출고 대기열(출고관리)에 등록 — 재고는 위에서 이미 차감됨(stockApplied). 소리 알림은 '출고 지시' 낼 때만.
     try {
       const qItems = rows.map(r => ({ name: r.name, qty: r.qty, spec: r.lot || '', unit: '장' }));
-      await Store.add('chulgoReqs', { docNo: chulgoNextDocNo('출고'), reqType: '출고', client: targetName, items: qItems, status: '대기열', stockApplied: true, sourceShipId: shipId, dispatchDest: dest, memo: note || '', sender: (me && me.name) || '', createdAt: Date.now() });
+      await Store.add('chulgoReqs', { docNo: chulgoNextDocNo('출고'), reqType: '출고', client: targetName, items: qItems, status: '대기열', stockApplied: true, sourceShipId: shipId, dispatchDest: dest, schedDate: date, memo: note || '', sender: (me && me.name) || '', createdAt: Date.now() });
     } catch (e) { }
     if (_shipFromQuote) { try { await Store.update('quotes', _shipFromQuote, { shipped: true, shippedAt: Date.now() }); } catch (e) { } _shipFromQuote = ''; }
     closeModal();
@@ -7419,7 +7419,7 @@ table{border-collapse:collapse;width:100%}
   ${banner ? `<div class="banner">${e(banner)}</div>` : ''}
   <table class="info">
     <tr><td class="k">문서번호</td><td>${e(g.docNos.join(', '))}</td><td class="k">발행일자</td><td>${kdate(todayStr())}</td></tr>
-    <tr><td class="k">출고예정일</td><td><b>${kdate(todayStr())}</b></td><td class="k">긴급도</td><td class="${urg !== '보통' ? 'urg' : ''}">${e(urg)}</td></tr>
+    <tr><td class="k">출고예정일</td><td><b>${kdate((g.reqs.find(r => r.schedDate) || {}).schedDate || todayStr())}</b></td><td class="k">긴급도</td><td class="${urg !== '보통' ? 'urg' : ''}">${e(urg)}</td></tr>
     <tr><td class="k">요청자</td><td colspan="3">${e(g.dispatchedBy) || '-'}</td></tr>
   </table>
   <table class="items" style="margin-top:12px"><colgroup><col style="width:7%"><col style="width:30%"><col style="width:20%"><col style="width:9%"><col style="width:9%"><col style="width:25%"></colgroup>
