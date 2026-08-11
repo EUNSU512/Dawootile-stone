@@ -4116,7 +4116,7 @@ async function submitQuote(id) {
     for (const it of items) { if (it.extra) continue; try { await quoteLearnPrice(ctype, it.name, +it.price || 0); } catch (e) { } }   // 유형별 단가표 학습(부대비용 제외)
     try {   // 부대비용 기본단가 기억
       const cur = extraPrices(); const np = Object.assign({}, cur); let ch = false;
-      document.querySelectorAll('.qx-row').forEach(r => { const nm = r.getAttribute('data-name'); const pr = _numv(r.querySelector('.qx-price').value); if (pr > 0 && cur[nm] !== pr) { np[nm] = pr; ch = true; } });
+      document.querySelectorAll('.qx-row').forEach(r => { const nm = r.getAttribute('data-name'); if (marginCat(nm) === '가공') return; const pr = _numv(r.querySelector('.qx-price').value); if (pr > 0 && cur[nm] !== pr) { np[nm] = pr; ch = true; } });   // 가공비는 기본단가에서 변동 없이 · 기억 안 함
       if (ch) await saveExtraPrices(np);
     } catch (e) { }
     filters.quoteEdit = ''; filters.quoteCopy = false; toast(id ? '견적 저장됨' : '견적 저장 · 유형별 단가 반영됨'); renderQuote();
