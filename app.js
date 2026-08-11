@@ -743,7 +743,7 @@ function go(t) {
   if (isRestrictedRole()) t = 'stock';   // 고객·시공팀은 전용 화면만
   else if (!tabAllowed(t)) t = 'home';   // 접근 권한 없는 메뉴 차단
   filters.costEdit = '';   // 원가 입력 폼은 메뉴 이동 시 항상 닫기
-  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; }   // 견적 화면 상태 초기화
+  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; filters.cutSim = false; }   // 견적 화면 상태 초기화
   if (t !== 'clients') filters.clientDetail = '';
   tab = t;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -4468,6 +4468,152 @@ th{background:#f1efe8;font-weight:700}td.c{text-align:center}td.l{text-align:lef
   const w = window.open('', '_blank'); if (!w) { toast('팝업이 차단되었습니다. 팝업 허용 후 다시'); return; }
   w.document.write(html); w.document.close(); w.focus();
 }
+let _cutSheet = { L: 3200, W: 1600 };
+function openCutSim() { if (isCustomerRole()) { toast('권한이 없습니다'); return; } filters.cutSim = true; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
+function cutSimClose() { filters.cutSim = false; renderQuote(); }
+function cutRowHtml(p) {
+  p = p || {}; const inp = 'width:100%;font-size:14px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px;text-align:center';
+  return `<tr class="cut-row">
+    <td><input class="ct-l" inputmode="numeric" placeholder="길이" value="${p.l != null ? esc(p.l) : ''}" style="${inp}"></td>
+    <td style="text-align:center;color:var(--t3);width:16px">×</td>
+    <td><input class="ct-w" inputmode="numeric" placeholder="폭" value="${p.w != null ? esc(p.w) : ''}" style="${inp}"></td>
+    <td style="width:70px"><input class="ct-q" inputmode="numeric" placeholder="수량" value="${p.q != null ? esc(p.q) : '1'}" style="${inp}"></td>
+    <td><input class="ct-g" lang="ko" placeholder="무늬연결(같은 글자끼리)" value="${esc(p.g || '')}" style="width:100%;font-size:13px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px"></td>
+    <td style="width:34px;text-align:center"><button type="button" class="btn btn-sm btn-ghost" onclick="this.closest('.cut-row').remove()"><i class="ti ti-x"></i></button></td>
+  </tr>`;
+}
+function addCutRow() { const b = el('cut-parts'); if (b) b.insertAdjacentHTML('beforeend', cutRowHtml({})); }
+function _collectCutParts() {
+  const parts = [];
+  document.querySelectorAll('.cut-row').forEach(r => {
+    const l = _numv(r.querySelector('.ct-l').value), w = _numv(r.querySelector('.ct-w').value);
+    const q = Math.max(1, Math.round(_numv(r.querySelector('.ct-q').value) || 0) || 1);
+    const g = (r.querySelector('.ct-g').value || '').trim();
+    if (l > 0 && w > 0) parts.push({ l, w, q, g });
+  });
+  return parts;
+}
+function _cutTry(sh, pc, Ws, Hs, kerf) {
+  const orients = pc.l === pc.w ? [[pc.l, pc.w]] : [[pc.l, pc.w], [pc.w, pc.l]];
+  for (const shelf of sh.shelves) {
+    for (const [ol, ow] of orients) {
+      if (ow <= shelf.h + 0.001 && shelf.x + ol <= Ws + 0.001) { sh.placed.push({ x: shelf.x, y: shelf.y, l: ol, w: ow, idx: pc.idx }); shelf.x += ol + kerf; return true; }
+    }
+  }
+  for (const [ol, ow] of orients) {
+    const last = sh.shelves[sh.shelves.length - 1];
+    const newY = last ? (last.y + last.h + kerf) : 0;
+    if (newY + ow <= Hs + 0.001 && ol <= Ws + 0.001) { sh.shelves.push({ y: newY, h: ow, x: ol + kerf }); sh.placed.push({ x: 0, y: newY, l: ol, w: ow, idx: pc.idx }); return true; }
+  }
+  return false;
+}
+function _packOrder(order, Ws, Hs, kerf) {
+  const sheets = [];
+  const contains = (A, B) => B.x >= A.x - 0.01 && B.y >= A.y - 0.01 && B.x + B.w <= A.x + A.w + 0.01 && B.y + B.h <= A.y + A.h + 0.01;
+  function prune(free) { for (let i = 0; i < free.length; i++) { for (let j = 0; j < free.length; j++) { if (i !== j && contains(free[j], free[i])) { free.splice(i, 1); i--; break; } } } }
+  function place(sh, pc) {
+    const orients = pc.l === pc.w ? [[pc.l, pc.w]] : [[pc.l, pc.w], [pc.w, pc.l]];
+    let best = null;
+    for (const f of sh.free) { for (const o of orients) { const ol = o[0], ow = o[1]; if (ol <= f.w + 0.01 && ow <= f.h + 0.01) { const score = Math.min(f.w - ol, f.h - ow); if (!best || score < best.score) best = { f, ol, ow, score }; } } }
+    if (!best) return false;
+    const R = { x: best.f.x, y: best.f.y, w: best.ol, h: best.ow };
+    sh.placed.push({ x: R.x, y: R.y, l: best.ol, w: best.ow, idx: pc.idx });
+    const nf = [];
+    for (const f of sh.free) {
+      if (R.x < f.x + f.w - 0.01 && R.x + R.w > f.x + 0.01 && R.y < f.y + f.h - 0.01 && R.y + R.h > f.y + 0.01) {
+        if (R.x > f.x + 0.01) nf.push({ x: f.x, y: f.y, w: R.x - f.x, h: f.h });
+        if (R.x + R.w < f.x + f.w - 0.01) nf.push({ x: R.x + R.w + kerf, y: f.y, w: f.x + f.w - (R.x + R.w) - kerf, h: f.h });
+        if (R.y > f.y + 0.01) nf.push({ x: f.x, y: f.y, w: f.w, h: R.y - f.y });
+        if (R.y + R.h < f.y + f.h - 0.01) nf.push({ x: f.x, y: R.y + R.h + kerf, w: f.w, h: f.y + f.h - (R.y + R.h) - kerf });
+      } else nf.push(f);
+    }
+    sh.free = nf.filter(f => f.w > 0.01 && f.h > 0.01);
+    prune(sh.free);
+    return true;
+  }
+  for (const pc of order) {
+    let ok = false;
+    for (const sh of sheets) { if (place(sh, pc)) { ok = true; break; } }
+    if (!ok) { const sh = { placed: [], free: [{ x: 0, y: 0, w: Ws, h: Hs }] }; sheets.push(sh); if (!place(sh, pc)) sh.placed.push({ x: 0, y: 0, l: Math.min(pc.l, Ws), w: Math.min(pc.w, Hs), idx: pc.idx, over: true }); }
+  }
+  return sheets;
+}
+function packCut(Ws, Hs, parts, kerf) {
+  const pieces = [];
+  parts.forEach((p, i) => { for (let k = 0; k < p.q; k++) pieces.push({ l: p.l, w: p.w, idx: i + 1, g: p.g || '' }); });
+  const grouped = pieces.filter(p => p.g).sort((a, b) => a.g < b.g ? -1 : (a.g > b.g ? 1 : 0));
+  const ung = pieces.filter(p => !p.g);
+  const strategies = [
+    a => a.slice().sort((x, y) => (y.l * y.w) - (x.l * x.w)),
+    a => a.slice().sort((x, y) => Math.max(y.l, y.w) - Math.max(x.l, x.w)),
+    a => a.slice().sort((x, y) => y.w - x.w || y.l - x.l),
+    a => a.slice().sort((x, y) => y.l - x.l || y.w - x.w),
+    a => a.slice().sort((x, y) => (Math.max(y.l, y.w) - Math.max(x.l, x.w)) || (Math.min(y.l, y.w) - Math.min(x.l, x.w)))
+  ];
+  let best = null;
+  for (const st of strategies) {
+    const order = grouped.concat(st(ung));
+    const sheets = _packOrder(order, Ws, Hs, kerf);
+    let freeArea = 0; sheets.forEach(sh => sh.free.forEach(f => freeArea += f.w * f.h));
+    if (!best || sheets.length < best.n || (sheets.length === best.n && freeArea < best.fa)) best = { n: sheets.length, fa: freeArea, sheets };
+  }
+  return best.sheets;
+}
+function cutSheetSvg(sh, Ws, Hs, n) {
+  const maxW = 620; const sc = maxW / Ws; const W = Ws * sc, H = Hs * sc;
+  const colors = ['#FCE9B8', '#D8ECB0', '#F7C9A8', '#C9DAF0', '#E8CDEA', '#CDEAE0', '#F5D0D0', '#D0E8F0'];
+  const rects = sh.placed.map(pc => {
+    const x = pc.x * sc, y = pc.y * sc, w = pc.l * sc, h = pc.w * sc;
+    const c = pc.over ? '#f2b0b0' : colors[(pc.idx - 1) % colors.length];
+    return `<g><rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="${c}" stroke="#555" stroke-width="0.7"/>` +
+      (w > 40 && h > 16 ? `<text x="${(x + w / 2).toFixed(1)}" y="${(y + h / 2 + 3).toFixed(1)}" text-anchor="middle" font-size="10" fill="#333">${pc.l}×${pc.w}${pc.idx ? ' #' + pc.idx : ''}</text>` : '') + `</g>`;
+  }).join('');
+  return `<div style="margin-bottom:10px"><div style="font-size:12px;color:var(--t3);margin-bottom:3px">판재 ${n} · ${Ws}×${Hs}</div><svg viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" style="width:100%;max-width:${W.toFixed(0)}px;border:1px solid #999;background:#fff">${rects}<rect x="0.5" y="0.5" width="${(W - 1).toFixed(1)}" height="${(H - 1).toFixed(1)}" fill="none" stroke="#333" stroke-width="1"/></svg></div>`;
+}
+function runCutSim() {
+  const Ws = _numv(el('cut-sheetL').value) || 3200, Hs = _numv(el('cut-sheetW').value) || 1600;
+  _cutSheet = { L: Ws, W: Hs };
+  const kerf = _numv(el('cut-kerf') && el('cut-kerf').value) || 0;
+  const parts = _collectCutParts();
+  if (!parts.length) { toast('부재 치수를 입력하세요'); return; }
+  const sheets = packCut(Ws, Hs, parts, kerf);
+  let partArea = 0, cutLen = 0, over = false;
+  parts.forEach(p => { partArea += p.l * p.w * p.q; cutLen += 2 * (p.l + p.w) * p.q; const big = Math.max(p.l, p.w), small = Math.min(p.l, p.w); if (big > Math.max(Ws, Hs) + 0.001 || small > Math.min(Ws, Hs) + 0.001) over = true; });
+  const sheetArea = sheets.length * Ws * Hs;
+  const m2 = v => (v / 1e6).toFixed(3);
+  const sc = (lab, val, sub) => `<div style="background:var(--soft);border-radius:10px;padding:9px 8px;text-align:center"><div style="font-size:10.5px;color:var(--t2)">${lab}</div><div style="font-size:16px;font-weight:800;color:var(--gd)">${val}</div>${sub ? `<div style="font-size:10px;color:var(--t3)">${sub}</div>` : ''}</div>`;
+  el('cut-result').innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:12px">
+      ${sc('부재 총 면적', m2(partArea) + ' ㎡')}
+      ${sc('재단 미터수', (cutLen / 1000).toFixed(2) + ' m', '4면 기장 합')}
+      ${sc('사용 판재', sheets.length + ' 장', Ws + '×' + Hs)}
+      ${sc('자투리(로스)', m2(Math.max(0, sheetArea - partArea)) + ' ㎡')}
+    </div>${over ? '<div style="color:#c0341d;font-size:12px;margin-bottom:8px"><i class="ti ti-alert-triangle"></i> 판재보다 큰 부재가 있습니다 — 치수를 확인하세요</div>' : ''}
+    ${sheets.map((sh, i) => cutSheetSvg(sh, Ws, Hs, i + 1)).join('')}`;
+}
+function renderCutSim() {
+  const inp = 'width:110px;font-size:15px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px;text-align:center';
+  const rows = cutRowHtml({}) + cutRowHtml({}) + cutRowHtml({});
+  el('pg-quote').innerHTML = `
+    <div id="cutsim-root">
+    <div class="ph"><div><h2><i class="ti ti-layout-grid"></i>재단 시뮬레이션</h2><p>판재·부재 치수 입력 → 재단 배치 · 면적 · 재단 미터수 자동 계산 (직원용)</p></div>
+      <button class="btn btn-sm" onclick="cutSimClose()"><i class="ti ti-arrow-left"></i>견적</button></div>
+    <div class="card" style="padding:13px 15px;margin-bottom:12px">
+      <div style="font-weight:700;font-size:13.5px;margin-bottom:9px">판재 규격</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <input id="cut-sheetL" inputmode="numeric" value="${_cutSheet.L}" style="${inp}"> <span style="color:var(--t3)">×</span>
+        <input id="cut-sheetW" inputmode="numeric" value="${_cutSheet.W}" style="${inp}"> <span style="color:var(--t3);font-size:13px">mm</span>
+        <span style="margin-left:12px;font-size:12px;color:var(--t3)">톱날두께</span> <input id="cut-kerf" inputmode="numeric" value="0" style="width:70px;font-size:14px;padding:8px;border:1.5px solid var(--bd2);border-radius:9px;text-align:center"> <span style="font-size:12px;color:var(--t3)">mm</span>
+      </div>
+    </div>
+    <div class="card" style="padding:13px 15px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-weight:700;font-size:13.5px">부재 목록 (길이 × 폭 × 수량)</div><button class="btn btn-sm" onclick="addCutRow()"><i class="ti ti-plus"></i>행 추가</button></div>
+      <table style="width:100%;border-collapse:collapse"><thead><tr style="font-size:11px;color:var(--t3)"><th style="padding:2px 4px;text-align:center">길이</th><th></th><th style="padding:2px 4px;text-align:center">폭</th><th style="padding:2px 4px;text-align:center">수량</th><th style="padding:2px 4px;text-align:center">무늬연결</th><th></th></tr></thead><tbody id="cut-parts">${rows}</tbody></table>
+      <button class="btn btn-pri btn-block" style="margin-top:11px" onclick="runCutSim()"><i class="ti ti-player-play"></i>재단 시뮬레이션 실행</button>
+    </div>
+    <div id="cut-result"></div>
+    </div>`;
+}
 function openQuoteSettings() { filters.quoteSettings = true; renderQuote(); }
 function quoteSettingsClose() { filters.quoteSettings = false; renderQuote(); }
 async function saveQuoteMemo() {
@@ -5216,6 +5362,7 @@ function renderSettle() {
 function renderQuote() {
   keepScrolls();
   if (filters.quoteSettings) { if (!document.getElementById('qset-root')) renderQuoteSettings(); return; }   // 설정 화면
+  if (filters.cutSim) { if (!document.getElementById('cutsim-root')) renderCutSim(); return; }   // 재단 시뮬레이션
   if (filters.quoteEdit) { if (!document.getElementById('qform-root')) renderQuoteForm(); return; }   // 편집 중엔 실시간 재렌더로 폼을 덮어쓰지 않음
   if (filters.taxEdit) { if (!document.getElementById('taxform-root')) renderTaxForm(); return; }   // 세금계산서 발행 화면
   if (filters.costEdit) { if (!document.getElementById('cost-root')) renderCostForm(); return; }   // 원가 정리(관리자)
@@ -5243,7 +5390,7 @@ function renderQuote() {
     <button class="btn btn-sm ${filters.quoteBundle ? 'btn-pri' : ''}" style="margin-left:auto" onclick="quoteToggleBundle()"><i class="ti ti-stack-2"></i> 묶음청구</button></div>`;
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
-      <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
+      <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="openCutSim()"><i class="ti ti-layout-grid"></i>재단도</button><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
       <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(unpaid)}</div><div class="l">미수금(미결제)</div></div>
       <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행</div></div>
