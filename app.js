@@ -4479,17 +4479,20 @@ function cutRowHtml(p) {
     <td><input class="ct-w" inputmode="numeric" placeholder="폭" value="${p.w != null ? esc(p.w) : ''}" style="${inp}"></td>
     <td style="width:70px"><input class="ct-q" inputmode="numeric" placeholder="수량" value="${p.q != null ? esc(p.q) : '1'}" style="${inp}"></td>
     <td><input class="ct-g" lang="ko" placeholder="무늬연결(같은 글자끼리)" value="${esc(p.g || '')}" style="width:100%;font-size:13px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px"></td>
+    <td style="width:44px;text-align:center"><input type="checkbox" class="ct-rot" ${p.rot === false ? '' : 'checked'} style="width:17px;height:17px" title="가로세로 회전 허용"></td>
     <td style="width:34px;text-align:center"><button type="button" class="btn btn-sm btn-ghost" onclick="this.closest('.cut-row').remove()"><i class="ti ti-x"></i></button></td>
   </tr>`;
 }
-function addCutRow() { const b = el('cut-parts'); if (b) b.insertAdjacentHTML('beforeend', cutRowHtml({})); }
+function addCutRow() { const b = el('cut-parts'); if (b) { const grain = el('cut-grain') && el('cut-grain').checked; b.insertAdjacentHTML('beforeend', cutRowHtml({ rot: !grain })); } }
+function cutGrainToggle() { const on = el('cut-grain') && el('cut-grain').checked; document.querySelectorAll('.ct-rot').forEach(c => c.checked = !on); }
 function _collectCutParts() {
   const parts = [];
   document.querySelectorAll('.cut-row').forEach(r => {
     const l = _numv(r.querySelector('.ct-l').value), w = _numv(r.querySelector('.ct-w').value);
     const q = Math.max(1, Math.round(_numv(r.querySelector('.ct-q').value) || 0) || 1);
     const g = (r.querySelector('.ct-g').value || '').trim();
-    if (l > 0 && w > 0) parts.push({ l, w, q, g });
+    const rot = r.querySelector('.ct-rot') ? r.querySelector('.ct-rot').checked : true;
+    if (l > 0 && w > 0) parts.push({ l, w, q, g, rot });
   });
   return parts;
 }
@@ -4512,7 +4515,7 @@ function _packOrder(order, Ws, Hs, kerf) {
   const contains = (A, B) => B.x >= A.x - 0.01 && B.y >= A.y - 0.01 && B.x + B.w <= A.x + A.w + 0.01 && B.y + B.h <= A.y + A.h + 0.01;
   function prune(free) { for (let i = 0; i < free.length; i++) { for (let j = 0; j < free.length; j++) { if (i !== j && contains(free[j], free[i])) { free.splice(i, 1); i--; break; } } } }
   function place(sh, pc) {
-    const orients = pc.l === pc.w ? [[pc.l, pc.w]] : [[pc.l, pc.w], [pc.w, pc.l]];
+    const orients = (pc.l === pc.w || pc.rot === false) ? [[pc.l, pc.w]] : [[pc.l, pc.w], [pc.w, pc.l]];
     let best = null;
     for (const f of sh.free) { for (const o of orients) { const ol = o[0], ow = o[1]; if (ol <= f.w + 0.01 && ow <= f.h + 0.01) { const score = Math.min(f.w - ol, f.h - ow); if (!best || score < best.score) best = { f, ol, ow, score }; } } }
     if (!best) return false;
@@ -4540,7 +4543,7 @@ function _packOrder(order, Ws, Hs, kerf) {
 }
 function packCut(Ws, Hs, parts, kerf) {
   const pieces = [];
-  parts.forEach((p, i) => { for (let k = 0; k < p.q; k++) pieces.push({ l: p.l, w: p.w, idx: i + 1, g: p.g || '' }); });
+  parts.forEach((p, i) => { for (let k = 0; k < p.q; k++) pieces.push({ l: p.l, w: p.w, idx: i + 1, g: p.g || '', rot: p.rot !== false }); });
   const grouped = pieces.filter(p => p.g).sort((a, b) => a.g < b.g ? -1 : (a.g > b.g ? 1 : 0));
   const ung = pieces.filter(p => !p.g);
   const strategies = [
@@ -4605,10 +4608,11 @@ function renderCutSim() {
         <input id="cut-sheetW" inputmode="numeric" value="${_cutSheet.W}" style="${inp}"> <span style="color:var(--t3);font-size:13px">mm</span>
         <span style="margin-left:12px;font-size:12px;color:var(--t3)">톱날두께</span> <input id="cut-kerf" inputmode="numeric" value="0" style="width:70px;font-size:14px;padding:8px;border:1.5px solid var(--bd2);border-radius:9px;text-align:center"> <span style="font-size:12px;color:var(--t3)">mm</span>
       </div>
+      <label style="display:inline-flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;background:var(--soft);border-radius:9px;padding:8px 11px;cursor:pointer"><input type="checkbox" id="cut-grain" onchange="cutGrainToggle()" style="width:17px;height:17px"> 결방향 자재 (무늬결 있음) <span style="color:var(--t3);font-size:11.5px">— 체크 시 회전 없이 결 방향 유지</span></label>
     </div>
     <div class="card" style="padding:13px 15px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-weight:700;font-size:13.5px">부재 목록 (길이 × 폭 × 수량)</div><button class="btn btn-sm" onclick="addCutRow()"><i class="ti ti-plus"></i>행 추가</button></div>
-      <table style="width:100%;border-collapse:collapse"><thead><tr style="font-size:11px;color:var(--t3)"><th style="padding:2px 4px;text-align:center">길이</th><th></th><th style="padding:2px 4px;text-align:center">폭</th><th style="padding:2px 4px;text-align:center">수량</th><th style="padding:2px 4px;text-align:center">무늬연결</th><th></th></tr></thead><tbody id="cut-parts">${rows}</tbody></table>
+      <table style="width:100%;border-collapse:collapse"><thead><tr style="font-size:11px;color:var(--t3)"><th style="padding:2px 4px;text-align:center">길이</th><th></th><th style="padding:2px 4px;text-align:center">폭</th><th style="padding:2px 4px;text-align:center">수량</th><th style="padding:2px 4px;text-align:center">무늬연결</th><th style="padding:2px 4px;text-align:center" title="가로세로 회전 허용">회전</th><th></th></tr></thead><tbody id="cut-parts">${rows}</tbody></table>
       <button class="btn btn-pri btn-block" style="margin-top:11px" onclick="runCutSim()"><i class="ti ti-player-play"></i>재단 시뮬레이션 실행</button>
     </div>
     <div id="cut-result"></div>
