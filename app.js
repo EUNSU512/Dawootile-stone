@@ -1484,16 +1484,22 @@ function lotStock(name) {
     for (const l of order) { if (floatOut <= 0) break; const take = Math.min(floatOut, Math.max(0, l.remain)); l.remain -= take; l.outQty += take; floatOut -= take; }
     if (floatOut > 0 && order.length) { const last = order[order.length - 1]; last.remain -= floatOut; last.outQty += floatOut; floatOut = 0; }
   }
-  // 실재고(jang) 수동 보정과 롯트 합계를 일치시킴 — 조정 트랜잭션 없이 실재고만 바꿔도 롯트별 잔여가 따라오게
+  // 실재고(jang) 수동 보정과 롯트 합계를 일치시킴 — 조정 트랜잭션 없이 실재고만 바꿔도 롯트별 잔여가 따라오게. 실롯트 기준으로 맞추고 (미지정) 임시버킷은 제거.
   const invIt = (state.inventory || []).find(i => _normName(i.name) === key);
   if (invIt) {
     const target = +invIt.jang || 0;
-    let cur = arr.reduce((a, x) => a + x.remain, 0);
-    let diff = target - cur;
-    if (Math.abs(diff) > 0.01 && arr.length) {
-      const ord = arr.slice().sort((a, b) => b.remain - a.remain);
-      for (const lt of ord) { if (Math.abs(diff) < 0.01) break; if (diff < 0) { const take = Math.min(-diff, Math.max(0, lt.remain)); lt.remain -= take; diff += take; } else { lt.remain += diff; diff = 0; } }
-      if (Math.abs(diff) > 0.01) ord[ord.length - 1].remain += diff;
+    let real = arr.filter(x => x.lot !== '(미지정)');
+    if (real.length) {
+      let cur = real.reduce((a, x) => a + x.remain, 0);
+      let diff = target - cur;
+      if (Math.abs(diff) > 0.01) {
+        const ord = real.slice().sort((a, b) => b.remain - a.remain);
+        for (const lt of ord) { if (Math.abs(diff) < 0.01) break; if (diff < 0) { const take = Math.min(-diff, Math.max(0, lt.remain)); lt.remain -= take; diff += take; } else { lt.remain += diff; diff = 0; } }
+        if (Math.abs(diff) > 0.01) ord[ord.length - 1].remain += diff;
+      }
+      arr = real;
+    } else {
+      arr = [{ lot: '(미지정)', inQty: 0, outQty: 0, adjQty: 0, remain: target }];
     }
   }
   return arr.map(x => ({ lot: x.lot, inQty: x.inQty, outQty: x.outQty, remain: x.remain }))
