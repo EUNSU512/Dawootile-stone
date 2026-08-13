@@ -5728,26 +5728,44 @@ function copyQuoteImage(id) {
       .catch(() => toast('복사 실패 — PNG로 저장해 주세요'));
   } catch (e) { toast('복사 실패 — PNG로 저장해 주세요'); }
 }
+function _ensureLib(g, src) {
+  return new Promise((res, rej) => { if (window[g]) return res(); const sc = document.createElement('script'); sc.src = src; sc.onload = () => res(); sc.onerror = () => rej(new Error('load ' + g)); document.head.appendChild(sc); });
+}
+function _xlsxImageBlob(zip, pngB64, wPx, hPx) {
+  const cx = Math.round(wPx * 9525), cy = Math.round(hPx * 9525);
+  const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
+  zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>');
+  zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>');
+  zip.file('xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook ' + NS + '><sheets><sheet name="견적서" sheetId="1" r:id="rId1"/></sheets></workbook>');
+  zip.file('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>');
+  zip.file('xl/worksheets/sheet1.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet ' + NS + '><sheetData/><drawing r:id="rId1"/></worksheet>');
+  zip.file('xl/worksheets/_rels/sheet1.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>');
+  zip.file('xl/drawings/drawing1.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="' + cx + '" cy="' + cy + '"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="1" name="견적서"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + cx + '" cy="' + cy + '"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>');
+  zip.file('xl/drawings/_rels/drawing1.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>');
+  zip.file('xl/media/image1.png', pngB64, { base64: true });
+}
 function downloadQuoteXls(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
-  const TH = (t, w) => `<th style="background:#0F6E56;color:#fff;font-weight:bold;border:0.5pt solid #0a4f3e;padding:6px 9px;text-align:center" ${w ? 'width="' + w + '"' : ''}>${t}</th>`;
-  const TD = (t, st) => `<td style="border:0.5pt solid #cfd8d4;padding:5px 9px;${st || ''}">${t}</td>`;
-  const R = 'text-align:right;mso-number-format:\\#\\,\\#\\#0';
-  const body = (q.items || []).map((it, i) => `<tr>${TD(i + 1, 'text-align:center')}${TD('<b>' + esc(it.name) + '</b>')}${TD(esc(it.spec || ''))}${TD(esc(it.qty) + (it.unit ? ' ' + esc(it.unit) : ''), 'text-align:right')}${TD(it.price, R)}${TD(it.amt, R)}</tr>`).join('');
-  let html = `<html xmlns:x="urn:schemas-microsoft-com:office:excel"><head><meta charset="utf-8"></head><body>`;
-  html += `<table><tr><td colspan="6" style="font-size:15pt;font-weight:bold;color:#0F6E56;padding:6px 4px">견적서 · ${esc(q.client)}</td></tr>`;
-  html += `<tr><td colspan="6" style="font-size:10pt;color:#555;padding:2px 4px">견적번호 ${esc(q.docNo)} · 견적일 ${esc(q.date)} · 유효기간 ${esc(q.valid || '-')}${q.by ? ' · 담당 ' + esc(q.by) : ''}</td></tr></table>`;
-  html += `<table style="border-collapse:collapse;margin-top:6px"><tr>${TH('No', 40)}${TH('품목', 200)}${TH('규격', 150)}${TH('수량', 60)}${TH('단가', 90)}${TH('금액', 100)}</tr>${body}`;
-  html += `<tr><td colspan="5" style="border:0.5pt solid #cfd8d4;text-align:right;font-weight:bold;padding:6px 9px">공급가액</td>${TD('<b>' + fmtWon(q.supply) + '</b>', R)}</tr>`;
-  html += `<tr><td colspan="5" style="border:0.5pt solid #cfd8d4;text-align:right;font-weight:bold;padding:6px 9px">부가세(10%)</td>${TD('<b>' + fmtWon(q.vat) + '</b>', R)}</tr>`;
-  if ((+q.discount || 0) > 0) html += `<tr><td colspan="5" style="border:0.5pt solid #cfd8d4;text-align:right;font-weight:bold;padding:6px 9px;color:#c0341d">할인(D/C)</td>${TD('<b>-' + fmtWon(q.discount) + '</b>', R)}</tr>`;
-  html += `<tr><td colspan="5" style="border:0.5pt solid #cfd8d4;background:#e1f5ee;text-align:right;font-weight:bold;padding:6px 9px">합계금액</td><td style="border:0.5pt solid #cfd8d4;background:#e1f5ee;text-align:right;font-weight:bold;padding:5px 9px">${fmtWon(q.total)}</td></tr></table>`;
-  if (q.memo) html += `<table style="margin-top:8px"><tr><td style="font-weight:bold">비고 : ${esc(q.memo)}</td></tr></table>`;
-  if (hasBasinItems(q.items)) html += `<table style="margin-top:8px;border-collapse:collapse"><tr><td style="background:#c0341d;color:#fff;font-weight:bold;padding:6px 9px">⚠ 세면대 주문제작 특이사항 (필독)</td></tr>` + BASIN_NOTICE.map(l => `<tr><td style="border:0.5pt solid #e0b4ad;color:#8a1c10;font-weight:bold;padding:5px 9px">· ${esc(l)}</td></tr>`).join('') + `</table>`;
-  html += `</body></html>`;
-  const blob = new Blob(['﻿', html], { type: 'application/vnd.ms-excel' });
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '견적서_' + (q.client || '') + '_' + (q.date || todayStr()) + '.xls'; document.body.appendChild(a); a.click(); a.remove();
-  toast('엑셀 다운로드');
+  toast('견적서 양식 엑셀 생성 중…');
+  (async () => {
+    try {
+      await _ensureLib('html2canvas', 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
+      await _ensureLib('JSZip', 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
+      const ifr = document.createElement('iframe'); ifr.setAttribute('aria-hidden', 'true'); ifr.style.cssText = 'position:fixed;left:-10000px;top:0;width:760px;height:1120px;border:0;background:#fff';
+      document.body.appendChild(ifr);
+      const dd = ifr.contentDocument; dd.open(); dd.write(quoteDocHtml(q)); dd.close();
+      await new Promise(r => setTimeout(r, 750));
+      const page = dd.getElementById('page');
+      const canvas = await html2canvas(page, { scale: 2, backgroundColor: '#ffffff', width: 718, height: 1047, windowWidth: 760 });
+      ifr.remove();
+      const b64 = canvas.toDataURL('image/png').split(',')[1];
+      const zip = new JSZip();
+      _xlsxImageBlob(zip, b64, 718, 1047);
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '견적서_' + ((q.client || '').replace(/\s/g, '')) + '_' + (q.docNo || todayStr()) + '.xlsx'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
+      toast('견적서 엑셀 저장됨 (양식 이미지)');
+    } catch (e) { toast('엑셀 생성 실패 — 인쇄/PNG로 저장해 주세요'); }
+  })();
 }
 /* 연도별 월별 출고 집계 (헤베·장수·두께별) */
 function shipMonthlyStats(yr) {
