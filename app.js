@@ -5731,40 +5731,106 @@ function copyQuoteImage(id) {
 function _ensureLib(g, src) {
   return new Promise((res, rej) => { if (window[g]) return res(); const sc = document.createElement('script'); sc.src = src; sc.onload = () => res(); sc.onerror = () => rej(new Error('load ' + g)); document.head.appendChild(sc); });
 }
-function _xlsxImageBlob(zip, pngB64, wPx, hPx) {
-  const cx = Math.round(wPx * 9525), cy = Math.round(hPx * 9525);
-  const NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"';
-  zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/drawings/drawing1.xml" ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/></Types>');
-  zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>');
-  zip.file('xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook ' + NS + '><sheets><sheet name="견적서" sheetId="1" r:id="rId1"/></sheets></workbook>');
-  zip.file('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>');
-  zip.file('xl/worksheets/sheet1.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet ' + NS + '><sheetData/><drawing r:id="rId1"/></worksheet>');
-  zip.file('xl/worksheets/_rels/sheet1.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" Target="../drawings/drawing1.xml"/></Relationships>');
-  zip.file('xl/drawings/drawing1.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><xdr:wsDr xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><xdr:oneCellAnchor><xdr:from><xdr:col>0</xdr:col><xdr:colOff>0</xdr:colOff><xdr:row>0</xdr:row><xdr:rowOff>0</xdr:rowOff></xdr:from><xdr:ext cx="' + cx + '" cy="' + cy + '"/><xdr:pic><xdr:nvPicPr><xdr:cNvPr id="1" name="견적서"/><xdr:cNvPicPr/></xdr:nvPicPr><xdr:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId1"/><a:stretch><a:fillRect/></a:stretch></xdr:blipFill><xdr:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + cx + '" cy="' + cy + '"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr></xdr:pic><xdr:clientData/></xdr:oneCellAnchor></xdr:wsDr>');
-  zip.file('xl/drawings/_rels/drawing1.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="../media/image1.png"/></Relationships>');
-  zip.file('xl/media/image1.png', pngB64, { base64: true });
+function _quoteStylesXml() {
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">' +
+    '<numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0"/></numFmts>' +
+    '<fonts count="6">' +
+    '<font><sz val="11"/><name val="맑은 고딕"/></font>' +
+    '<font><b/><sz val="11"/><name val="맑은 고딕"/></font>' +
+    '<font><b/><sz val="22"/><name val="맑은 고딕"/></font>' +
+    '<font><b/><sz val="15"/><color rgb="FF0F6E56"/><name val="맑은 고딕"/></font>' +
+    '<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="맑은 고딕"/></font>' +
+    '<font><b/><sz val="11"/><color rgb="FFC0341D"/><name val="맑은 고딕"/></font>' +
+    '</fonts>' +
+    '<fills count="7">' +
+    '<fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FF0F6E56"/></patternFill></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFE1F5EE"/></patternFill></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFF1EFE8"/></patternFill></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFC0341D"/></patternFill></fill>' +
+    '<fill><patternFill patternType="solid"><fgColor rgb="FFFFF8E1"/></patternFill></fill>' +
+    '</fills>' +
+    '<borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border>' +
+    '<border><left style="thin"><color rgb="FFBBBBBB"/></left><right style="thin"><color rgb="FFBBBBBB"/></right><top style="thin"><color rgb="FFBBBBBB"/></top><bottom style="thin"><color rgb="FFBBBBBB"/></bottom><diagonal/></border></borders>' +
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>' +
+    '<cellXfs count="17">' +
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>' +
+    '<xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="center"/></xf>' +
+    '<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>' +
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>' +
+    '<xf numFmtId="0" fontId="1" fillId="4" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>' +
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment horizontal="left" vertical="center" wrapText="1"/></xf>' +
+    '<xf numFmtId="0" fontId="4" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>' +
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>' +
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>' +
+    '<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>' +
+    '<xf numFmtId="0" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>' +
+    '<xf numFmtId="164" fontId="1" fillId="0" borderId="1" xfId="0" applyFont="1" applyBorder="1" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>' +
+    '<xf numFmtId="0" fontId="1" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>' +
+    '<xf numFmtId="164" fontId="1" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyNumberFormat="1" applyAlignment="1"><alignment horizontal="right" vertical="center"/></xf>' +
+    '<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center" wrapText="1"/></xf>' +
+    '<xf numFmtId="0" fontId="4" fillId="5" borderId="0" xfId="0" applyFont="1" applyFill="1" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>' +
+    '<xf numFmtId="0" fontId="5" fillId="6" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="left" vertical="center" wrapText="1"/></xf>' +
+    '</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>';
+}
+function _quoteSheetXml(q) {
+  const co = companyInfo(); const items = q.items || [];
+  const COL = n => String.fromCharCode(65 + n);
+  const rowCells = {}; const merges = []; const rowH = {};
+  const put = (r, c, sty, v, t) => { (rowCells[r] = rowCells[r] || {})[c] = { s: sty, v: v, t: t }; };
+  const span = (r, c0, c1, sty, v, t) => { for (let c = c0; c <= c1; c++) put(r, c, sty, c === c0 ? v : null, c === c0 ? t : null); if (c1 > c0) merges.push(COL(c0) + r + ':' + COL(c1) + r); };
+  span(1, 0, 2, 1, '㈜ 다우세라믹앤석재', 's'); span(1, 3, 5, 2, '견   적   서', 's'); rowH[1] = 34;
+  span(2, 0, 2, 3, '견적일 : ' + (q.date || ''), 's'); span(2, 3, 5, 3, '견적번호 : ' + (q.docNo || ''), 's');
+  span(3, 0, 2, 3, '유효기간 : ' + (q.valid || '-'), 's'); span(3, 3, 5, 3, '담당자 : ' + (q.by || ''), 's');
+  rowH[4] = 6;
+  span(5, 0, 2, 4, '수신', 's'); span(5, 3, 5, 4, '공급자', 's');
+  span(6, 0, 2, 5, (q.client || '') + ' 귀중', 's'); span(6, 3, 5, 5, co.name, 's'); rowH[6] = 20;
+  span(7, 0, 2, 5, (q.attn || '아래와 같이 견적합니다.'), 's'); span(7, 3, 5, 5, '대표 ' + co.ceo + '   ·   사업자 ' + co.bizno, 's');
+  span(8, 0, 2, 5, (q.siteAddr ? ('현장 : ' + q.siteAddr) : ''), 's'); span(8, 3, 5, 5, co.addr + '   ' + co.tel, 's');
+  rowH[9] = 6;
+  ['No', '품목', '규격', '수량', '단가', '금액'].forEach((h, c) => put(10, c, 6, h, 's')); rowH[10] = 22;
+  items.forEach((it, i) => { const r = 11 + i;
+    put(r, 0, 7, i + 1, 'n'); put(r, 1, 8, it.name || '', 's'); put(r, 2, 8, it.spec || '', 's');
+    put(r, 3, 7, (it.qty != null ? it.qty : '') + (it.unit ? (' ' + it.unit) : ''), 's');
+    put(r, 4, 9, Math.round(+it.price || 0), 'n'); put(r, 5, 9, Math.round(+it.amt || 0), 'n');
+  });
+  let rr = 11 + items.length;
+  span(rr, 0, 4, 10, '공급가액', 's'); put(rr, 5, 11, Math.round(+q.supply || 0), 'n'); rr++;
+  span(rr, 0, 4, 10, '부가세 (10%)', 's'); put(rr, 5, 11, Math.round(+q.vat || 0), 'n'); rr++;
+  if ((+q.discount || 0) > 0) { span(rr, 0, 4, 10, '할인 (D/C)', 's'); put(rr, 5, 11, -Math.round(+q.discount || 0), 'n'); rr++; }
+  span(rr, 0, 4, 12, '합계금액', 's'); put(rr, 5, 13, Math.round(+q.total || 0), 'n'); rowH[rr] = 24; rr += 2;
+  if (q.memo) { span(rr, 0, 5, 14, '비고 : ' + q.memo, 's'); rowH[rr] = 44; rr++; }
+  if (hasBasinItems(items)) { span(rr, 0, 5, 15, '⚠ 세면대 주문제작 특이사항 (필독)', 's'); rr++; (typeof BASIN_NOTICE !== 'undefined' ? BASIN_NOTICE : []).forEach(l => { span(rr, 0, 5, 16, '· ' + l, 's'); rr++; }); }
+  const maxRow = rr;
+  const cell = (ref, sty, v, t) => t === 'n' ? ('<c r="' + ref + '" s="' + sty + '"><v>' + v + '</v></c>') : (t === 's' ? ('<c r="' + ref + '" s="' + sty + '" t="inlineStr"><is><t xml:space="preserve">' + esc(v == null ? '' : String(v)) + '</t></is></c>') : ('<c r="' + ref + '" s="' + sty + '"/>'));
+  let sheetData = '';
+  for (let r = 1; r <= maxRow; r++) {
+    const rc = rowCells[r]; const ht = rowH[r] ? (' ht="' + rowH[r] + '" customHeight="1"') : '';
+    if (!rc) { sheetData += '<row r="' + r + '"' + ht + '/>'; continue; }
+    const cs = Object.keys(rc).map(Number).sort((a, b) => a - b).map(c => cell(COL(c) + r, rc[c].s, rc[c].v, rc[c].t)).join('');
+    sheetData += '<row r="' + r + '"' + ht + '>' + cs + '</row>';
+  }
+  const cols = '<cols><col min="1" max="1" width="6" customWidth="1"/><col min="2" max="2" width="30" customWidth="1"/><col min="3" max="3" width="18" customWidth="1"/><col min="4" max="4" width="9" customWidth="1"/><col min="5" max="5" width="13" customWidth="1"/><col min="6" max="6" width="14" customWidth="1"/></cols>';
+  const mc = merges.length ? ('<mergeCells count="' + merges.length + '">' + merges.map(m => '<mergeCell ref="' + m + '"/>').join('') + '</mergeCells>') : '';
+  return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' + cols + '<sheetData>' + sheetData + '</sheetData>' + mc + '</worksheet>';
 }
 function downloadQuoteXls(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
-  toast('견적서 양식 엑셀 생성 중…');
+  toast('견적서 엑셀 생성 중…');
   (async () => {
     try {
-      await _ensureLib('html2canvas', 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js');
       await _ensureLib('JSZip', 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
-      const ifr = document.createElement('iframe'); ifr.setAttribute('aria-hidden', 'true'); ifr.style.cssText = 'position:fixed;left:-10000px;top:0;width:760px;height:1120px;border:0;background:#fff';
-      document.body.appendChild(ifr);
-      const dd = ifr.contentDocument; dd.open(); dd.write(quoteDocHtml(q)); dd.close();
-      await new Promise(r => setTimeout(r, 750));
-      const page = dd.getElementById('page');
-      const canvas = await html2canvas(page, { scale: 2, backgroundColor: '#ffffff', width: 718, height: 1047, windowWidth: 760 });
-      ifr.remove();
-      const b64 = canvas.toDataURL('image/png').split(',')[1];
       const zip = new JSZip();
-      _xlsxImageBlob(zip, b64, 718, 1047);
+      zip.file('[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>');
+      zip.file('_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>');
+      zip.file('xl/workbook.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="견적서" sheetId="1" r:id="rId1"/></sheets></workbook>');
+      zip.file('xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>');
+      zip.file('xl/styles.xml', _quoteStylesXml());
+      zip.file('xl/worksheets/sheet1.xml', _quoteSheetXml(q));
       const blob = await zip.generateAsync({ type: 'blob' });
       const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = '견적서_' + ((q.client || '').replace(/\s/g, '')) + '_' + (q.docNo || todayStr()) + '.xlsx'; document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
-      toast('견적서 엑셀 저장됨 (양식 이미지)');
-    } catch (e) { toast('엑셀 생성 실패 — 인쇄/PNG로 저장해 주세요'); }
+      toast('견적서 엑셀 저장됨 (양식·편집 가능)');
+    } catch (e) { toast('엑셀 생성 실패 — 인쇄로 저장해 주세요'); }
   })();
 }
 /* 연도별 월별 출고 집계 (헤베·장수·두께별) */
