@@ -3872,7 +3872,8 @@ function quoteAddHold(enc) {
 }
 function quoteClientChanged() {
   const client = (el('q-client') && el('q-client').value || '').trim();
-  const cs = el('q-ctype'); if (cs) cs.value = clientType(client);
+  // 등록된 거래처와 정확히 일치하고 유형이 지정된 경우에만 반영 — 입력 중/신규는 현재 선택 유지 (소비자로 초기화 방지)
+  const cs = el('q-ctype'); if (cs) { const c = (state.clients || []).find(x => _normName(x.value) === _normName(client)); if (c && c.ctype) cs.value = c.ctype; }
   quoteRefillPrices();
   quoteExtraRefresh();
   const hb = el('q-holdbox'); if (hb) hb.innerHTML = quoteHoldBoxHtml(client);
@@ -4505,16 +4506,40 @@ function cutRowHtml(p) {
 function _rowDims(cid) { const r = document.querySelector('.cut-row[data-cid="' + cid + '"]'); if (!r) return null; return { l: _numv(r.querySelector('.ct-l').value), w: _numv(r.querySelector('.ct-w').value) }; }
 function cutMakeGroup() {
   const sel = [...document.querySelectorAll('.cut-row')].filter(r => { const c = r.querySelector('.ct-sel'); return c && c.checked; });
-  if (sel.length < 2) { toast('연결할 부재를 2개 이상 체크하세요'); return; }
-  const items = sel.map(r => ({ cid: r.getAttribute('data-cid'), l: _numv(r.querySelector('.ct-l').value), w: _numv(r.querySelector('.ct-w').value) }));
-  if (items.some(x => !(x.l > 0 && x.w > 0))) { toast('치수가 없는 부재가 있습니다'); return; }
+  const grainOn = el('cut-grain') && el('cut-grain').checked;
+  const Ws = _numv(el('cut-sheetL') && el('cut-sheetL').value) || 3200, Hs = _numv(el('cut-sheetW') && el('cut-sheetW').value) || 1600;
+  const kerf = _numv(el('cut-kerf') && el('cut-kerf').value) || 0;
+  let items;
+  if (sel.length === 1) {
+    // 같은 부재 여러 장 연결 (수량 기준)
+    const r = sel[0]; const l = _numv(r.querySelector('.ct-l').value), w = _numv(r.querySelector('.ct-w').value);
+    const q = Math.max(1, Math.round(_numv(r.querySelector('.ct-q').value) || 0) || 1);
+    if (!(l > 0 && w > 0)) { toast('치수를 입력하세요'); return; }
+    if (q < 2) { toast('한 부재를 연결하려면 수량을 2 이상으로 하거나, 2개 이상 체크하세요'); return; }
+    items = Array.from({ length: q }, () => ({ cid: r.getAttribute('data-cid'), l, w }));
+  } else if (sel.length >= 2) {
+    items = sel.map(r => ({ cid: r.getAttribute('data-cid'), l: _numv(r.querySelector('.ct-l').value), w: _numv(r.querySelector('.ct-w').value) }));
+    if (items.some(x => !(x.l > 0 && x.w > 0))) { toast('치수가 없는 부재가 있습니다'); return; }
+  } else { toast('연결할 부재를 2개 이상 체크하세요 (또는 수량 2 이상인 1개)'); return; }
   const sameW = items.every(x => Math.abs(x.w - items[0].w) < 0.01);
   const sameL = items.every(x => Math.abs(x.l - items[0].l) < 0.01);
-  let dir; if (sameW) dir = 'W'; else if (sameL) dir = 'L'; else { toast('폭이 같거나 기장이 같은 부재끼리만 무늬연결됩니다'); return; }
+  if (!sameW && !sameL) { toast('폭이 같거나 기장이 같은 부재끼리만 무늬연결됩니다'); return; }
+  const N = items.length;
+  const blk = d => d === 'W' ? { L: items.reduce((a, x) => a + x.l, 0) + kerf * (N - 1), W: items[0].w } : { L: items[0].l, W: items.reduce((a, x) => a + x.w, 0) + kerf * (N - 1) };
+  const fits = b => (b.L <= Ws + 0.01 && b.W <= Hs + 0.01) || (!grainOn && b.W <= Ws + 0.01 && b.L <= Hs + 0.01);
+  let dir;
+  if (sameW && sameL) {   // 정사각/동일부재 → 판재에 들어가는 방향 자동 선택
+    const bw = blk('W'), bl = blk('L'); const fw = fits(bw), fl = fits(bl);
+    if (fw && !fl) dir = 'W'; else if (fl && !fw) dir = 'L';
+    else dir = (Math.max(bw.L, bw.W) <= Math.max(bl.L, bl.W)) ? 'W' : 'L';
+  } else if (sameW && sameL === false) {   // 폭만 같음 → 나란히(폭방향). 안 들어가면 기장방향 불가하므로 경고만
+    dir = 'W';
+  } else dir = 'L';
+  if (!fits(blk(dir))) toast('⚠ 연결 블록이 판재보다 큽니다 — 판재 규격/톱날 확인');
   _cutGroups.push({ cids: items.map(x => x.cid), dir });
   sel.forEach(r => { const c = r.querySelector('.ct-sel'); if (c) c.checked = false; });
   const gb = el('cut-groups'); if (gb) gb.innerHTML = cutGroupsInner();
-  toast(dir === 'W' ? '폭 방향 무늬연결 생성' : '기장 방향 무늬연결 생성');
+  toast((dir === 'W' ? '폭 방향 무늬연결' : '기장 방향 무늬연결') + ' · ' + N + '장');
 }
 function cutDelGroup(i) { _cutGroups.splice(i, 1); const gb = el('cut-groups'); if (gb) gb.innerHTML = cutGroupsInner(); }
 function cutGroupsInner() {
@@ -4558,7 +4583,7 @@ function _packOrder(order, Ws, Hs, kerf) {
     for (const f of sh.free) { for (const o of orients) { const ol = o[0], ow = o[1]; if (ol <= f.w + 0.01 && ow <= f.h + 0.01) { const score = Math.min(f.w - ol, f.h - ow); if (!best || score < best.score) best = { f, ol, ow, score }; } } }
     if (!best) return false;
     const R = { x: best.f.x, y: best.f.y, w: best.ol, h: best.ow };
-    sh.placed.push({ x: R.x, y: R.y, l: best.ol, w: best.ow, idx: pc.idx, subs: pc.subs });
+    sh.placed.push({ x: R.x, y: R.y, l: best.ol, w: best.ow, idx: pc.idx, subs: pc.subs, rotated: pc.subs && pc.subs.length ? (Math.abs(best.ol - pc.l) > 0.01) : false });
     const nf = [];
     for (const f of sh.free) {
       if (R.x < f.x + f.w - 0.01 && R.x + R.w > f.x + 0.01 && R.y < f.y + f.h - 0.01 && R.y + R.h > f.y + 0.01) {
@@ -4602,7 +4627,12 @@ function cutSheetSvg(sh, Ws, Hs, n) {
   const rects = sh.placed.map(pc => {
     const x = pc.x * sc, y = pc.y * sc, w = pc.l * sc, h = pc.w * sc;
     if (pc.subs && pc.subs.length) {
-      const inner = pc.subs.map(sp => { const sx = (pc.x + sp.x) * sc, sy = (pc.y + sp.y) * sc, sw = sp.l * sc, sh2 = sp.w * sc; const cc = colors[((sp.idx || 1) - 1) % colors.length];
+      const inner = pc.subs.map(sp => {
+        // 블록이 회전되어 배치된 경우 서브 무늬조각도 함께 회전 (pc.l = 배치된 블록의 가로폭)
+        let ex, ey, ew, eh;
+        if (pc.rotated) { ex = pc.l - sp.y - sp.w; ey = sp.x; ew = sp.w; eh = sp.l; }
+        else { ex = sp.x; ey = sp.y; ew = sp.l; eh = sp.w; }
+        const sx = (pc.x + ex) * sc, sy = (pc.y + ey) * sc, sw = ew * sc, sh2 = eh * sc; const cc = colors[((sp.idx || 1) - 1) % colors.length];
         return `<rect x="${sx.toFixed(1)}" y="${sy.toFixed(1)}" width="${sw.toFixed(1)}" height="${sh2.toFixed(1)}" fill="${cc}" stroke="#555" stroke-width="0.7"/>` + (sw > 40 && sh2 > 16 ? `<text x="${(sx + sw / 2).toFixed(1)}" y="${(sy + sh2 / 2 + 3).toFixed(1)}" text-anchor="middle" font-size="10" fill="#333">${sp.l}×${sp.w}${sp.idx ? ' #' + sp.idx : ''}</text>` : ''); }).join('');
       return `<g>${inner}<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="none" stroke="#185fa5" stroke-width="1.8" stroke-dasharray="5 3"/></g>`;
     }
@@ -4618,16 +4648,19 @@ function runCutSim() {
   const kerf = _numv(el('cut-kerf') && el('cut-kerf').value) || 0;
   const parts = _collectCutParts();
   if (!parts.length) { toast('부재 치수를 입력하세요'); return; }
+  const grainOn = el('cut-grain') && el('cut-grain').checked;
   const rem = {}; const dimOf = {}; parts.forEach(p => { rem[p.cid] = p.q; dimOf[p.cid] = p; });
   const pieces = [];
   _cutGroups.forEach(g => {
     const mem = g.cids.map(c => dimOf[c]).filter(Boolean);
-    if (mem.length < 2 || mem.some(m => rem[m.cid] < 1)) return;
-    mem.forEach(m => rem[m.cid] -= 1);
+    if (mem.length < 2) return;
+    const need = {}; mem.forEach(m => { need[m.cid] = (need[m.cid] || 0) + 1; });
+    if (Object.keys(need).some(c => (rem[c] || 0) < need[c])) return;   // 수량 부족한 연결은 건너뜀
+    Object.keys(need).forEach(c => { rem[c] -= need[c]; });
     let L, W; const subs = [];
     if (g.dir === 'W') { const w = mem[0].w; let x = 0; mem.forEach((m, i) => { if (i > 0) x += kerf; subs.push({ x: x, y: 0, l: m.l, w: w, idx: m.idx }); x += m.l; }); L = x; W = w; }
     else { const l = mem[0].l; let yy = 0; mem.forEach((m, i) => { if (i > 0) yy += kerf; subs.push({ x: 0, y: yy, l: l, w: m.w, idx: m.idx }); yy += m.w; }); L = l; W = yy; }
-    pieces.push({ l: L, w: W, idx: 0, rot: false, subs });
+    pieces.push({ l: L, w: W, idx: 0, rot: !grainOn, subs });   // 무늬결 없으면 블록 통째 회전 허용 → 판재에 들어가는 방향으로
   });
   parts.forEach(p => { for (let k = 0; k < rem[p.cid]; k++) pieces.push({ l: p.l, w: p.w, idx: p.idx, rot: p.rot }); });
   const sheets = _packPieces(Ws, Hs, pieces, kerf);
@@ -4664,7 +4697,7 @@ function renderCutSim() {
     <div class="card" style="padding:13px 15px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-weight:700;font-size:13.5px">부재 목록 (길이 × 폭 × 수량)</div><button class="btn btn-sm" onclick="addCutRow()"><i class="ti ti-plus"></i>행 추가</button></div>
       <table style="width:100%;border-collapse:collapse"><thead><tr style="font-size:11px;color:var(--t3)"><th style="padding:2px 4px;text-align:center">길이</th><th></th><th style="padding:2px 4px;text-align:center">폭</th><th style="padding:2px 4px;text-align:center">수량</th><th style="padding:2px 4px;text-align:center" title="무늬연결 선택">연결</th><th style="padding:2px 4px;text-align:center" title="가로세로 회전 허용">회전</th><th></th></tr></thead><tbody id="cut-parts">${rows}</tbody></table>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn btn-sm" onclick="cutMakeGroup()"><i class="ti ti-link"></i>선택 연결 (무늬)</button><span style="font-size:11px;color:var(--t3)">체크한 부재를 연결 · 폭 같으면 폭방향, 기장 같으면 기장방향 자동</span></div>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn btn-sm" onclick="cutMakeGroup()"><i class="ti ti-link"></i>선택 연결 (무늬)</button><span style="font-size:11px;color:var(--t3)">체크한 부재 연결 · 폭 같으면 폭방향, 기장 같으면 기장방향 자동 · 같은 부재 여러 장은 그 행 1개만 체크(수량 기준) · 판재에 맞게 방향 자동회전</span></div>
       <div id="cut-groups" style="margin-top:6px">${cutGroupsInner()}</div>
       <button class="btn btn-pri btn-block" style="margin-top:11px" onclick="runCutSim()"><i class="ti ti-player-play"></i>재단 시뮬레이션 실행</button>
     </div>
@@ -6823,7 +6856,7 @@ async function submitShip() {
     for (const nm of zeroed) notifyStockOut(nm);   // 재고 소진 → 즉시 푸시
     // 출고 대기열(출고관리)에 등록 — 재고는 위에서 이미 차감됨(stockApplied). 소리 알림은 '출고 지시' 낼 때만.
     try {
-      const qItems = rows.map(r => ({ name: r.name, qty: r.qty, spec: r.lot || '', unit: '장' }));
+      const qItems = rows.map(r => ({ name: r.name, qty: r.qty, spec: [r.lot, r.pattern].map(s => (s || '').trim()).filter(Boolean).join(' / '), unit: '장', lot: r.lot || '', pattern: r.pattern || '' }));
       await Store.add('chulgoReqs', { docNo: chulgoNextDocNo('출고'), reqType: '출고', client: targetName, items: qItems, status: '대기열', stockApplied: true, sourceShipId: shipId, dispatchDest: dest, schedDate: date, memo: note || '', sender: (me && me.name) || '', createdAt: Date.now() });
     } catch (e) { }
     if (_shipFromQuote) { try { await Store.update('quotes', _shipFromQuote, { shipped: true, shippedAt: Date.now() }); } catch (e) { } _shipFromQuote = ''; }
@@ -7542,7 +7575,7 @@ function chulgoPrintDispatch(dispatchId) {
   let rows = ''; let no = 0;
   stops.forEach(s => {
     rows += `<tr><td class="grp" colspan="6">◼&nbsp; 거래처 : <b>${e(s.client)}</b> <span style="font-weight:600;color:#555">(${(s.items || []).length}품목)</span></td></tr>`;
-    (s.items || []).forEach(it => { no++; rows += `<tr><td class="c">${no}</td><td class="l">${e(it.name)}</td><td class="c">${e(it.spec)}</td><td class="c">${e(it.qty)}</td><td class="c">${e(it.unit)}</td><td class="l">${g.companyDispatch ? '업체 직접 수령' : e(s.dest)}</td></tr>`; });
+    (s.items || []).forEach(it => { no++; const pat = (it.pattern || '').trim(); rows += `<tr><td class="c">${no}</td><td class="l">${e(it.name)}${pat ? `<div style="font-size:11.5px;color:#c0341d;font-weight:700;margin-top:2px">무늬(패턴) : ${e(pat)}</div>` : ''}</td><td class="c">${e(it.spec)}</td><td class="c">${e(it.qty)}</td><td class="c">${e(it.unit)}</td><td class="l">${g.companyDispatch ? '업체 직접 수령' : e(s.dest)}</td></tr>`; });
   });
   const MIN = Math.max(6, no);
   for (let i = no; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td><td></td></tr>`;
