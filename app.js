@@ -2678,7 +2678,7 @@ function stockRowsHtml(list) {
       <td><b>${esc(i.name)}</b>${catBadge(cat)}${dmg > 0 ? ` <span style="display:inline-block;font-size:10px;font-weight:700;color:#b42318;background:#fef3f2;border:1px solid #fecdca;border-radius:8px;padding:1px 6px">파손 ${dmg}</span>` : ''}<div style="font-size:11px;color:var(--t3)">${esc(i.vendor || '')}${i.stone ? ` · 석종 ${esc(i.stone)}` : ''}</div></td>
       <td>${esc(i.spec || '-')}</td>
       <td style="font-size:11px">${ceramic ? patternStockCell(i.name) : '-'}</td>
-      <td><b>${(+i.jang || 0)}</b>${u}${i.safeJang ? `<div style="font-size:10px;color:var(--t3)">안전 ${i.safeJang}</div>` : ''}${planTxt}</td>
+      <td><b${(+i.jang || 0) < 0 ? ' style="color:var(--red-t)"' : ''}>${(+i.jang || 0)}</b>${u}${(+i.jang || 0) < 0 ? `<div style="font-size:10px;color:var(--red-t);font-weight:700">과다출고 ${-(+i.jang || 0)}${u}</div>` : ''}${i.safeJang ? `<div style="font-size:10px;color:var(--t3)">안전 ${i.safeJang}</div>` : ''}${planTxt}</td>
       <td><b style="color:${avail <= 0 ? 'var(--red-t)' : 'var(--gd)'}">${avail}</b>${u}${held > 0 ? `<div style="font-size:10px;color:var(--t3)">홀딩 ${held}</div>` : ''}</td>
       <td>${ceramic ? itemHebe(i).toFixed(1) + '㎡' : '-'}</td>
       <td><span class="pill ${s.cls}">${s.k}</span></td>
@@ -2987,7 +2987,7 @@ async function submitInEdit(id) {
     depot: (el('ie-depot') && el('ie-depot').value || '').trim()
   });
   if (it && newJang !== oldJang) {
-    await Store.update('inventory', it.id, { jang: Math.max(0, (+it.jang || 0) + (newJang - oldJang)) });   // 입고 총량 변경분만큼 실재고 보정
+    await Store.update('inventory', it.id, { jang: (+it.jang || 0) + (newJang - oldJang) });   // 입고 총량 변경분만큼 실재고 보정(마이너스 허용)
   }
   closeModal(); toast('입고 내역이 수정되었습니다');
 }
@@ -2997,7 +2997,7 @@ async function delInTxn(id) {
   const t = state.transactions.find(x => x.id === id && x.type === 'in'); if (!t) return;
   if (!guardDelete(`이 입고를 삭제할까요?\n${t.itemName} +${+t.jang || 0}장 · ${t.date || ''}\n실재고에서 차감됩니다.`)) return;
   const it = state.inventory.find(i => i.id === t.itemId || i.name === t.itemName);
-  if (it) await Store.update('inventory', it.id, { jang: Math.max(0, (+it.jang || 0) - (+t.jang || 0)) });
+  if (it) await Store.update('inventory', it.id, { jang: (+it.jang || 0) - (+t.jang || 0) });
   await Store.remove('transactions', id);
   closeModal(); toast('입고 삭제됨 (재고 차감)');
 }
@@ -3057,7 +3057,7 @@ async function submitAdjust(id) {
     jang: delta, lot, pattern, depot: (el('aj-depot').value || '').trim(),
     note, date: todayStr(), by: me.name
   });
-  await Store.update('inventory', it.id, { jang: Math.max(0, (+it.jang || 0) + delta) });
+  await Store.update('inventory', it.id, { jang: (+it.jang || 0) + delta });
   closeModal(); toast(`재고 조정 완료 (${delta > 0 ? '+' : ''}${delta}장)`);
   setTimeout(() => { if (state.inventory.find(x => x.id === id)) openItemForm(id); }, 350);
 }
@@ -3071,7 +3071,7 @@ async function delAdjust(id) {
     for (const g of state.transactions.filter(x => x.moveId === t.moveId)) { try { await Store.remove('transactions', g.id); } catch (e) { } }
   } else {
     if (!confirm(`이 조정(${(+t.jang || 0) > 0 ? '+' : ''}${+t.jang || 0}장)을 되돌릴까요?\n실재고·롯트·패턴 재고가 조정 전으로 복구됩니다.`)) return;
-    if (it) await Store.update('inventory', it.id, { jang: Math.max(0, (+it.jang || 0) - (+t.jang || 0)) });
+    if (it) await Store.update('inventory', it.id, { jang: (+it.jang || 0) - (+t.jang || 0) });
     await Store.remove('transactions', id);
   }
   toast('조정 되돌림');
@@ -6136,7 +6136,7 @@ async function submitOutEdit(id) {
   await Store.update('transactions', id, patch);
   // 장수 변경 시 실재고 보정: 출고 줄이면 +재고, 늘리면 -재고
   if (it && newJang !== oldJang) {
-    await Store.update('inventory', it.id, { jang: Math.max(0, (+it.jang || 0) + (oldJang - newJang)) });
+    await Store.update('inventory', it.id, { jang: (+it.jang || 0) + (oldJang - newJang) });
   }
   closeModal(); toast('출고 내역이 수정되었습니다');
 }
@@ -6867,7 +6867,7 @@ async function submitShip() {
       const material = r.name, jang = r.qty;
       const it = state.inventory.find(i => i.name === material);
       const oldJang = it ? (+it.jang || 0) : 0;
-      const newJang = Math.max(0, oldJang - jang);
+      const newJang = oldJang - jang;   // 재고보다 많이 출고하면 마이너스로 남김 → 다음 입고 때 자동 상쇄
       const hebe = it ? +(jang * (+it.hebePerJang || 0)).toFixed(2) : 0;
       const lot = (r.lot && r.lot.trim()) ? r.lot.trim() : soleLot(material);   // 롯트 미지정인데 남은 롯트가 하나면 자동 연동
       const oDepot = (r.depot && r.depot.trim()) ? r.depot.trim() : (el('o-depot') && el('o-depot').value || '').trim();   // 행별 창고 우선(창고별 재고), 없으면 폼 상단 창고
@@ -6930,7 +6930,7 @@ async function delIn(id) {
   if (!isAdmin()) { toast('관리자만 삭제할 수 있습니다'); return; }
   const t = state.transactions.find(x => x.id === id); if (!t) return;
   if (!guardDelete(`이 입고를 삭제할까요?\n${t.itemName} ${t.jang}장 · 롯트 ${t.lot || '-'} · ${t.date}\n재고에서 그만큼 되돌립니다. (수정하려면 삭제 후 다시 입고)`)) return;
-  if (t.itemId) { const it = state.inventory.find(i => i.id === t.itemId); if (it) await Store.update('inventory', it.id, { jang: Math.max(0, (+it.jang || 0) - (+t.jang || 0)) }); }
+  if (t.itemId) { const it = state.inventory.find(i => i.id === t.itemId); if (it) await Store.update('inventory', it.id, { jang: (+it.jang || 0) - (+t.jang || 0) }); }
   await Store.remove('transactions', id);
   toast('입고 삭제됨 (재고 되돌림)');
 }
@@ -7908,7 +7908,7 @@ async function chulgoDone(id) {
         if (inv) await Store.update('inventory', inv.id, { jang: (+inv.jang || 0) + q, lastInDate: todayStr() });
         await Store.add('transactions', { type: 'in', itemId: inv ? inv.id : '', itemName: it.name, spec: it.spec || '', jang: q, hebe: inv ? +(q * (+inv.hebePerJang || 0)).toFixed(2) : 0, vendor: r.client || '', date: todayStr(), note: '출고관리 입고 ' + (r.docNo || ''), by: (me && me.name) || '' });
       } else {
-        if (inv) await Store.update('inventory', inv.id, { jang: Math.max(0, (+inv.jang || 0) - q) });
+        if (inv) await Store.update('inventory', inv.id, { jang: (+inv.jang || 0) - q });
         await Store.add('transactions', { type: 'out', shipId, itemId: inv ? inv.id : '', itemName: it.name, spec: it.spec || '', jang: q, hebe: inv ? +(q * (+inv.hebePerJang || 0)).toFixed(2) : 0, lot: '', targetName: r.client || '', dest: '출고관리', factory: '출고관리', date: todayStr(), note: '출고관리 ' + (r.docNo || ''), by: (me && me.name) || '' });
       }
     }
