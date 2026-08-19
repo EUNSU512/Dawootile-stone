@@ -1551,31 +1551,59 @@ function patternStockCell(name) {
   return ps.map(p => `<div style="white-space:nowrap">${esc(p.pattern)} <b style="color:${p.remain <= 0 ? 'var(--t3)' : 'var(--gd)'}">${p.remain}</b>장</div>`).join('');
 }
 /* 창고별 재고: 입고(+) − 출고(−) + 조정(±). 창고 미기록건은 품목 기본창고로 귀속. 자재명 기준 */
+/* ── 창고(depot) 정규화 ─────────────────────────────────────────────
+   기본 창고는 다우세라믹(본사) 한 곳. 빈칸·'본사'·'다우세라믹…' 은 모두 같은 곳으로 취급한다.
+   거봉석재 등 다른 창고는 명시적으로 지정했을 때만 그 창고로 잡힌다. */
+const HOME_DEPOT = '본사';
+const HOME_DEPOT_LABEL = '다우세라믹(본사)';
+function normDepot(d) {
+  const v = String(d == null ? '' : d).trim();
+  if (!v) return HOME_DEPOT;
+  if (v === HOME_DEPOT || /^다우세라믹/.test(v) || /본사/.test(v)) return HOME_DEPOT;
+  return v;
+}
+function depotLabel(d) { const v = normDepot(d); return v === HOME_DEPOT ? HOME_DEPOT_LABEL : v; }
+function depotDatalistHtml() { return depotOptions().map(d => `<option value="${esc(d)}">${esc(depotLabel(d))}</option>`).join(''); }
 function depotStock(name) {
   const it = state.inventory.find(i => _normName(i.name) === _normName(name));
-  const def = (it && it.depot) ? it.depot : '본사';
   const key = _normName(name); const m = {};
   state.transactions.forEach(t => {
     if (_normName(t.itemName) !== key) return;
-    const dep = (t.depot || '').trim() || def;
+    const dep = normDepot(t.depot);   // 빈칸·다우세라믹 → 본사로 통합
     if (!m[dep]) m[dep] = { depot: dep, inQty: 0, outQty: 0, adjQty: 0 };
     if (t.type === 'in') m[dep].inQty += (+t.jang || 0);
     else if (t.type === 'out') m[dep].outQty += (+t.jang || 0);
     else if (t.type === 'adjust') m[dep].adjQty += (+t.jang || 0);
   });
-  return Object.values(m).map(x => ({ depot: x.depot, inQty: x.inQty, outQty: x.outQty, remain: x.inQty - x.outQty + x.adjQty }))
-    .filter(x => x.inQty > 0 || x.remain !== 0)
-    .sort((a, b) => b.remain - a.remain);
+  const arr = Object.values(m).map(x => ({ depot: x.depot, inQty: x.inQty, outQty: x.outQty, remain: x.inQty - x.outQty + x.adjQty }));
+  // 창고별 합계를 실재고(jang)에 맞춤 — 차이는 기본창고(본사)에 반영. 롯트별 재고와 같은 방식.
+  if (it) {
+    const diff = (+it.jang || 0) - arr.reduce((a, x) => a + x.remain, 0);
+    if (Math.abs(diff) > 0.01) {
+      let home = arr.find(x => x.depot === HOME_DEPOT);
+      if (!home) { home = { depot: HOME_DEPOT, inQty: 0, outQty: 0, remain: 0 }; arr.push(home); }
+      home.remain += diff;
+    }
+  }
+  return arr.filter(x => x.inQty > 0 || x.remain !== 0).sort((a, b) => b.remain - a.remain);
 }
-function depotOptions() { return [...new Set((state.inventory || []).map(i => i.depot).filter(Boolean).concat((state.transactions || []).map(t => (t.depot || '').trim()).filter(Boolean)))].sort(); }
-/* 자재행 창고 선택칸 옵션 — 창고 2곳 이상(창고별 재고 있는 자재)만 목록 표시, 아니면 빈 문자열 반환(칸 숨김) */
+function depotOptions() {
+  const set = new Set();
+  (state.inventory || []).forEach(i => { if ((i.depot || '').trim()) set.add(normDepot(i.depot)); });
+  (state.transactions || []).forEach(t => { if ((t.depot || '').trim()) set.add(normDepot(t.depot)); });
+  set.delete(HOME_DEPOT);
+  return [HOME_DEPOT].concat([...set].sort());   // 기본창고를 항상 맨 앞에
+}
+/* 자재행 창고 선택칸 옵션 — 창고 2곳 이상(창고별 재고 있는 자재)만 목록 표시, 아니면 빈 문자열 반환(칸 숨김).
+   기본은 항상 다우세라믹(본사)이 선택된 상태. */
 function depotSelectHtml(name, current) {
   const ds = depotStock(name).filter(d => d.remain > 0);
-  if (ds.length <= 1) return '';   // 창고 한 곳뿐 → 선택 불필요
-  const cur = (current || '').trim();
-  let html = '<option value="">창고 선택 (창고별 재고)</option>';
-  ds.forEach(d => { html += `<option value="${esc(d.depot)}" ${cur === d.depot ? 'selected' : ''}>${esc(d.depot)} · 잔여 ${d.remain}장</option>`; });
-  if (cur && !ds.some(d => d.depot === cur)) html += `<option value="${esc(cur)}" selected>${esc(cur)}</option>`;
+  if (!ds.some(d => d.depot !== HOME_DEPOT)) return '';   // 기본창고에만 있으면 선택 불필요(칸 숨김)
+  const cur = normDepot(current);
+  const home = ds.find(d => d.depot === HOME_DEPOT);
+  let html = `<option value="${HOME_DEPOT}" ${cur === HOME_DEPOT ? 'selected' : ''}>${HOME_DEPOT_LABEL} — 기본${home ? ` · 잔여 ${home.remain}장` : ''}</option>`;
+  ds.filter(d => d.depot !== HOME_DEPOT).forEach(d => { html += `<option value="${esc(d.depot)}" ${cur === d.depot ? 'selected' : ''}>${esc(d.depot)} · 잔여 ${d.remain}장</option>`; });
+  if (cur !== HOME_DEPOT && !ds.some(d => d.depot === cur)) html += `<option value="${esc(cur)}" selected>${esc(cur)}</option>`;
   return html;
 }
 /* 파손 재고: 입고 비고에 '파손' 포함(+) − 출고 비고에 '파손' 포함(−). 자재명 기준 */
@@ -2682,7 +2710,7 @@ function stockRowsHtml(list) {
       <td><b style="color:${avail <= 0 ? 'var(--red-t)' : 'var(--gd)'}">${avail}</b>${u}${held > 0 ? `<div style="font-size:10px;color:var(--t3)">홀딩 ${held}</div>` : ''}</td>
       <td>${ceramic ? itemHebe(i).toFixed(1) + '㎡' : '-'}</td>
       <td><span class="pill ${s.cls}">${s.k}</span></td>
-      <td>${esc(i.depot || '본사')}</td>
+      <td>${esc(depotLabel(i.depot))}</td>
     </tr>`;
   }).join('');
 }
@@ -2805,7 +2833,7 @@ function stockExportExcel() {
       '헤베(㎡)': +(jang * per).toFixed(2),
       '패턴별(참고)': patText,
       '롯트별(참고)': lotText,
-      '창고': it.depot || '',
+      '창고': depotLabel(it.depot),
       '공급처': it.vendor || ''
     });
   });
@@ -2868,7 +2896,7 @@ function openItemForm(id) {
     ${it ? `
     <div class="sec-label" style="display:flex;justify-content:space-between;align-items:center"><span><i class="ti ti-list-details"></i>롯트별 재고</span>${isAdmin() ? `<button class="btn btn-ghost btn-sm" type="button" onclick="openAdjustForm('${it.id}')"><i class="ti ti-adjustments"></i>재고 조정</button>` : ''}</div>
     ${(() => { const ls = lotStock(it.name); return ls.length ? `<div class="tbl-wrap" style="margin-bottom:6px"><table class="tbl"><thead><tr><th>롯트</th><th>입고</th><th>출고</th><th>잔여</th></tr></thead><tbody>${ls.map(l => `<tr><td><b>${esc(l.lot)}</b></td><td>${l.inQty}장</td><td>${l.outQty}장</td><td><b style="color:${l.remain <= 0 ? 'var(--t3)' : 'var(--gd)'}">${l.remain}장</b></td></tr>`).join('')}</tbody></table></div>` : `<div style="font-size:12.5px;color:var(--t3);padding:2px 0 8px">롯트 정보가 없습니다 (입고 시 롯트를 입력하면 표시됩니다)</div>`; })()}
-    ${(() => { const ds = depotStock(it.name); return ds.length > 1 ? `<div class="sec-label"><i class="ti ti-building-warehouse"></i>창고별 재고</div><div class="tbl-wrap" style="margin-bottom:6px"><table class="tbl"><thead><tr><th>창고</th><th>입고</th><th>출고</th><th>잔여</th></tr></thead><tbody>${ds.map(d => `<tr><td><b>${esc(d.depot)}</b></td><td>${d.inQty}장</td><td>${d.outQty}장</td><td><b style="color:${d.remain <= 0 ? 'var(--t3)' : 'var(--gd)'}">${d.remain}장</b></td></tr>`).join('')}</tbody></table></div>` : ''; })()}
+    ${(() => { const ds = depotStock(it.name); return ds.length > 1 ? `<div class="sec-label"><i class="ti ti-building-warehouse"></i>창고별 재고</div><div class="tbl-wrap" style="margin-bottom:6px"><table class="tbl"><thead><tr><th>창고</th><th>입고</th><th>출고</th><th>잔여</th></tr></thead><tbody>${ds.map(d => `<tr><td><b>${esc(depotLabel(d.depot))}</b></td><td>${d.inQty}장</td><td>${d.outQty}장</td><td><b style="color:${d.remain <= 0 ? 'var(--t3)' : 'var(--gd)'}">${d.remain}장</b></td></tr>`).join('')}</tbody></table></div>` : ''; })()}
     <div class="sec-label" style="display:flex;justify-content:space-between;align-items:center"><span><i class="ti ti-alert-square-rounded" style="color:#d64545"></i> 파손 재고 <b style="color:#b42318">${damagedStock(it.name)}장</b></span><button class="btn btn-ghost btn-sm" type="button" onclick="openDamageForm('${it.id}')"><i class="ti ti-arrow-right-bar"></i>파손 처리</button></div>
     ${isAdmin() ? `<div class="sec-label"><i class="ti ti-history"></i>재고 조정 내역 <span style="font-weight:500;color:var(--t3)">(관리자)</span></div>
     ${(() => { const adjs = txns.filter(t => t.type === 'adjust').sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.createdAt || 0) - (a.createdAt || 0)); return adjs.length ? adjs.map(t => { const d = +t.jang || 0; return `<div class="alert-i b" style="margin-bottom:6px"><div class="ai" style="color:${d >= 0 ? 'var(--gd)' : 'var(--red-t)'}"><i class="ti ti-adjustments"></i></div><div class="at"><b style="color:${d >= 0 ? 'var(--gd)' : 'var(--red-t)'}">${d > 0 ? '+' : ''}${d}장</b><span>${esc(t.date || '')}${t.lot ? ' · 롯트 ' + esc(t.lot) : ''}${t.pattern ? ' · 패턴 ' + esc(t.pattern) : ''} · ${esc(t.note || '')} · ${esc(t.by || '')}</span></div><button class="btn btn-ghost btn-sm" type="button" onclick="event.stopPropagation();delAdjust('${t.id}')" title="되돌리기"><i class="ti ti-arrow-back-up"></i></button></div>`; }).join('') : `<div style="font-size:12.5px;color:var(--t3);padding:2px 0 8px">조정 내역이 없습니다</div>`; })()}` : ''}
@@ -2954,7 +2982,7 @@ function openInEdit(id) {
     <div class="frm">
       <div class="fld"><label>입고일</label><input type="date" id="ie-date" value="${esc(t.date || '')}"></div>
       <div class="fld"><label>공급처</label><input id="ie-vendor" lang="ko" value="${esc(t.vendor || '')}"></div>
-      <div class="fld"><label>창고(입고지)</label><input id="ie-depot" list="ie-depot-list" value="${esc(t.depot || '')}" placeholder="창고"><datalist id="ie-depot-list">${depotOptions().map(d => `<option value="${esc(d)}">`).join('')}</datalist></div>
+      <div class="fld"><label>창고(입고지)</label><input id="ie-depot" list="ie-depot-list" value="${esc(t.depot || '')}" placeholder="창고"><datalist id="ie-depot-list">${depotDatalistHtml()}</datalist></div>
       <div class="fld full"><label>롯트 넘버<span class="req">*</span></label><input id="ie-lot" value="${esc(t.lot || '')}" placeholder="롯트 넘버"></div>
       <div class="fld full"><label>패턴별 장수 <span style="color:var(--t3);font-weight:500">(패턴 없으면 이름 비우고 장수만)</span></label>
         <div id="iep-rows">${pats.map(iepRowHtml).join('')}</div>
@@ -2984,7 +3012,7 @@ async function submitInEdit(id) {
   await Store.update('transactions', id, {
     lot, patterns, jang: newJang, hebe: +(newJang * per).toFixed(2),
     date: el('ie-date').value || t.date || '', vendor: (el('ie-vendor').value || '').trim(), note: (el('ie-note').value || '').trim(),
-    depot: (el('ie-depot') && el('ie-depot').value || '').trim()
+    depot: normDepot(el('ie-depot') && el('ie-depot').value)
   });
   if (it && newJang !== oldJang) {
     await Store.update('inventory', it.id, { jang: (+it.jang || 0) + (newJang - oldJang) });   // 입고 총량 변경분만큼 실재고 보정(마이너스 허용)
@@ -3014,8 +3042,8 @@ function openAdjustForm(id) {
     <div class="frm">
       <div class="fld"><label>구분</label><select id="aj-dir" onchange="ajDirChange()"><option value="1">증가 (＋ 총재고)</option><option value="-1">감소 (－ 총재고)</option><option value="move">창고 이동 (총량 불변)</option></select></div>
       <div class="fld"><label>장수</label><input id="aj-jang" inputmode="numeric" value="1"></div>
-      <div class="fld full" id="aj-depot-fld"><label>창고 <span style="color:var(--t3);font-weight:500">(선택 · 창고별 총재고 보정 시)</span></label><input id="aj-depot" list="aj-depot-list" placeholder="창고"><datalist id="aj-depot-list">${depots.map(d => `<option value="${esc(d)}">`).join('')}</datalist></div>
-      <div class="fld full hidden" id="aj-move-fld"><label>창고 이동 (출발 → 도착) <span style="color:var(--t3);font-weight:500">(총재고는 그대로, 창고별만 이동)</span></label><div style="display:flex;gap:6px;align-items:center"><input id="aj-from" list="aj-dep2" placeholder="출발 창고" style="flex:1"><span style="flex:none;color:var(--t3)">→</span><input id="aj-to" list="aj-dep2" placeholder="도착 창고" style="flex:1"></div><datalist id="aj-dep2">${depotOptions().map(d => `<option value="${esc(d)}">`).join('')}</datalist></div>
+      <div class="fld full" id="aj-depot-fld"><label>창고 <span style="color:var(--t3);font-weight:500">(선택 · 창고별 총재고 보정 시)</span></label><input id="aj-depot" list="aj-depot-list" placeholder="창고"><datalist id="aj-depot-list">${depots.map(d => `<option value="${esc(d)}">${esc(depotLabel(d))}</option>`).join('')}</datalist></div>
+      <div class="fld full hidden" id="aj-move-fld"><label>창고 이동 (출발 → 도착) <span style="color:var(--t3);font-weight:500">(총재고는 그대로, 창고별만 이동)</span></label><div style="display:flex;gap:6px;align-items:center"><input id="aj-from" list="aj-dep2" placeholder="출발 창고" style="flex:1"><span style="flex:none;color:var(--t3)">→</span><input id="aj-to" list="aj-dep2" placeholder="도착 창고" style="flex:1"></div><datalist id="aj-dep2">${depotDatalistHtml()}</datalist></div>
       <div class="fld full"><label>롯트 <span style="color:var(--t3);font-weight:500">(선택 · 비우면 총량만 보정)</span></label><input id="aj-lot" list="aj-lot-list" placeholder="롯트"><datalist id="aj-lot-list">${lots.map(l => `<option value="${esc(l)}">`).join('')}</datalist></div>
       <div class="fld full"><label>패턴 <span style="color:var(--t3);font-weight:500">(선택)</span></label><input id="aj-pat" list="aj-pat-list" lang="ko" placeholder="패턴"><datalist id="aj-pat-list">${pats.map(p => `<option value="${esc(p)}">`).join('')}</datalist></div>
       <div class="fld full"><label>사유</label><input id="aj-note" lang="ko" placeholder="예: 실사 보정 · 잘못 출고 후 보관 등"></div>
@@ -3038,7 +3066,9 @@ async function submitAdjust(id) {
   const lot = (el('aj-lot').value || '').trim(), pattern = (el('aj-pat').value || '').trim();
   const note = (el('aj-note').value || '').trim() || '재고 조정';
   if (mode === 'move') {
-    const from = (el('aj-from').value || '').trim(), to = (el('aj-to').value || '').trim();
+    const rawFrom = (el('aj-from').value || '').trim(), rawTo = (el('aj-to').value || '').trim();
+    if (!rawFrom || !rawTo) { toast('출발·도착 창고를 입력하세요'); return; }
+    const from = normDepot(rawFrom), to = normDepot(rawTo);
     if (!from || !to) { toast('출발·도착 창고를 입력하세요'); return; }
     if (from === to) { toast('출발과 도착 창고가 같습니다'); return; }
     const moveId = 'M' + Date.now();
@@ -3054,7 +3084,7 @@ async function submitAdjust(id) {
   const delta = dir * n;
   await Store.add('transactions', {
     type: 'adjust', itemId: it.id, itemName: it.name, spec: it.spec || '',
-    jang: delta, lot, pattern, depot: (el('aj-depot').value || '').trim(),
+    jang: delta, lot, pattern, depot: normDepot(el('aj-depot').value),
     note, date: todayStr(), by: me.name
   });
   await Store.update('inventory', it.id, { jang: (+it.jang || 0) + delta });
@@ -3113,7 +3143,7 @@ async function submitItem(id) {
   let vendor = el('i-vendor').value; if (vendor === '__add') vendor = ''; vendor = vendor.trim();
   const patterns = [];
   if (ceramic) document.querySelectorAll('#ipat-defs .ipat-name').forEach(i => { const val = (i.value || '').trim(); if (val && !patterns.includes(val)) patterns.push(val); });
-  const obj = { name, cat, stone, spec, vendor, depot: el('i-depot').value.trim() || '본사', jang, hebePerJang: ceramic ? ps.hebePerJang : 0, safeJang: parseFloat(el('i-safe').value) || 0, patterns };
+  const obj = { name, cat, stone, spec, vendor, depot: normDepot(el('i-depot').value), jang, hebePerJang: ceramic ? ps.hebePerJang : 0, safeJang: parseFloat(el('i-safe').value) || 0, patterns };
   if (id) { await Store.update('inventory', id, obj); toast('저장됨'); }
   else { obj.lastInDate = todayStr(); await Store.add('inventory', obj); toast('품목 추가됨'); }
   closeModal();
@@ -3138,7 +3168,7 @@ function openStockForm() {
       </div>
       <div class="fld"><label>규격</label><input id="in-spec" readonly placeholder="자재 선택 시 자동" style="background:var(--soft)"></div>
       <div class="fld" id="in-lot-fld"><label>롯트 넘버<span class="req">*</span></label><input id="in-lot" placeholder="롯트 넘버 입력"></div>
-      <div class="fld"><label>창고(입고지)</label><input id="in-depot" list="in-depot-list" placeholder="창고"><datalist id="in-depot-list">${depotOptions().map(d => `<option value="${esc(d)}">`).join('')}</datalist></div>
+      <div class="fld"><label>창고(입고지) <span style="color:var(--t3);font-weight:500">(비우면 기본)</span></label><input id="in-depot" list="in-depot-list" placeholder="${HOME_DEPOT_LABEL} (기본)"><datalist id="in-depot-list">${depotDatalistHtml()}</datalist></div>
     </div>
     <div id="in-pattern-block">
       <div class="sec-label"><i class="ti ti-layout-grid"></i>패턴별 장수 <span style="font-weight:500;color:var(--t3)">(패턴이 없으면 장수만 입력)</span></div>
@@ -3238,7 +3268,7 @@ async function submitStock() {
   const hebe = ceramic ? +(jang * (+it.hebePerJang || 0)).toFixed(2) : 0;
   let vendor = el('in-vendor').value; if (vendor === '__add') vendor = ''; vendor = (vendor || '다우세라믹앤석재').trim();
   const date = el('in-date').value, note = el('in-note').value.trim();
-  const depot = (el('in-depot') && el('in-depot').value || '').trim() || it.depot || '본사';
+  const depot = normDepot((el('in-depot') && el('in-depot').value || '').trim() || it.depot);
   const newJang = (+it.jang || 0) + jang;
   await Store.update('inventory', it.id, { jang: newJang, lastInDate: date });
   await Store.add('transactions', { type: 'in', itemId: it.id, itemName: it.name, spec: it.spec, lot, patterns, jang, hebe, vendor, date, note, depot, by: me.name });
@@ -6805,7 +6835,7 @@ function openShipForm(pre) {
       <div class="fld full"><label>업체명<span class="req">*</span></label>${searchBox('o-targetName', '업체명 검색·입력', (pre && pre.targetName) || '', 'companyNames', '')}</div>
       <div class="fld full"><label>출고 자재 / 장수 / 롯트 / 패턴<span class="req">*</span> <span style="color:var(--t3);font-weight:500">(여러 자재는 '자재 추가')</span></label>${matRowsHtml(pre && pre.items && pre.items.length ? pre.items : (pre && pre.material ? [{ name: pre.material, qty: pre.jang, lot: pre.lot, pattern: pre.pattern }] : [{}]), '장수')}</div>
       <div class="fld"><label>출고일<span class="req">*</span></label><input type="date" id="o-date" value="${todayStr()}"></div>
-      <div class="fld"><label>출고 창고 <span style="color:var(--t3);font-weight:500">(창고 여러 곳일 때만)</span></label><input id="o-depot" list="o-depot-list" placeholder="창고(선택)"><datalist id="o-depot-list">${depotOptions().map(d => `<option value="${esc(d)}">`).join('')}</datalist></div>
+      <div class="fld"><label>출고 창고 <span style="color:var(--t3);font-weight:500">(비우면 기본 · 거봉석재 등 다른 창고에서 나갈 때만 지정)</span></label><input id="o-depot" list="o-depot-list" placeholder="${HOME_DEPOT_LABEL} (기본)"><datalist id="o-depot-list">${depotDatalistHtml()}</datalist></div>
       <div class="fld full"><label>출고지(공장/현장)<span class="req">*</span></label>
         <select id="o-dest" onchange="onShipDest()">
           <option value="">선택…</option>
@@ -6887,7 +6917,7 @@ async function submitShip() {
       const newJang = oldJang - jang;   // 재고보다 많이 출고하면 마이너스로 남김 → 다음 입고 때 자동 상쇄
       const hebe = it ? +(jang * (+it.hebePerJang || 0)).toFixed(2) : 0;
       const lot = (r.lot && r.lot.trim()) ? r.lot.trim() : soleLot(material);   // 롯트 미지정인데 남은 롯트가 하나면 자동 연동
-      const oDepot = (r.depot && r.depot.trim()) ? r.depot.trim() : (el('o-depot') && el('o-depot').value || '').trim();   // 행별 창고 우선(창고별 재고), 없으면 폼 상단 창고
+      const oDepot = normDepot((r.depot && r.depot.trim()) ? r.depot.trim() : (el('o-depot') && el('o-depot').value || '').trim());   // 행별 창고 우선, 없으면 폼 상단 창고, 그것도 없으면 기본창고(본사)
       if (it) await Store.update('inventory', it.id, { jang: newJang });
       await Store.add('transactions', { type: 'out', shipId, itemId: it ? it.id : '', itemName: material, spec: it ? it.spec : '', hebe, jang, lot, pattern: r.pattern, depot: oDepot, dest, factory: dest, target: '', targetName, date, note, damaged, createdAt: Date.now(), by: me.name });
       totalJang += jang;
