@@ -5501,6 +5501,16 @@ function _quoteListInner() {
   const ym = todayStr().slice(0, 7);
   let list = all.slice().sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
   if (qy) list = list.filter(q => (q.client || '').toLowerCase().includes(qy) || (q.docNo || '').toLowerCase().includes(qy) || (q.items || []).some(it => (it.name || '').toLowerCase().includes(qy)));
+  // 상태 필터: 계산서 미발행 / 세면대 미발주 / 미결제
+  const stat = filters.quoteStat || 'all';
+  const _isBasinQ = q => (q.items || []).some(it => (it.name || '').includes('세면대') && /주문제작|비규격/.test(it.name || ''));
+  const _isNoTax = q => !q.taxInvoice;
+  const _isBasinPend = q => _isBasinQ(q) && !q.basinDone;
+  const _isUnpaid = q => (+q.paidAmount || 0) < (+q.total || 0);
+  const _cNoTax = list.filter(_isNoTax).length, _cBasin = list.filter(_isBasinPend).length, _cUnpaid = list.filter(_isUnpaid).length;
+  if (stat === 'notax') list = list.filter(_isNoTax); else if (stat === 'basin') list = list.filter(_isBasinPend); else if (stat === 'unpaid') list = list.filter(_isUnpaid);
+  const _sc = (v, label, cnt) => `<button class="chip ${stat === v ? 'active' : ''}" onclick="quoteSetStat('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? 'var(--red-t)' : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
+  const statChips = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${_sc('all', '전체')}${_sc('notax', '계산서 미발행', _cNoTax)}${_sc('basin', '세면대 미발주', _cBasin)}${_sc('unpaid', '미결제', _cUnpaid)}</div>`;
   const view = filters.quoteView || 'all';
   const curMonth = filters.quoteMonth || ym;
   const curDay = filters.quoteDay || todayStr();
@@ -5533,9 +5543,10 @@ function _quoteListInner() {
   } else {
     body = list.length ? list.map(quoteCardHtml).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${qy ? '검색 결과가 없습니다' : '작성한 견적이 없습니다. 견적 작성으로 시작하세요.'}</div>`;
   }
-  return `${navBar}<div id="q-list" data-keepscroll style="max-height:calc(100vh - 300px);min-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${body}</div>`;
+  return `${statChips}${navBar}<div id="q-list" data-keepscroll style="max-height:calc(100vh - 300px);min-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${body}</div>`;
 }
 function quotesFilter() { const w = el('q-listwrap'); if (!w) { renderQuote(); return; } w.innerHTML = _quoteListInner(); }
+function quoteSetStat(v) { filters.quoteStat = v; quotesFilter(); }
 function quoteDocHtml(q) {
   if (q.category === '통관비용') return customsDocHtml(q);
   const e = s => esc(s == null ? '' : String(s));
