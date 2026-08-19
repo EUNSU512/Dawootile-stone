@@ -4489,8 +4489,9 @@ th{background:#f1efe8;font-weight:700}td.c{text-align:center}td.l{text-align:lef
 }
 let _cutSheet = { L: 3200, W: 1600 };
 const CUT_KERF = 3;   // 톱날(재단날) 두께 3mm 고정
+function _cutSimSheetClear() { const sh = el('sheet'); if (sh && sh.querySelector('#cutsim-root') && !(el('modal') && el('modal').classList.contains('open'))) sh.innerHTML = ''; }   // 닫힌 모달에 남은 시뮬레이터 DOM 제거(ID 중복 방지)
 let _cutGroups = []; let _cutCid = 0;
-function openCutSim() { if (isCustomerRole()) { toast('권한이 없습니다'); return; } _cutGroups = []; _cutCid = 0; filters.cutSim = true; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
+function openCutSim() { if (isCustomerRole()) { toast('권한이 없습니다'); return; } _cutGroups = []; _cutCid = 0; _cutSimSheetClear(); filters.cutSim = true; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
 function cutSimClose() { filters.cutSim = false; renderQuote(); }
 function cutRowHtml(p) {
   p = p || {}; const cid = p.cid != null ? p.cid : (++_cutCid); const inp = 'width:100%;font-size:14px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px;text-align:center';
@@ -4703,7 +4704,7 @@ function cutSimBodyHtml() {
     <div id="cut-result"></div>`;
 }
 function renderCutSim() {
-  const _sh = el('sheet'); if (_sh && _sh.querySelector('#cutsim-root')) _sh.innerHTML = '';   // 모달에 남아있는 시뮬레이터 잔재 제거(ID 중복 방지)
+  _cutSimSheetClear();
   el('pg-quote').innerHTML = `<div id="cutsim-root">
     <div class="ph"><div><h2><i class="ti ti-layout-grid"></i>재단 시뮬레이션</h2><p>판재·부재 치수 입력 → 재단 배치 · 면적 · 재단 미터수 자동 계산 (직원용)</p></div>
       <button class="btn btn-sm" onclick="cutSimClose()"><i class="ti ti-arrow-left"></i>견적</button></div>
@@ -5464,7 +5465,7 @@ function renderSettle() {
 function renderQuote() {
   keepScrolls();
   if (filters.quoteSettings) { if (!document.getElementById('qset-root')) renderQuoteSettings(); return; }   // 설정 화면
-  if (filters.cutSim) { if (!document.getElementById('cutsim-root')) renderCutSim(); return; }   // 재단 시뮬레이션
+  if (filters.cutSim) { const _pq = el('pg-quote'); if (!(_pq && _pq.querySelector('#cutsim-root'))) renderCutSim(); return; }   // 재단 시뮬레이션
   if (filters.quoteEdit) { if (!document.getElementById('qform-root')) renderQuoteForm(); return; }   // 편집 중엔 실시간 재렌더로 폼을 덮어쓰지 않음
   if (filters.taxEdit) { if (!document.getElementById('taxform-root')) renderTaxForm(); return; }   // 세금계산서 발행 화면
   if (filters.costEdit) { if (!document.getElementById('cost-root')) renderCostForm(); return; }   // 원가 정리(관리자)
