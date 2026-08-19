@@ -4026,7 +4026,7 @@ function renderQuoteForm() {
   const editing = q && !copy;
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>${editing ? '견적 수정' : (copy ? '견적 복사' : '견적 작성')}</h2><p>거래처·품목을 입력하면 합계가 자동 계산됩니다</p></div>
-      <button class="btn btn-sm" onclick="quoteCancel()"><i class="ti ti-arrow-left"></i> 목록</button></div>
+      <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="openCutSimModal()"><i class="ti ti-layout-grid"></i>재단 시뮬레이션</button><button class="btn btn-sm" onclick="quoteCancel()"><i class="ti ti-arrow-left"></i> 목록</button></div></div>
     <div id="qform-root" class="card" style="padding:15px 17px">
       <div class="frm" style="display:block">
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
@@ -4488,6 +4488,7 @@ th{background:#f1efe8;font-weight:700}td.c{text-align:center}td.l{text-align:lef
   w.document.write(html); w.document.close(); w.focus();
 }
 let _cutSheet = { L: 3200, W: 1600 };
+const CUT_KERF = 3;   // 톱날(재단날) 두께 3mm 고정
 let _cutGroups = []; let _cutCid = 0;
 function openCutSim() { if (isCustomerRole()) { toast('권한이 없습니다'); return; } _cutGroups = []; _cutCid = 0; filters.cutSim = true; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
 function cutSimClose() { filters.cutSim = false; renderQuote(); }
@@ -4508,7 +4509,7 @@ function cutMakeGroup() {
   const sel = [...document.querySelectorAll('.cut-row')].filter(r => { const c = r.querySelector('.ct-sel'); return c && c.checked; });
   const grainOn = el('cut-grain') && el('cut-grain').checked;
   const Ws = _numv(el('cut-sheetL') && el('cut-sheetL').value) || 3200, Hs = _numv(el('cut-sheetW') && el('cut-sheetW').value) || 1600;
-  const kerf = _numv(el('cut-kerf') && el('cut-kerf').value) || 0;
+  const kerf = CUT_KERF;   // 톱날두께 3mm 고정
   let items;
   if (sel.length === 1) {
     // 같은 부재 여러 장 연결 (수량 기준)
@@ -4645,7 +4646,7 @@ function cutSheetSvg(sh, Ws, Hs, n) {
 function runCutSim() {
   const Ws = _numv(el('cut-sheetL').value) || 3200, Hs = _numv(el('cut-sheetW').value) || 1600;
   _cutSheet = { L: Ws, W: Hs };
-  const kerf = _numv(el('cut-kerf') && el('cut-kerf').value) || 0;
+  const kerf = CUT_KERF;   // 톱날두께 3mm 고정
   const parts = _collectCutParts();
   if (!parts.length) { toast('부재 치수를 입력하세요'); return; }
   const grainOn = el('cut-grain') && el('cut-grain').checked;
@@ -4678,19 +4679,17 @@ function runCutSim() {
     </div>${over ? '<div style="color:#c0341d;font-size:12px;margin-bottom:8px"><i class="ti ti-alert-triangle"></i> 판재보다 큰 부재가 있습니다 — 치수를 확인하세요</div>' : ''}
     ${sheets.map((sh, i) => cutSheetSvg(sh, Ws, Hs, i + 1)).join('')}`;
 }
-function renderCutSim() {
+/* 재단 시뮬레이터 본문 HTML — 견적서 화면(전체) / 견적 작성 모달 양쪽에서 재사용 */
+function cutSimBodyHtml() {
   const inp = 'width:110px;font-size:15px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px;text-align:center';
   const rows = cutRowHtml({}) + cutRowHtml({}) + cutRowHtml({});
-  el('pg-quote').innerHTML = `
-    <div id="cutsim-root">
-    <div class="ph"><div><h2><i class="ti ti-layout-grid"></i>재단 시뮬레이션</h2><p>판재·부재 치수 입력 → 재단 배치 · 면적 · 재단 미터수 자동 계산 (직원용)</p></div>
-      <button class="btn btn-sm" onclick="cutSimClose()"><i class="ti ti-arrow-left"></i>견적</button></div>
+  return `
     <div class="card" style="padding:13px 15px;margin-bottom:12px">
       <div style="font-weight:700;font-size:13.5px;margin-bottom:9px">판재 규격</div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
         <input id="cut-sheetL" inputmode="numeric" value="${_cutSheet.L}" style="${inp}"> <span style="color:var(--t3)">×</span>
         <input id="cut-sheetW" inputmode="numeric" value="${_cutSheet.W}" style="${inp}"> <span style="color:var(--t3);font-size:13px">mm</span>
-        <span style="margin-left:12px;font-size:12px;color:var(--t3)">톱날두께</span> <input id="cut-kerf" inputmode="numeric" value="0" style="width:70px;font-size:14px;padding:8px;border:1.5px solid var(--bd2);border-radius:9px;text-align:center"> <span style="font-size:12px;color:var(--t3)">mm</span>
+        <span style="margin-left:12px;font-size:12px;color:var(--t3)">톱날두께</span> <span id="cut-kerf-fix" style="display:inline-flex;align-items:center;gap:3px;font-size:14px;font-weight:800;color:var(--gd);background:var(--soft);border:1.5px solid var(--bd2);border-radius:9px;padding:8px 12px">${CUT_KERF}<span style="font-size:11.5px;font-weight:600;color:var(--t3)">mm</span></span> <span style="font-size:11px;color:var(--t3)">고정</span>
       </div>
       <label style="display:inline-flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;background:var(--soft);border-radius:9px;padding:8px 11px;cursor:pointer"><input type="checkbox" id="cut-grain" onchange="cutGrainToggle()" style="width:17px;height:17px"> 결방향 자재 (무늬결 있음) <span style="color:var(--t3);font-size:11.5px">— 체크 시 회전 없이 결 방향 유지</span></label>
     </div>
@@ -4701,8 +4700,21 @@ function renderCutSim() {
       <div id="cut-groups" style="margin-top:6px">${cutGroupsInner()}</div>
       <button class="btn btn-pri btn-block" style="margin-top:11px" onclick="runCutSim()"><i class="ti ti-player-play"></i>재단 시뮬레이션 실행</button>
     </div>
-    <div id="cut-result"></div>
-    </div>`;
+    <div id="cut-result"></div>`;
+}
+function renderCutSim() {
+  const _sh = el('sheet'); if (_sh && _sh.querySelector('#cutsim-root')) _sh.innerHTML = '';   // 모달에 남아있는 시뮬레이터 잔재 제거(ID 중복 방지)
+  el('pg-quote').innerHTML = `<div id="cutsim-root">
+    <div class="ph"><div><h2><i class="ti ti-layout-grid"></i>재단 시뮬레이션</h2><p>판재·부재 치수 입력 → 재단 배치 · 면적 · 재단 미터수 자동 계산 (직원용)</p></div>
+      <button class="btn btn-sm" onclick="cutSimClose()"><i class="ti ti-arrow-left"></i>견적</button></div>
+    ${cutSimBodyHtml()}</div>`;
+}
+/* 견적 작성/수정 중에 팝업으로 재단 시뮬레이션 (작성 중인 견적 내용은 그대로 유지됨) */
+function openCutSimModal() {
+  if (isCustomerRole()) { toast('권한이 없습니다'); return; }
+  _cutGroups = []; _cutCid = 0;
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-layout-grid"></i>재단 시뮬레이션</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div id="cutsim-root">${cutSimBodyHtml()}</div>`);
 }
 function openQuoteSettings() { filters.quoteSettings = true; renderQuote(); }
 function quoteSettingsClose() { filters.quoteSettings = false; renderQuote(); }
