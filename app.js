@@ -4160,8 +4160,10 @@ async function quoteMarkTax(id) { const q = (state.quotes || []).find(x => x.id 
 function quoteToShip(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
   try { Store.update('quotes', id, { shipped: true, shipStartedAt: Date.now() }); } catch (e) { }
-  openShipForm({ targetName: q.client, items: (q.items || []).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' })) });
-  toast('견적 품목을 출고 등록 폼에 불러왔습니다 · 확인 후 등록하세요');
+  const mats = quoteMaterialItems(q);
+  if (!mats.length) { toast('출고할 자재가 없습니다 (가공·운송·시공 항목만 있는 견적)'); return; }
+  openShipForm({ targetName: q.client, items: mats.map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' })) });
+  toast('견적의 자재만 출고 등록 폼에 불러왔습니다 · 확인 후 등록하세요');
 }
 function quoteConfirmOrder(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
@@ -4241,18 +4243,33 @@ async function quoteLinkSiteDo(siteId) {
   } catch (e) { }
   closeModal(); toast('현장에 연결됨 · 현장 등록 완료'); try { renderQuote(); } catch (e) { }
 }
+/* 견적 품목 중 '실제 자재'만 골라냄 — 홀딩·출고 불러오기 공통.
+   부대비용/가공 칸에서 넣은 항목(it.extra), 부대비용 항목명, 가공·운송·시공 키워드,
+   주문제작 세면대(재고가 아님)는 모두 제외. 재고·단가표에 등록된 이름이면 자재로 인정. */
+function quoteMaterialItems(q) {
+  const isOrderBasin = n => (n || '').includes('세면대') && /주문제작|비규격/.test(n || '');
+  const extraSet = new Set(extraItemsList().map(x => _normName(x.name)).concat(CONSUMER_GAGONG.map(x => _normName(x.name))));
+  let matSet; try { matSet = new Set(quotePriceItems().map(i => _normName(i.name))); } catch (e) { matSet = new Set(); }
+  return (q && q.items || []).filter(it => {
+    const nm = it.name || ''; if (!nm) return false;
+    if (it.extra) return false;                      // 부대비용·가공 칸에서 입력된 항목
+    if (extraSet.has(_normName(nm))) return false;   // 부대비용 항목명과 같음(예전 견적 호환)
+    if (isOrderBasin(nm)) return false;              // 주문제작 세면대는 재고 아님
+    if (matSet.has(_normName(nm))) return true;      // 재고·단가표에 있는 실제 자재
+    return marginCat(nm) === '자재';                 // 목록에 없으면 이름으로 보조 판정
+  });
+}
 function quoteToHold(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
-  const isOrderBasin = n => (n || '').includes('세면대') && /주문제작|비규격/.test(n || '');
-  const items = (q.items || []).filter(it => marginCat(it.name) === '자재' || ((it.name || '').includes('세면대') && !isOrderBasin(it.name))).map(it => ({ materialName: it.name, jang: it.qty, lot: '' }));
-  if (!items.length) { toast('홀딩할 자재가 없습니다 (가공·운송·주문제작 세면대 제외)'); return; }
+  const items = quoteMaterialItems(q).map(it => ({ materialName: it.name, jang: it.qty, lot: '' }));
+  if (!items.length) { toast('홀딩할 자재가 없습니다 (가공·운송·시공·주문제작 세면대 제외)'); return; }
   go('hold'); setTimeout(() => { try { openHoldForm('', { vendor: q.client, items: items, note: '견적 ' + (q.docNo || '') + ' 홀딩' }); } catch (e) { } }, 90);
-  toast('홀딩 등록으로 불러왔습니다 · 확인 후 등록');
+  toast('자재만 홀딩 등록으로 불러왔습니다 · 확인 후 등록');
 }
 function quoteToOrder(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
   try { Store.update('quotes', id, { ordered: true, orderedAt: Date.now(), shipped: true, shipStartedAt: q.shipStartedAt || Date.now() }); } catch (e) { }
-  const items = (q.items || []).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' }));
+  const items = quoteMaterialItems(q).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' }));   // 가공·운송·시공 제외, 자재만
   const hasBasin = (q.items || []).some(it => (it.name || '').includes('세면대'));
   if (hasBasin) {
     let bi = (q.items || []).filter(it => (it.name || '').includes('세면대')).map(it => ({ stone: it.stone || '', spec: it.spec || '', qty: it.qty || '', quoteNo: q.docNo || '' }));
