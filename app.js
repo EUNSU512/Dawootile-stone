@@ -110,7 +110,7 @@ let me = null;          // 로그인한 사용자
 let tab = 'home';
 let filters = { sites: 'all', stock: 'all', stockSearch: '', siteSearch: '', siteSearchField: 'all', holdArchive: false, holdDone: false, holdSearch: '', holdGroup: 'none', custSearch: '', shipSearch: '', basinSearch: '' };
 let _holdLinkSite = null;   // 현장 저장 시 이 홀딩을 현장에 '연결'(소진 아님)
-let _holdConfirm = null;    // 출고 저장 시 이 홀딩을 '확정' 처리
+let _holdConfirm = null;    // 출고 저장 시 '확정' 처리할 홀딩 id (단건 문자열 또는 묶음 출고 시 id 배열)
 let _busy = false;          // 등록 버튼 연속 클릭(중복 저장) 방지
 function openStockTab(filter) { filters.stock = filter || 'all'; filters.stockSearch = ''; go('stock'); }
 
@@ -6977,7 +6977,15 @@ async function submitShip() {
       totalJang += jang;
       if (it && oldJang > 0 && newJang <= 0) zeroed.push(material);
     }
-    if (_holdConfirm) { await Store.update('holdings', _holdConfirm, { status: '확정', shippedDate: date, shippedJang: totalJang, confirmShipId: shipId }); _holdConfirm = null; }
+    const _hcIds = Array.isArray(_holdConfirm) ? _holdConfirm.slice() : (_holdConfirm ? [_holdConfirm] : []);
+    if (_hcIds.length) {   // 홀딩 → 출고: 연결된 홀딩(묶음이면 전부)을 '확정' 처리
+      for (const _hid of _hcIds) {
+        const _hh = state.holdings.find(x => x.id === _hid); if (!_hh) continue;
+        const _hj = _hcIds.length === 1 ? totalJang : holdItems(_hh).reduce((a, x) => a + (+x.jang || 0), 0);
+        await Store.update('holdings', _hid, { status: '확정', shippedDate: date, shippedJang: _hj, confirmShipId: shipId });
+      }
+      _holdConfirm = null;
+    }
     for (const nm of zeroed) notifyStockOut(nm);   // 재고 소진 → 즉시 푸시
     // 출고 대기열(출고관리)에 등록 — 재고는 위에서 이미 차감됨(stockApplied). 소리 알림은 '출고 지시' 낼 때만.
     try {
@@ -7048,6 +7056,7 @@ function holdMatchesSearch(h) {
 }
 function holdCardHtml(h) {
   const d = daysFromNow(h.useDate);
+  const _vHoldN = (h.status || '홀딩') === '홀딩' ? vendorHoldsFor(h.vendor).length : 0;   // 같은 업체 출고가능 홀딩 수
   const conf = h.status === '확정';
   const plan = h.status === '예정';
   const rel = h.status === '해제';
@@ -7058,9 +7067,10 @@ function holdCardHtml(h) {
           <button class="btn btn-sm" style="flex:1" onclick="releaseHold('${h.id}')"><i class="ti ti-lock-open"></i>해제</button>
           ${isAdmin() ? `<button class="btn btn-sm btn-danger" onclick="delHold('${h.id}')"><i class="ti ti-trash"></i>삭제</button>` : ''}
         </div>` : `
+        ${_vHoldN > 1 ? `<button class="btn btn-pri btn-sm btn-block" style="margin-bottom:8px;background:#5847b8;border-color:#5847b8" onclick="holdToShipVendorOf('${h.id}')"><i class="ti ti-stack-2"></i>이 업체 홀딩 ${_vHoldN}건 묶어서 출고</button>` : ''}
         <div style="display:flex;gap:8px">
           <button class="btn btn-pri btn-sm" style="flex:1" onclick="holdToSite('${h.id}')"><i class="ti ti-building-community"></i>현장으로</button>
-          <button class="btn btn-pri btn-sm" style="flex:1;background:var(--blue);border-color:var(--blue)" onclick="holdToShip('${h.id}')"><i class="ti ti-truck-delivery"></i>출고로</button>
+          <button class="btn btn-pri btn-sm" style="flex:1;background:var(--blue);border-color:var(--blue)" onclick="holdToShip('${h.id}')"><i class="ti ti-truck-delivery"></i>${_vHoldN > 1 ? '이 건만 출고' : '출고로'}</button>
         </div>
         <div style="display:flex;gap:8px;margin-top:8px">
           <button class="btn btn-sm" style="flex:1" onclick="openHoldForm('${h.id}')"><i class="ti ti-edit"></i>수정</button>
@@ -7095,7 +7105,7 @@ function openHoldDetail(id) {
   const h = state.holdings.find(x => x.id === id); if (!h) return;
   openModal(`<div class="sheet-h"><h3><i class="ti ti-lock"></i>홀딩 상세</h3><button class="x" onclick="closeModal()">×</button></div>${holdCardHtml(h)}`);
 }
-function holdGroupedHtml(list, keyFn, icon) {
+function holdGroupedHtml(list, keyFn, icon, actionFn) {
   const map = new Map();
   list.forEach(h => keyFn(h).forEach(k => {
     if (!map.has(k)) map.set(k, []);
@@ -7103,7 +7113,8 @@ function holdGroupedHtml(list, keyFn, icon) {
   }));
   const keys = [...map.keys()].sort((a, b) => a.localeCompare(b));
   if (!keys.length) return `<div class="empty"><i class="ti ti-lock-off"></i>해당하는 홀딩이 없습니다</div>`;
-  return keys.map(k => `<div class="sec-label" style="margin-top:8px"><i class="ti ${icon}"></i> ${esc(k)} <span style="color:var(--t3);font-weight:500">· ${map.get(k).length}건</span></div>${holdTableHtml(map.get(k))}`).join('');
+  return keys.map(k => { const hs = map.get(k); const act = actionFn ? (actionFn(k, hs) || '') : '';
+    return `<div class="sec-label" style="margin-top:8px"><i class="ti ${icon}"></i> ${esc(k)} <span style="color:var(--t3);font-weight:500">· ${hs.length}건</span>${act}</div>${holdTableHtml(hs)}`; }).join('');
 }
 /* 홀딩 화면 보기 전환: 'active'(진행+예정) / 'done'(출고완료) / 'released'(지난·해제) */
 function goHoldView(v) { filters.holdDone = (v === 'done'); filters.holdArchive = (v === 'released'); renderHold(); }
@@ -7180,7 +7191,10 @@ function holdBodyHtml() {
   let inner;
   if (!list.length) inner = `<div class="empty"><i class="ti ti-lock-off"></i>${(filters.holdSearch || '').trim() ? '검색 결과가 없습니다' : '홀딩이 없습니다'}</div>`;
   else if (g === 'material') inner = holdGroupedHtml(list, h => { const ms = holdItems(h).map(it => it.materialName || '(자재 미지정)'); return ms.length ? [...new Set(ms)] : ['(자재 미지정)']; }, 'ti-box');
-  else if (g === 'vendor') inner = holdGroupedHtml(list, h => [h.vendor || '(업체 미지정)'], 'ti-briefcase');
+  else if (g === 'vendor') inner = holdGroupedHtml(list, h => [h.vendor || '(업체 미지정)'], 'ti-briefcase', (k, hs) => {
+    const ship = hs.filter(h => (h.status || '홀딩') === '홀딩' && (h.vendor || '').trim());
+    return ship.length > 1 ? `<button class="btn btn-sm" style="margin-left:auto;color:#fff;background:#5847b8;border-color:#5847b8" onclick="holdToShipVendorOf('${ship[0].id}')"><i class="ti ti-stack-2"></i> ${ship.length}건 묶어서 출고</button>` : '';
+  });
   else inner = holdTableHtml(list);
   return `<div class="hold-scroll">${inner}</div>`;
 }
@@ -7413,8 +7427,31 @@ function holdToSite(id) {
 /* 홀딩 → 출고 (출고가 찍히면 그 홀딩이 '확정'으로). 다자재면 첫 자재부터 — 나머지는 따로 출고 */
 function holdToShip(id) {
   const h = state.holdings.find(x => x.id === id); if (!h) return;
-  _holdConfirm = id;
+  _holdConfirm = [id];
   openShipForm({ items: holdItems(h).map(it => ({ name: it.materialName, qty: it.jang, lot: it.lot, pattern: it.pattern })), targetName: h.vendor || h.forSiteName || '' });
+}
+/* 같은 업체의 출고 가능한(=상태 '홀딩') 건들 — 예정·확정·해제는 제외 */
+function vendorHoldsFor(vendor) {
+  const key = _normName(vendor || ''); if (!key) return [];
+  return (state.holdings || []).filter(h => (h.status || '홀딩') === '홀딩' && _normName(h.vendor || '') === key);
+}
+/* 같은 업체 홀딩 여러 건을 한 번에 출고 — 자재를 합쳐 출고 폼에 올리고, 저장되면 그 홀딩들이 모두 '확정' */
+function holdToShipVendorOf(id) {
+  const h0 = (state.holdings || []).find(x => x.id === id); if (!h0) return;
+  const hs = vendorHoldsFor(h0.vendor);
+  if (!hs.length) { toast('출고할 홀딩이 없습니다'); return; }
+  const map = {}, order = [];
+  hs.forEach(h => holdItems(h).forEach(it => {
+    const nm = (it.materialName || '').trim(); if (!nm) return;
+    const k = _normName(nm) + '|' + (it.lot || '') + '|' + (it.pattern || '');   // 자재+롯트+패턴이 같을 때만 합침
+    if (!map[k]) { map[k] = { name: nm, qty: 0, lot: it.lot || '', pattern: it.pattern || '' }; order.push(k); }
+    map[k].qty += (+it.jang || 0);
+  }));
+  const items = order.map(k => map[k]).filter(x => x.qty > 0);
+  if (!items.length) { toast('출고할 자재가 없습니다'); return; }
+  _holdConfirm = hs.map(h => h.id);
+  openShipForm({ items: items, targetName: h0.vendor || '' });
+  toast(`${h0.vendor} 홀딩 ${hs.length}건 · 자재 ${items.length}종을 합쳤습니다 · 확인 후 등록`);
 }
 
 /* ===================================================================
