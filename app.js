@@ -4342,9 +4342,31 @@ function renderTaxForm() {
         ${(+q.discount || 0) > 0 ? `<div style="display:flex;justify-content:space-between;margin-bottom:5px"><span style="color:var(--t2)">할인 (D/C)</span><b style="color:#c0341d">- ${fmtWon(q.discount)}원</b></div>` : ''}
         <div style="display:flex;justify-content:space-between;font-size:15px;border-top:1px solid var(--bd2);padding-top:6px"><span style="font-weight:700">합계</span><b style="color:var(--gd)">${fmtWon(q.total)}원</b></div>
       </div>
-      <div style="font-size:11.5px;color:var(--t3);margin-bottom:11px">발행 시 국세청 전송되며 팝빌 포인트가 과금됩니다. 공급받는자 이메일로 발행 안내가 발송됩니다. ${co.bizno ? '' : '<b style="color:#c0341d">공급자 사업자번호가 없어 발행이 안 됩니다 — 회사 정보에서 설정하세요.</b>'}</div>
+      <div style="background:var(--soft);border-radius:11px;padding:10px 12px;margin-bottom:11px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-sm" onclick="taxPing()"><i class="ti ti-plug-connected"></i>팝빌 연동 상태 확인</button>
+          <div id="tx-ping" style="font-size:12px;color:var(--t3)">발행 전에 눌러서 연동·모드·잔여포인트를 확인하세요 (발행되지 않습니다)</div>
+        </div>
+      </div>
+      <div style="font-size:11.5px;color:var(--t3);margin-bottom:11px">발행 시 국세청 전송되며 팝빌 포인트가 과금됩니다. 공급받는자 이메일로 발행 안내가 발송됩니다.${q.taxMgtKey ? ` 이미 발행된 건이라 <b>다시 발행하면 새 문서번호</b>로 나갑니다(기존 건은 팝빌에서 취소해야 합니다).` : ''} ${co.bizno ? '' : '<b style="color:#c0341d">공급자 사업자번호가 없어 발행이 안 됩니다 — 회사 정보에서 설정하세요.</b>'}</div>
       <div class="frm-foot">${q.taxInvoice ? '<div style="flex:1;color:var(--gd);font-weight:700;font-size:13px;display:flex;align-items:center"><i class="ti ti-file-check"></i> 이미 발행됨' + (q.ntsConfirmNum ? ' · 승인 ' + esc(q.ntsConfirmNum) : '') + '</div>' : ''}<button class="btn" style="flex:1" onclick="taxCancel()">취소</button><button class="btn btn-pri" style="flex:2" onclick="submitTaxInvoice('${q.id}')"><i class="ti ti-file-check"></i>${q.taxInvoice ? '다시 발행' : '세금계산서 발행'}</button></div>
     </div>`;
+}
+/* 팝빌 연동 상태 점검 — 실제 발행 없이 설정·모드·잔여포인트만 확인 */
+async function taxPing() {
+  if (!isAdmin()) { toast('관리자만 가능합니다'); return; }
+  const box = el('tx-ping'); if (box) box.innerHTML = '<span style="color:var(--t3)">확인 중…</span>';
+  try {
+    const token = await auth.currentUser.getIdToken();
+    const r = await fetch(PUSH_FN + '?action=taxping', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ corpNum: (companyInfo().bizno || '') }) });
+    const j = await r.json().catch(() => ({}));
+    if (!box) return;
+    if ((j && j.error === 'unknown action')) { box.innerHTML = '<span style="color:#c0341d"><i class="ti ti-alert-triangle"></i> 서버에 세금계산서 기능이 아직 배포되지 않았습니다 (클라우드 함수 업데이트 필요)</span>'; return; }
+    if (!r.ok) { box.innerHTML = '<span style="color:#c0341d"><i class="ti ti-alert-triangle"></i> ' + esc((j && j.error) || ('HTTP ' + r.status)) + '</span>'; return; }
+    const c = j.config || {};
+    if (!j.ok) { box.innerHTML = '<span style="color:#c0341d"><i class="ti ti-alert-triangle"></i> ' + esc(j.error || '연동 안 됨') + '</span> <span style="color:var(--t3)">(LinkID ' + (c.linkId ? 'O' : 'X') + ' · SecretKey ' + (c.secretKey ? 'O' : 'X') + ' · 연동회원번호 ' + esc(c.memberCorpNum || '없음') + ')</span>'; return; }
+    box.innerHTML = '<span style="color:var(--gd);font-weight:700"><i class="ti ti-plug-connected"></i> 팝빌 연동 정상</span> · <b style="color:' + (c.test ? '#9a6a12' : 'var(--gd)') + '">' + (c.test ? '테스트 모드 (국세청 전송 안 됨)' : '운영 모드 (실제 발행)') + '</b> · 잔여포인트 <b>' + Number(j.balance || 0).toLocaleString() + '</b>';
+  } catch (e) { if (box) box.innerHTML = '<span style="color:#c0341d">확인 실패: ' + esc((e && e.message) || e) + '</span>'; }
 }
 async function submitTaxInvoice(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
@@ -4356,13 +4378,25 @@ async function submitTaxInvoice(id) {
   const buyer = { bizNo, corpName: (el('tx-corp').value || '').trim() || q.client, ceo: (el('tx-ceo').value || '').trim(), contact: (el('tx-contact').value || '').trim(), addr: (el('tx-addr').value || '').trim(), bizType: (el('tx-biztype').value || '').trim(), bizClass: (el('tx-bizclass').value || '').trim(), email };
   const writeDate = (el('tx-date').value || todayStr()).replace(/-/g, '');
   const purposeType = (el('tx-purpose') && el('tx-purpose').value) || '영수';
-  const bt = (co.biztype || '').trim().split(/\s+/);
+  // 공급자 업태/종목: '제조업 | 건축 자재' 처럼 | 로 구분된 경우 우선, 없으면 공백 기준
+  const _btRaw = (co.biztype || '').trim();
+  let _btType = '', _btClass = '';
+  if (_btRaw.indexOf('|') >= 0) { const _p = _btRaw.split('|'); _btType = (_p[0] || '').trim(); _btClass = _p.slice(1).join(' ').trim(); }
+  else { const _p = _btRaw.split(/\s+/); _btType = _p[0] || ''; _btClass = _p.slice(1).join(' ').trim(); }
+  if (!_btClass) _btClass = _btType;
+  // 공급자 연락처: 'Tel ) 070-8211-0144  Fax ) ...' 에서 첫 전화번호만 추출
+  const _telM = String(co.tel || '').match(/0\d{1,2}[-\s]?\d{3,4}[-\s]?\d{4}/);
+  const _invTel = _telM ? _telM[0].replace(/\s/g, '') : '';
+  // 문서관리번호: 재발행이면 -R1, -R2 … 로 새 번호(같은 번호로 다시 발행하면 팝빌에서 중복 오류)
+  const _mgtBase = String(q.docNo || ('Q' + Date.now())).replace(/[^0-9A-Za-z\-_]/g, '').slice(0, 20) || ('Q' + Date.now());
+  const _reN = q.taxMgtKey ? ((+q.taxReissue || 0) + 1) : 0;
+  const _mgtKey = _reN ? (_mgtBase + '-R' + _reN) : _mgtBase;
   const items = (q.items || []).filter(it => (+it.amt > 0) || (+it.qty > 0));
   let supplyTotal = 0; const detailList = items.map(it => { const sc = Math.round(+it.amt || 0); supplyTotal += sc; return { itemName: it.name, spec: it.spec || '', qty: it.qty || '', unitCost: it.price || '', supplyCost: sc, tax: Math.round(sc * 0.1), remark: '' }; });
   const taxTotal = detailList.reduce((a, b) => a + b.tax, 0); const totalAmount = supplyTotal + taxTotal;
   const payload = {
-    invoicerCorpNum: co.bizno, mgtKey: (q.docNo || ('Q' + Date.now())), writeDate, purposeType,
-    invoicerCorpName: co.name, invoicerCEOName: co.ceo, invoicerAddr: co.addr, invoicerBizType: bt[0] || co.biztype, invoicerBizClass: bt.slice(1).join(' ') || bt[0] || '', invoicerContactName: (me && me.name) || '', invoicerTEL: '', invoicerEmail: co.email,
+    invoicerCorpNum: co.bizno, mgtKey: _mgtKey, writeDate, purposeType,
+    invoicerCorpName: co.name, invoicerCEOName: co.ceo, invoicerAddr: co.addr, invoicerBizType: _btType, invoicerBizClass: _btClass, invoicerContactName: (me && me.name) || '', invoicerTEL: _invTel, invoicerEmail: co.email,
     invoiceeCorpNum: buyer.bizNo, invoiceeCorpName: buyer.corpName, invoiceeCEOName: buyer.ceo, invoiceeAddr: buyer.addr, invoiceeBizType: buyer.bizType, invoiceeBizClass: buyer.bizClass, invoiceeContactName: buyer.contact, invoiceeEmail: buyer.email,
     supplyCostTotal: supplyTotal, taxTotal: taxTotal, totalAmount: totalAmount, detailList: detailList
   };
@@ -4374,7 +4408,7 @@ async function submitTaxInvoice(id) {
     const token = await auth.currentUser.getIdToken();
     const r = await fetch(PUSH_FN + '?action=taxinvoice', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify(payload) });
     const j = await r.json().catch(() => ({}));
-    if (r.ok && j.ok) { await Store.update('quotes', id, { taxInvoice: true, taxDate: todayStr(), ntsConfirmNum: j.ntsConfirmNum || '', taxMgtKey: j.mgtKey || payload.mgtKey }); toast('세금계산서 발행 완료' + (j.ntsConfirmNum ? (' · 승인 ' + j.ntsConfirmNum) : '')); filters.taxEdit = ''; renderQuote(); }
+    if (r.ok && j.ok) { await Store.update('quotes', id, { taxInvoice: true, taxDate: todayStr(), ntsConfirmNum: j.ntsConfirmNum || '', taxMgtKey: j.mgtKey || payload.mgtKey, taxReissue: _reN, taxTestMode: !!j.test }); toast('세금계산서 발행 완료' + (j.ntsConfirmNum ? (' · 승인 ' + j.ntsConfirmNum) : '')); filters.taxEdit = ''; renderQuote(); }
     else { toast('발행 실패: ' + ((j && j.error) || ('HTTP ' + r.status))); }
   } catch (e) { toast('발행 오류: ' + ((e && e.message) || e)); }
   finally { setTimeout(() => { _busy = false; }, 700); }
