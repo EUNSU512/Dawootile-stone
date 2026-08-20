@@ -5130,8 +5130,8 @@ function quoteCardHtml(q) {
   const doneBadge = q.manualDone ? `<span class="pill p-done"><i class="ti ti-checks"></i> 완료</span>` : '';
   return `<div class="card" style="margin-bottom:10px;padding:12px 14px${_bundle && _selQ ? ';border:2px solid var(--gd);background:#f2fbf6' : ''}">
       ${_bundle ? `<label style="display:flex;align-items:center;gap:8px;margin-bottom:9px;cursor:pointer;font-size:12.5px;font-weight:700;color:${_selQ ? 'var(--gd)' : 'var(--t2)'}"><input type="checkbox" ${_selQ ? 'checked' : ''} onchange="toggleQSel('${q.id}')" style="width:17px;height:17px"> 청구 묶음에 포함</label>` : ''}
-      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-        <div style="min-width:0"><div style="font-weight:700;font-size:14.5px">${esc(q.client || '-')}</div>
+      <div onclick="openQuoteView('${q.id}')" title="눌러서 견적 내용 보기" style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;cursor:pointer">
+        <div style="min-width:0"><div style="font-weight:700;font-size:14.5px">${esc(q.client || '-')} <i class="ti ti-chevron-right" style="font-size:14px;color:var(--t3);vertical-align:-2px"></i></div>
           <div style="font-size:11.5px;color:var(--t3);margin-top:2px">${esc(q.docNo || '')} · ${esc(when)} · ${(q.items || []).length}품목</div>
           <div style="font-size:12px;color:var(--t2);margin-top:3px">${esc(names)}</div></div>
         <div style="text-align:right;flex:none"><div style="font-size:17px;font-weight:800;color:var(--gd)">${fmtWon(q.total)}<span style="font-size:12px;font-weight:600">원</span></div><div style="font-size:10.5px;color:var(--t3)">VAT 포함</div>${_rem > 0 ? `<div style="font-size:11px;color:var(--gd);margin-top:5px">입금 ${fmtWon(_pa)}</div><div style="font-size:13.5px;font-weight:800;color:var(--red-t)">미수 ${fmtWon(_rem)}</div>` : (_pa > 0 ? `<div style="font-size:12px;font-weight:700;color:var(--gd);margin-top:5px"><i class="ti ti-check"></i> 결제완료</div>` : '')}</div>
@@ -5153,6 +5153,60 @@ function quoteCardHtml(q) {
           <button class="btn btn-sm btn-ghost" style="color:var(--red-t)" onclick="delQuote('${q.id}')" title="견적 삭제"><i class="ti ti-trash"></i></button>
         </span>
       </div></div>`;
+}
+/* 견적 카드 클릭 → 내용 바로 보기 팝업 (읽기 전용 · 하단에서 인쇄·수정 등으로 이어감) */
+function openQuoteView(id) {
+  const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
+  const items = q.items || [];
+  const _pa = +q.paidAmount || 0, _tt = +q.total || 0, _rem = Math.max(0, _tt - _pa);
+  const badge = (on, cls, ic, txt) => on ? `<span class="pill ${cls}"><i class="ti ${ic}"></i> ${txt}</span>` : '';
+  const badges = [
+    (_tt > 0 && _pa >= _tt) ? badge(1, 'p-done', 'ti-cash', '결제완료') : (_pa > 0 ? badge(1, 'p-prog', 'ti-cash', '입금 ' + fmtWon(_pa)) : badge(1, 'p-wait', 'ti-cash', '미결제')),
+    q.taxInvoice ? badge(1, 'p-prog', 'ti-file-check', '계산서 발행') : badge(1, 'p-gray', 'ti-file-off', '계산서 미발행'),
+    badge(q.shipped, 'p-done', 'ti-truck-delivery', '출고 완료'),
+    badge(q.siteDone, 'p-done', 'ti-building-community', '현장 등록'),
+    badge(q.basinDone, 'p-done', 'ti-bath', '세면대 발주'),
+    badge(q.manualDone, 'p-done', 'ti-checks', '완료')
+  ].join('');
+  const meta = (k, v) => v ? `<div style="display:flex;gap:8px;padding:5px 0;border-bottom:1px dashed var(--bd)"><div style="width:74px;flex:none;color:var(--t3);font-size:12px">${k}</div><div style="font-size:12.5px;font-weight:600;word-break:break-all">${esc(v)}</div></div>` : '';
+  const rows = items.length ? items.map((it, i) => `<tr>
+      <td style="text-align:center;color:var(--t3)">${i + 1}</td>
+      <td><b>${esc(it.name || '')}</b>${it.extra ? ' <span class="pill p-gray" style="font-size:9.5px;padding:0 5px">부대·가공</span>' : ''}${it.stone ? `<div style="font-size:10.5px;color:#8a7350;font-weight:600">석종: ${esc(it.stone)}</div>` : ''}</td>
+      <td style="text-align:center;font-size:11px">${esc(it.spec || '')}</td>
+      <td style="text-align:right">${esc(it.qty)}${it.unit ? ' ' + esc(it.unit) : ''}</td>
+      <td style="text-align:right">${fmtWon(it.price)}</td>
+      <td style="text-align:right;font-weight:700">${fmtWon(it.amt)}</td></tr>`).join('')
+    : `<tr><td colspan="6" style="text-align:center;color:var(--t3);padding:14px">품목이 없습니다</td></tr>`;
+  const sumRow = (k, v, strong) => `<div style="display:flex;justify-content:space-between;padding:${strong ? '7px 0 0' : '3px 0'};${strong ? 'border-top:1.5px solid var(--bd2);margin-top:5px' : ''}"><span style="font-size:${strong ? '13' : '12'}px;color:${strong ? 'var(--t1)' : 'var(--t2)'};font-weight:${strong ? '700' : '500'}">${k}</span><span style="font-size:${strong ? '16' : '12.5'}px;font-weight:${strong ? '800' : '600'};color:${strong ? 'var(--gd)' : 'var(--t1)'}">${v}</span></div>`;
+  openModal(`
+    <div class="sheet-h"><h3><i class="ti ti-file-invoice"></i>견적 내용</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:8px">
+      <div style="min-width:0"><div style="font-size:17px;font-weight:800">${esc(q.client || '-')}</div>
+        <div style="font-size:11.5px;color:var(--t3);margin-top:2px">${esc(q.docNo || '')} · ${esc(qDate(q))}</div></div>
+      <div style="text-align:right;flex:none"><div style="font-size:20px;font-weight:800;color:var(--gd)">${fmtWon(_tt)}<span style="font-size:12px;font-weight:600">원</span></div><div style="font-size:10.5px;color:var(--t3)">VAT 포함</div></div>
+    </div>
+    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:11px">${badges}</div>
+    <div style="background:var(--soft);border-radius:11px;padding:7px 12px;margin-bottom:12px">
+      ${meta('분류', q.category)}${meta('단가 유형', q.ctype)}${meta('유효기간', q.valid)}${meta('담당자', q.by)}${meta('수신·참조', q.attn)}${meta('현장 주소', q.siteAddr)}
+    </div>
+    <div class="sec-label"><i class="ti ti-list-details"></i>견적 품목 <span style="font-weight:500;color:var(--t3)">${items.length}건</span></div>
+    <div class="tbl-wrap" style="margin-bottom:12px"><table class="tbl">
+      <thead><tr><th style="width:26px">No</th><th>품명</th><th>규격</th><th style="text-align:right">수량</th><th style="text-align:right">단가</th><th style="text-align:right">금액</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+    <div style="border:1.5px solid var(--bd2);border-radius:11px;padding:10px 13px;margin-bottom:12px">
+      ${sumRow('공급가액', fmtWon(q.supply) + '원')}
+      ${sumRow('부가세', fmtWon(q.vat) + '원')}
+      ${(+q.discount || 0) ? sumRow('할인', '-' + fmtWon(q.discount) + '원') : ''}
+      ${sumRow('합계', fmtWon(_tt) + '원', true)}
+      ${_pa > 0 ? sumRow('입금', fmtWon(_pa) + '원') : ''}
+      ${_rem > 0 ? `<div style="display:flex;justify-content:space-between;padding:3px 0"><span style="font-size:12px;color:var(--t2);font-weight:500">미수</span><span style="font-size:14px;font-weight:800;color:var(--red-t)">${fmtWon(_rem)}원</span></div>` : ''}
+    </div>
+    ${(q.memo || '').trim() ? `<div class="sec-label"><i class="ti ti-notes"></i>비고</div><div style="font-size:12.5px;color:var(--t2);white-space:pre-wrap;background:var(--soft);border-radius:10px;padding:10px 12px;margin-bottom:12px">${esc(q.memo)}</div>` : ''}
+    <div class="frm-foot" style="display:flex;gap:6px;flex-wrap:wrap">
+      <button class="btn" onclick="closeModal()">닫기</button>
+      <button class="btn" onclick="closeModal();openQuoteInline('${q.id}')"><i class="ti ti-edit"></i>수정</button>
+      <button class="btn btn-pri" style="flex:1" onclick="printQuote('${q.id}')"><i class="ti ti-printer"></i>인쇄·미리보기</button>
+    </div>`);
 }
 let _costSupply = 0;
 let _costRev = { mat: 0, proc: 0, cons: 0, trans: 0 };
