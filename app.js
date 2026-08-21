@@ -3872,6 +3872,14 @@ function quoteMatPick(inp) {
   const hh = row.querySelector('.q-hebe-hint'); if (hh) { const hpj = it ? (+it.hebePerJang || 0) : 0; hh.textContent = hpj > 0 ? ('1장 ' + hpj + '㎡') : ''; }
   quoteRecalc();
 }
+/* 자재명으로 규격 찾기 — 재고 우선, 없으면 단가표 */
+function specOfMaterial(name) {
+  const k = _normName(name || ''); if (!k) return '';
+  const it = (state.inventory || []).find(x => _normName(x.name) === k);
+  if (it && (it.spec || '').trim()) return it.spec;
+  const pl = (state.priceList || []).find(x => _normName(x.itemName) === k);
+  return (pl && pl.spec) || '';
+}
 function quoteHoldBoxHtml(client) {
   client = (client || '').trim();
   if (!client) return '<div style="font-size:12px;color:var(--t3);padding:4px 2px">거래처를 입력하면 홀딩 자재가 표시됩니다.</div>';
@@ -3880,7 +3888,7 @@ function quoteHoldBoxHtml(client) {
   return hs.map(h => {
     const items = holdItems(h);
     const label = items.map(it => `${esc(it.materialName)} ${it.jang}장`).join(', ');
-    const enc = encodeURIComponent(JSON.stringify(items.map(it => ({ name: it.materialName, qty: it.jang, spec: it.lot || '' }))));
+    const enc = encodeURIComponent(JSON.stringify(items.map(it => ({ name: it.materialName, qty: it.jang, spec: specOfMaterial(it.materialName) }))));   // 규격은 자재 기준으로 조회(롯트 아님)
     return `<div style="display:flex;align-items:center;gap:8px;padding:8px 6px;border-bottom:1px solid var(--soft)">
       <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px"><i class="ti ti-lock" style="font-size:12px;color:var(--blue)"></i> ${label}</div><div style="font-size:11px;color:var(--t3)">${h.useDate ? '사용예정 ' + esc(h.useDate) : ''}${h.note ? ' · ' + esc(h.note) : ''}</div></div>
       <button type="button" class="btn btn-sm btn-pri" onclick="quoteAddHold('${enc}')"><i class="ti ti-plus"></i>견적에 추가</button></div>`;
@@ -3891,12 +3899,11 @@ function quoteAddHold(enc) {
   const c = el('q-rows'); if (!c) return;
   const rows = c.querySelectorAll('.q-row');
   if (rows.length === 1) { const nm = rows[0].querySelector('.q-mat'); if (nm && !nm.value.trim()) rows[0].remove(); }
-  items.forEach(it => { c.insertAdjacentHTML('beforeend', qRowHtml({ name: it.name, qty: it.qty, spec: it.spec })); });
-  const client = (el('q-client') && el('q-client').value || '').trim(); const type = el('q-ctype') ? el('q-ctype').value : '';
+  items.forEach(it => { c.insertAdjacentHTML('beforeend', qRowHtml({ name: it.name, qty: it.qty, spec: it.spec || specOfMaterial(it.name) })); });
+  // 자재명을 직접 고른 것과 똑같이 규격·단가·가용·㎡정보·세면대 처리를 채움
   c.querySelectorAll('.q-row').forEach(r => {
-    const nm = (r.querySelector('.q-mat').value || '').trim(); if (!nm) return;
-    const pe = r.querySelector('.q-price'); if (pe && !_numv(pe.value)) { const pr = quoteGetPrice(client, nm, type); if (pr) pe.value = pr; }
-    const av = r.querySelector('.q-avail'); if (av) av.innerHTML = qAvailText(nm);
+    const mi = r.querySelector('.q-mat'); if (!mi || !(mi.value || '').trim()) return;
+    try { quoteMatPick(mi); } catch (e) { }
   });
   quoteRecalc(); toast('홀딩 자재를 견적에 추가했습니다');
 }
