@@ -4537,8 +4537,18 @@ function taxPreviewInner() {
       <td style="text-align:center"><button class="btn btn-sm btn-ghost" onclick="taxPrevDelRow(${i})"><i class="ti ti-x"></i></button></td>
     </tr>`).join('');
   const wd = (d.writeDate || '').replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3');
+  const _q = (state.quotes || []).find(x => x.id === d._quoteId) || {};
+  const _dc = +_q.discount || 0;
+  const _gap = (+_q.total || 0) - d.totalAmount;
+  const warn = (_dc > 0 || Math.abs(_gap) > 1)
+    ? `<div class="banner" style="margin-bottom:11px;font-size:12.5px;background:#fdf1ef;border-left:4px solid #c0341d;border-radius:0 10px 10px 0;padding:10px 13px;color:#8a2b1a">
+        <b><i class="ti ti-alert-triangle"></i> 견적 합계와 다릅니다</b><br>
+        견적 <b>${fmtWon(_q.total)}원</b> · 계산서 <b>${fmtWon(d.totalAmount)}원</b> · 차이 <b>${fmtWon(Math.abs(_gap))}원</b>
+        ${_dc > 0 ? `<br>견적에 <b>할인 ${fmtWon(_dc)}원</b>이 있는데 계산서에는 자동 반영되지 않습니다. 아래 품목 금액을 직접 조정하세요.` : ''}
+      </div>` : '';
   return `
     <div class="banner info" style="margin-bottom:11px;font-size:12.5px"><i class="ti ti-info-circle"></i> 아래 내용 그대로 국세청에 전송됩니다. <b>품명·수량·단가·금액을 여기서 고칠 수 있습니다.</b> 확인 후 맨 아래 발행 버튼을 누르세요.</div>
+    ${warn}
     <div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:11px">
       ${side('공급자', { name: d.invoicerCorpName, corpNum: d.invoicerCorpNum, ceo: d.invoicerCEOName, bizType: d.invoicerBizType, bizClass: d.invoicerBizClass, addr: d.invoicerAddr, email: d.invoicerEmail })}
       ${side('공급받는자', { name: d.invoiceeCorpName, corpNum: d.invoiceeCorpNum, ceo: d.invoiceeCEOName, bizType: d.invoiceeBizType, bizClass: d.invoiceeBizClass, addr: d.invoiceeAddr, email: d.invoiceeEmail })}
