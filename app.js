@@ -5614,7 +5614,10 @@ function renderQuote() {
   const qy = (filters.quoteSearch || '').trim().toLowerCase();
   const all = (state.quotes || []);
   const ym = todayStr().slice(0, 7);
-  const unpaid = all.reduce((a, b) => a + Math.max(0, (+b.total || 0) - (+b.paidAmount || 0)), 0);
+  const _remQ = q => Math.max(0, (+q.total || 0) - (+q.paidAmount || 0));
+  const unpaid = all.reduce((a, b) => a + _remQ(b), 0);
+  const _confUnpaidList = all.filter(q => !!q.ordered && _remQ(q) > 0);
+  const unpaidConf = _confUnpaidList.reduce((a, q) => a + _remQ(q), 0);
   const noTax = all.filter(q => !q.taxInvoice).length;
   const monthSum = all.filter(q => (q.date || '').startsWith(ym)).reduce((a, b) => a + (+b.total || 0), 0);
   const catAgg = {}; QCATS.forEach(c => catAgg[c] = { sum: 0, cnt: 0 });
@@ -5637,7 +5640,7 @@ function renderQuote() {
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
       <div style="display:flex;gap:6px"><button class="btn btn-sm" onclick="openCutSim()"><i class="ti ti-layout-grid"></i>재단도</button><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
-      <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(unpaid)}</div><div class="l">미수금(미결제)</div></div>
+      <button class="stat tap" onclick="quoteShowConfUnpaid()" title="확정 주문 중 미결제만 보기"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(unpaidConf)}</div><div class="l">확정 미수금 <i class="ti ti-chevron-right tap-arrow"></i></div><div class="s">${_confUnpaidList.length}건 · 확정 전 포함 ${fmtWon(unpaid)}</div></button>
       <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행</div></div>
       <div class="stat"><div class="ic g"><i class="ti ti-calendar-stats"></i></div><div class="v" style="font-size:19px">${fmtWon(monthSum)}</div><div class="l">이번 달 견적</div></div>
     </div>
@@ -5662,16 +5665,33 @@ function _quoteListInner() {
   const _isNoTax = q => !q.taxInvoice;
   const _isBasinPend = q => _isBasinQ(q) && !q.basinDone;
   const _isUnpaid = q => (+q.paidAmount || 0) < (+q.total || 0);
-  const _cNoTax = list.filter(_isNoTax).length, _cBasin = list.filter(_isBasinPend).length, _cUnpaid = list.filter(_isUnpaid).length;
-  if (stat === 'notax') list = list.filter(_isNoTax); else if (stat === 'basin') list = list.filter(_isBasinPend); else if (stat === 'unpaid') list = list.filter(_isUnpaid);
+  const _isConfUnpaid = q => !!q.ordered && _isUnpaid(q);   // 확정 주문된 건 중 미결제 = 실제 미수금
+  const _remOf = q => Math.max(0, (+q.total || 0) - (+q.paidAmount || 0));
+  const _cNoTax = list.filter(_isNoTax).length, _cBasin = list.filter(_isBasinPend).length, _cUnpaid = list.filter(_isUnpaid).length, _cConfUnpaid = list.filter(_isConfUnpaid).length;
+  if (stat === 'notax') list = list.filter(_isNoTax); else if (stat === 'basin') list = list.filter(_isBasinPend); else if (stat === 'unpaid') list = list.filter(_isUnpaid); else if (stat === 'cunpaid') list = list.filter(_isConfUnpaid);
   const _sc = (v, label, cnt) => `<button class="chip ${stat === v ? 'active' : ''}" onclick="quoteSetStat('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? 'var(--red-t)' : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
-  const statChips = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${_sc('all', '전체')}${_sc('notax', '계산서 미발행', _cNoTax)}${_sc('basin', '세면대 미발주', _cBasin)}${_sc('unpaid', '미결제', _cUnpaid)}</div>`;
+  const statChips = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${_sc('all', '전체')}${_sc('cunpaid', '확정·미결제', _cConfUnpaid)}${_sc('unpaid', '미결제(전체)', _cUnpaid)}${_sc('notax', '계산서 미발행', _cNoTax)}${_sc('basin', '세면대 미발주', _cBasin)}</div>`;
+  // 미결제 필터일 때 미수 합계 요약
+  let unpaidBar = '';
+  if (stat === 'cunpaid' || stat === 'unpaid') {
+    const _sum = list.reduce((a, q) => a + _remOf(q), 0);
+    const _paidIn = list.reduce((a, q) => a + (+q.paidAmount || 0), 0);
+    unpaidBar = `<div class="card" style="margin-bottom:10px;padding:11px 13px;border:1.5px solid #e6a9a9;background:#fff6f5">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div style="font-size:12.5px"><b style="color:var(--red-t)"><i class="ti ti-cash-off"></i> ${stat === 'cunpaid' ? '확정 주문 미수금' : '전체 미결제'}</b> · <b>${list.length}건</b>${_paidIn > 0 ? ` · 부분입금 ${fmtWon(_paidIn)}원` : ''}</div>
+        <div style="font-size:16px;font-weight:800;color:var(--red-t)">${fmtWon(_sum)}<span style="font-size:12px;font-weight:600">원</span></div>
+      </div>
+      <div style="font-size:11px;color:var(--t3);margin-top:5px">${stat === 'cunpaid' ? '확정주문 이후 아직 입금이 안 끝난 건입니다. 미수가 큰 순으로 정렬됩니다.' : '확정 전 견적(제안 단계)도 포함된 숫자입니다.'}</div>
+    </div>`;
+    list = list.slice().sort((a, b) => _remOf(b) - _remOf(a));   // 미수 큰 순
+  }
   const view = filters.quoteView || 'all';
   const curMonth = filters.quoteMonth || ym;
   const curDay = filters.quoteDay || todayStr();
   const WD = ['일', '월', '화', '수', '목', '금', '토'];
+  const _flatUnpaid = (stat === 'cunpaid' || stat === 'unpaid');   // 미결제 보기는 월/일 묶음 없이 미수 큰 순 전체
   let body, navBar = '';
-  if (view === 'month') {
+  if (view === 'month' && !_flatUnpaid) {
     const mlist = list.filter(q => qDate(q).startsWith(curMonth));
     const mSum = mlist.reduce((a, b) => a + (+b.total || 0), 0);
     const byDay = {}; mlist.forEach(q => { const d = qDate(q) || '날짜미상'; (byDay[d] = byDay[d] || []).push(q); });
@@ -5685,7 +5705,7 @@ function _quoteListInner() {
       const dLabel = d === '날짜미상' ? d : (d.slice(5).replace('-', '/') + ' (' + WD[new Date(d + 'T00:00').getDay()] + ')');
       return `<div style="display:flex;align-items:center;gap:8px;margin:14px 2px 8px"><div style="font-weight:800;font-size:13.5px">${esc(dLabel)}</div><div style="flex:1;height:1px;background:var(--bd)"></div><div style="font-size:12px;color:var(--t2)">${qs.length}건 · <b style="color:var(--gd)">${fmtWon(dSum)}</b>원</div></div>${qs.map(quoteCardHtml).join('')}`;
     }).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${esc(curMonth)}에 견적이 없습니다</div>`;
-  } else if (view === 'day') {
+  } else if (view === 'day' && !_flatUnpaid) {
     const dlist = list.filter(q => qDate(q) === curDay);
     const dSum = dlist.reduce((a, b) => a + (+b.total || 0), 0);
     const dObj = new Date(curDay + 'T00:00');
@@ -5698,10 +5718,15 @@ function _quoteListInner() {
   } else {
     body = list.length ? list.map(quoteCardHtml).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${qy ? '검색 결과가 없습니다' : '작성한 견적이 없습니다. 견적 작성으로 시작하세요.'}</div>`;
   }
-  return `${statChips}${navBar}<div id="q-list" data-keepscroll style="max-height:calc(100vh - 300px);min-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${body}</div>`;
+  return `${statChips}${unpaidBar}${navBar}<div id="q-list" data-keepscroll style="max-height:calc(100vh - 300px);min-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${body}</div>`;
 }
 function quotesFilter() { const w = el('q-listwrap'); if (!w) { renderQuote(); return; } w.innerHTML = _quoteListInner(); }
 function quoteSetStat(v) { filters.quoteStat = v; quotesFilter(); }
+/* 상단 '확정 미수금' 카드 → 확정 주문 중 미결제만 보기 */
+function quoteShowConfUnpaid() {
+  filters.quoteStat = 'cunpaid'; quotesFilter();
+  const w = el('q-listwrap'); if (w) { try { w.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) { w.scrollIntoView(); } }
+}
 function quoteDocHtml(q) {
   if (q.category === '통관비용') return customsDocHtml(q);
   const e = s => esc(s == null ? '' : String(s));
