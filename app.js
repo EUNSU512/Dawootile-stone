@@ -5667,11 +5667,23 @@ function _quoteListInner() {
   const _isUnpaid = q => (+q.paidAmount || 0) < (+q.total || 0);
   const _isConfUnpaid = q => !!q.ordered && _isUnpaid(q);   // 확정 주문된 건 중 미결제 = 실제 미수금
   const _remOf = q => Math.max(0, (+q.total || 0) - (+q.paidAmount || 0));
+  const _isConf = q => !!q.ordered;              // 확정주문된 견적
+  const _isPending = q => !q.ordered;            // 아직 확정 안 된 견적(제안 단계)
   const _cNoTax = list.filter(_isNoTax).length, _cBasin = list.filter(_isBasinPend).length, _cUnpaid = list.filter(_isUnpaid).length, _cConfUnpaid = list.filter(_isConfUnpaid).length;
-  if (stat === 'notax') list = list.filter(_isNoTax); else if (stat === 'basin') list = list.filter(_isBasinPend); else if (stat === 'unpaid') list = list.filter(_isUnpaid); else if (stat === 'cunpaid') list = list.filter(_isConfUnpaid);
-  const _sc = (v, label, cnt) => `<button class="chip ${stat === v ? 'active' : ''}" onclick="quoteSetStat('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? 'var(--red-t)' : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
-  const statChips = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${_sc('all', '전체')}${_sc('cunpaid', '확정·미결제', _cConfUnpaid)}${_sc('unpaid', '미결제(전체)', _cUnpaid)}${_sc('notax', '계산서 미발행', _cNoTax)}${_sc('basin', '세면대 미발주', _cBasin)}</div>`;
-  // 미결제 필터일 때 미수 합계 요약
+  const _cConf = list.filter(_isConf).length, _cPending = list.filter(_isPending).length;
+  if (stat === 'notax') list = list.filter(_isNoTax);
+  else if (stat === 'basin') list = list.filter(_isBasinPend);
+  else if (stat === 'unpaid') list = list.filter(_isUnpaid);
+  else if (stat === 'cunpaid') list = list.filter(_isConfUnpaid);
+  else if (stat === 'conf') list = list.filter(_isConf);
+  else if (stat === 'pending') list = list.filter(_isPending);
+  const _sc = (v, label, cnt, col) => `<button class="chip ${stat === v ? 'active' : ''}" onclick="quoteSetStat('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? (col || 'var(--red-t)') : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
+  const statChips = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+      ${_sc('all', '전체')}${_sc('pending', '미확정', _cPending, 'var(--amber-t)')}${_sc('conf', '확정', _cConf, 'var(--gd)')}
+      <span style="width:1px;background:var(--bd);margin:2px 3px"></span>
+      ${_sc('cunpaid', '확정·미결제', _cConfUnpaid)}${_sc('unpaid', '미결제(전체)', _cUnpaid)}${_sc('notax', '계산서 미발행', _cNoTax)}${_sc('basin', '세면대 미발주', _cBasin)}
+    </div>`;
+  // 필터별 요약 바
   let unpaidBar = '';
   if (stat === 'cunpaid' || stat === 'unpaid') {
     const _sum = list.reduce((a, q) => a + _remOf(q), 0);
@@ -5684,6 +5696,19 @@ function _quoteListInner() {
       <div style="font-size:11px;color:var(--t3);margin-top:5px">${stat === 'cunpaid' ? '확정주문 이후 아직 입금이 안 끝난 건입니다. 미수가 큰 순으로 정렬됩니다.' : '확정 전 견적(제안 단계)도 포함된 숫자입니다.'}</div>
     </div>`;
     list = list.slice().sort((a, b) => _remOf(b) - _remOf(a));   // 미수 큰 순
+  } else if (stat === 'conf' || stat === 'pending') {
+    const _amt = list.reduce((a, q) => a + (+q.total || 0), 0);
+    const _rem2 = list.reduce((a, q) => a + _remOf(q), 0);
+    const _c = stat === 'conf' ? 'var(--gd)' : 'var(--amber-t)';
+    const _bg = stat === 'conf' ? '#f2fbf6' : '#fdf8ee';
+    const _bd = stat === 'conf' ? 'var(--gd)' : '#e0c088';
+    unpaidBar = `<div class="card" style="margin-bottom:10px;padding:11px 13px;border:1.5px solid ${_bd};background:${_bg}">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div style="font-size:12.5px"><b style="color:${_c}"><i class="ti ti-${stat === 'conf' ? 'clipboard-check' : 'clock-pause'}"></i> ${stat === 'conf' ? '확정 주문' : '미확정 (제안 단계)'}</b> · <b>${list.length}건</b>${_rem2 > 0 ? ` · 미수 <b style="color:var(--red-t)">${fmtWon(_rem2)}</b>원` : ''}</div>
+        <div style="font-size:16px;font-weight:800;color:${_c}">${fmtWon(_amt)}<span style="font-size:12px;font-weight:600">원</span></div>
+      </div>
+      <div style="font-size:11px;color:var(--t3);margin-top:5px">${stat === 'conf' ? '고객이 확정한 주문입니다. 출고·현장·세면대 발주로 이어집니다.' : '아직 확정 전인 견적입니다. 매출로 잡히기 전 단계라 미수금에 넣지 않습니다.'}</div>
+    </div>`;
   }
   const view = filters.quoteView || 'all';
   const curMonth = filters.quoteMonth || ym;
