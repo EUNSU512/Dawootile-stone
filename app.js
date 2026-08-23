@@ -4331,6 +4331,7 @@ function renderTaxForm() {
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>세금계산서 발행</h2><p>${esc(q.docNo || '')} · ${esc(q.client || '')}</p></div>
       <button class="btn btn-sm" onclick="taxCancel()"><i class="ti ti-arrow-left"></i> 목록</button></div>
+    ${taxLedgerHtml(q.client, q.id)}
     <div id="taxform-root" class="card" style="padding:15px 17px">
       <div style="font-weight:800;font-size:13px;color:var(--gd);margin-bottom:9px">공급받는자 (거래처)</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px"><div class="fld" style="flex:1;min-width:180px;margin:0"><label>사업자등록번호 *</label><div style="display:flex;gap:6px"><input id="tx-bizno" inputmode="numeric" value="${esc(ti.bizNo || '')}" placeholder="000-00-00000" style="${inp}"><button class="btn btn-sm btn-pri" style="flex:none;white-space:nowrap" onclick="lookupBizInfo()"><i class="ti ti-search"></i>조회</button></div></div>${fld('tx-corp', '상호', ti.corpName || q.client)}</div>
@@ -4375,6 +4376,52 @@ async function taxPing() {
     box.innerHTML = '<span style="color:var(--gd);font-weight:700"><i class="ti ti-plug-connected"></i> 팝빌 연동 정상</span> · <b style="color:' + (c.test ? '#9a6a12' : 'var(--gd)') + '">' + (c.test ? '테스트 모드 (국세청 전송 안 됨)' : '운영 모드 (실제 발행)') + '</b> · 잔여포인트 <b>' + Number(j.balance || 0).toLocaleString() + '</b>';
   } catch (e) { if (box) box.innerHTML = '<span style="color:#c0341d">확인 실패: ' + esc((e && e.message) || e) + '</span>'; }
 }
+/* 발행 화면에 붙는 거래처 원장 — 이 거래처의 견적·입금·미수·계산서 상태를 한눈에 */
+function taxLedgerHtml(client, curId) {
+  const key = _normName(client || ''); if (!key) return '';
+  const rem = q => Math.max(0, (+q.total || 0) - (+q.paidAmount || 0));
+  const list = (state.quotes || []).filter(q => _normName(q.client || '') === key)
+    .sort((a, b) => (qDate(b) || '').localeCompare(qDate(a) || '') || (+b.createdAt || 0) - (+a.createdAt || 0));
+  if (!list.length) return '';
+  const tot = list.reduce((a, q) => a + (+q.total || 0), 0);
+  const paid = list.reduce((a, q) => a + (+q.paidAmount || 0), 0);
+  const unp = list.reduce((a, q) => a + rem(q), 0);
+  const noTax = list.filter(q => !q.taxInvoice).length;
+  const cell = (v, col) => `<td style="text-align:right;white-space:nowrap${col ? ';color:' + col + ';font-weight:700' : ''}">${v ? fmtWon(v) : '<span style="color:var(--bd2)">-</span>'}</td>`;
+  return `<div class="card" style="padding:12px 14px;margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+      <div style="font-weight:800;font-size:13px;color:var(--gd)"><i class="ti ti-book"></i> ${esc(client)} 거래 원장 <span style="font-weight:500;color:var(--t3)">${list.length}건</span></div>
+      <div style="font-size:11.5px;color:var(--t3)">매출 <b style="color:var(--t1)">${fmtWon(tot)}</b> · 입금 <b style="color:var(--gd)">${fmtWon(paid)}</b> · 미수 <b style="color:var(--red-t)">${fmtWon(unp)}</b>${noTax ? ` · 계산서 미발행 <b style="color:var(--red-t)">${noTax}</b>건` : ''}</div>
+    </div>
+    <div class="tbl-wrap" style="max-height:34vh;overflow:auto"><table class="tbl" style="font-size:12px">
+      <thead><tr><th>일자</th><th>견적번호</th><th style="text-align:right">합계</th><th style="text-align:right">입금</th><th style="text-align:right">미수</th><th>계산서</th><th style="width:56px"></th></tr></thead>
+      <tbody>${list.map(q => {
+        const cur = q.id === curId; const r = rem(q);
+        return `<tr style="${cur ? 'background:var(--gl2,#eefaf5)' : ''}">
+          <td style="white-space:nowrap">${esc(qDate(q))}</td>
+          <td>${cur ? '<b style="color:var(--gd)">▶ ' + esc(q.docNo || '') + '</b>' : esc(q.docNo || '')}${q.ordered ? '' : '<div style="font-size:10px;color:var(--amber-t)">미확정</div>'}</td>
+          ${cell(q.total)}${cell(q.paidAmount)}${cell(r, r > 0 ? 'var(--red-t)' : '')}
+          <td style="white-space:nowrap;font-size:11px">${q.ntsConfirmNum ? '<span style="color:var(--gd);font-weight:700">발행</span>' : (q.taxInvoice ? '<span style="color:var(--t3)">표시만</span>' : '<span style="color:var(--red-t)">미발행</span>')}</td>
+          <td>${cur ? '<span style="font-size:11px;color:var(--t3)">현재</span>' : `<button class="btn btn-sm btn-ghost" title="이 건으로 발행" onclick="openTaxForm('${q.id}')"><i class="ti ti-arrow-right"></i></button>`}</td>
+        </tr>`; }).join('')}</tbody></table></div>
+    <div style="font-size:11px;color:var(--t3);margin-top:6px">다른 건의 <i class="ti ti-arrow-right" style="font-size:12px"></i> 를 누르면 그 건 발행 화면으로 바로 넘어갑니다.</div>
+  </div>`;
+}
+/* 계산서에서 가공비를 묶어 표기할 품명 */
+const TAX_GAGONG_NAME = '세라믹 가공';
+/* 이 항목이 '가공 용역'인가 — 자재명에 '타공' 등이 들어간 실제 재고 품목은 제외 */
+function isGagongItem(it) {
+  const nm = (it && it.name) || ''; if (!nm) return false;
+  if (marginCat(nm) !== '가공') return false;
+  if (!it.extra) { try { if (quotePriceItems().some(x => _normName(x.name) === _normName(nm))) return false; } catch (e) { } }
+  return true;
+}
+/* 계산서 비고란 — 견적의 현장명 우선, 없으면 현장주소·수신참조, 그것도 없으면 견적번호 */
+function taxRemarkOf(q) {
+  if (!q) return '';
+  const cand = [q.siteName, q.siteAddr, q.attn].map(v => (v || '').trim()).filter(Boolean);
+  return cand.length ? cand[0] : ('견적 ' + (q.docNo || ''));
+}
 /* 폼 입력 + 견적 내용 → 세금계산서 payload 초안 만들기 (발행하지 않음) */
 function buildTaxPayload(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return null;
@@ -4400,14 +4447,24 @@ function buildTaxPayload(id) {
   const _reN = q.taxMgtKey ? ((+q.taxReissue || 0) + 1) : 0;
   const _mgtKey = _reN ? (_mgtBase + '-R' + _reN) : _mgtBase;
   const items = (q.items || []).filter(it => (+it.amt > 0) || (+it.qty > 0));
-  let supplyTotal = 0; const detailList = items.map(it => { const sc = Math.round(+it.amt || 0); supplyTotal += sc; return { itemName: it.name, spec: it.spec || '', qty: it.qty || '', unitCost: it.price || '', supplyCost: sc, tax: Math.round(sc * 0.1), remark: '' }; });
+  const _gag = items.filter(isGagongItem), _rest = items.filter(it => !isGagongItem(it));
+  const detailList = _rest.map(it => { const sc = Math.round(+it.amt || 0); return { itemName: it.name, spec: it.spec || '', qty: it.qty || '', unitCost: it.price || '', supplyCost: sc, tax: Math.round(sc * 0.1), remark: '' }; });
+  if (_gag.length) {   // 가공비는 '세라믹 가공' 한 줄로 합침 — 세무서에서 가공 내용 구분 요청
+    const sc = _gag.reduce((a, it) => a + Math.round(+it.amt || 0), 0);
+    const nm = _gag.map(it => it.name);
+    const spec = nm.length <= 3 ? nm.join(', ') : (nm.slice(0, 2).join(', ') + ' 외 ' + (nm.length - 2));
+    detailList.push({ itemName: TAX_GAGONG_NAME, spec: spec, qty: 1, unitCost: sc, supplyCost: sc, tax: Math.round(sc * 0.1), remark: '' });
+  }
+  const supplyTotal = detailList.reduce((a, b) => a + (+b.supplyCost || 0), 0);
   const taxTotal = detailList.reduce((a, b) => a + b.tax, 0); const totalAmount = supplyTotal + taxTotal;
+  const remark1 = taxRemarkOf(q);   // 계산서 비고 = 현장명(없으면 견적번호)
   return {
     _quoteId: id, _buyer: buyer, _reN: _reN,
     invoicerCorpNum: co.bizno, mgtKey: _mgtKey, writeDate, purposeType,
     invoicerCorpName: co.name, invoicerCEOName: co.ceo, invoicerAddr: co.addr, invoicerBizType: _btType, invoicerBizClass: _btClass, invoicerContactName: (me && me.name) || '', invoicerTEL: _invTel, invoicerEmail: co.email,
     invoiceeCorpNum: buyer.bizNo, invoiceeCorpName: buyer.corpName, invoiceeCEOName: buyer.ceo, invoiceeAddr: buyer.addr, invoiceeBizType: buyer.bizType, invoiceeBizClass: buyer.bizClass, invoiceeContactName: buyer.contact, invoiceeEmail: buyer.email,
-    supplyCostTotal: supplyTotal, taxTotal: taxTotal, totalAmount: totalAmount, detailList: detailList, memo: ''
+    supplyCostTotal: supplyTotal, taxTotal: taxTotal, totalAmount: totalAmount, detailList: detailList,
+    remark1: remark1, memo: '견적 ' + (q.docNo || '')
   };
 }
 /* ── 발행된 세금계산서 조회 ── */
@@ -4568,7 +4625,7 @@ function taxPreviewInner() {
       <div style="display:flex;justify-content:space-between;padding:3px 0"><span style="font-size:12.5px;color:var(--t2)">세액 합계</span><b style="font-size:13.5px">${fmtWon(d.taxTotal)}원</b></div>
       <div style="display:flex;justify-content:space-between;padding:7px 0 0;border-top:1.5px solid var(--bd2);margin-top:5px"><span style="font-size:13.5px;font-weight:700">합계금액</span><b style="font-size:17px;color:var(--gd)">${fmtWon(d.totalAmount)}원</b></div>
     </div>
-    <div class="fld full" style="margin-bottom:11px"><label>비고 <span style="color:var(--t3);font-weight:500">(선택 · 계산서에 표시)</span></label><input value="${esc(d.memo || '')}" oninput="taxPrevSetTop('memo',this.value)" placeholder="예: 견적서 ${esc((state.quotes || []).find(x => x.id === d._quoteId) ? ((state.quotes || []).find(x => x.id === d._quoteId).docNo || '') : '')}" style="${inp}"></div>
+    <div class="fld full" style="margin-bottom:11px"><label>비고 <span style="color:var(--t3);font-weight:500">(계산서에 표시 · 견적서의 현장명이 자동으로 들어갑니다)</span></label><input value="${esc(d.remark1 || '')}" oninput="taxPrevSetTop('remark1',this.value)" placeholder="현장명" style="${inp}"></div>
     <div class="frm-foot" style="display:flex;gap:6px">
       <button class="btn" style="flex:1" onclick="closeModal()">닫기</button>
       <button class="btn btn-pri" style="flex:2" onclick="submitTaxInvoice('${d._quoteId}')"><i class="ti ti-file-check"></i>이 내용으로 발행</button>
