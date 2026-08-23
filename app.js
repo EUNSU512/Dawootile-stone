@@ -1015,7 +1015,16 @@ function _pageScrollTo(y) {
   const go = () => { document.body.scrollTop = y; document.documentElement.scrollTop = y; try { window.scrollTo(0, y); } catch (e) { } };
   requestAnimationFrame(() => { go(); requestAnimationFrame(go); });
 }
-let _taxRetScroll = 0;   // 세금계산서 화면 들어가기 직전 견적 목록 위치
+/* 견적 목록은 페이지가 아니라 #q-list 라는 스크롤 박스가 움직인다.
+   다른 화면으로 갔다 오면 이 박스가 맨 위로 돌아가버려서, 떠날 때 위치를 기억했다가 되돌린다. */
+let _qListRet = 0;
+function qListSave() { const e = el('q-list'); _qListRet = e ? e.scrollTop : 0; }
+function qListRestore() {
+  const y = _qListRet; if (!y) return;
+  const go = () => { const e = el('q-list'); if (e) e.scrollTop = y; };
+  requestAnimationFrame(() => { go(); requestAnimationFrame(go); });
+  setTimeout(go, 120); setTimeout(go, 320);
+}
 function keepScrolls() {
   const k = {};
   document.querySelectorAll('[data-keepscroll]').forEach(e => { if (e.id && e.scrollTop > 0) k[e.id] = e.scrollTop; });
@@ -4333,10 +4342,10 @@ function clientTaxInfo(name) { const c = (state.clients || []).find(x => _normNa
 async function saveClientTaxInfo(name, info) { const c = (state.clients || []).find(x => _normName(x.value) === _normName(name)); if (c) { try { await Store.update('clients', c.id, { taxInfo: info }); } catch (e) { } } }
 function openTaxForm(id) {
   if (!isAdmin()) { toast('세금계산서 발행은 관리자만 가능합니다'); return; }
-  _taxRetScroll = _pageScrollTop();      // 보던 위치 기억 → 나올 때 그대로 되돌린다
+  qListSave();                           // 보던 위치 기억 → 나올 때 그대로 되돌린다
   filters.taxEdit = id; renderQuote(); _pageScrollTo(0);
 }
-function taxCancel() { filters.taxEdit = ''; renderQuote(); _pageScrollTo(_taxRetScroll); }
+function taxCancel() { filters.taxEdit = ''; renderQuote(); qListRestore(); }
 function renderTaxForm() {
   const id = filters.taxEdit; const q = (state.quotes || []).find(x => x.id === id); if (!q) { filters.taxEdit = ''; renderQuote(); return; }
   const co = companyInfo(); const ti = clientTaxInfo(q.client);
@@ -4765,8 +4774,8 @@ function ledgerAgg() {
   });
   return { R: R, rows: Object.values(map), unassigned: unassigned, unassignedSum: unassignedSum };
 }
-function openLedger() { if (!isAdmin()) { toast('원장은 관리자만 볼 수 있습니다'); return; } filters.ledger = true; filters.ledgerClient = ''; go('quote'); }
-function ledgerClose() { filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; renderQuote(); }
+function openLedger() { if (!isAdmin()) { toast('원장은 관리자만 볼 수 있습니다'); return; } qListSave(); filters.ledger = true; filters.ledgerClient = ''; go('quote'); }
+function ledgerClose() { filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; renderQuote(); qListRestore(); }
 function ledgerSetRange(v) { filters.ledgerRange = v; renderLedger(); }
 function ledgerSetSort(v) { filters.ledgerSort = v; renderLedger(); }
 function ledgerOpen(c) { filters.ledgerClient = c; renderLedger(); }
@@ -5020,8 +5029,8 @@ function _pmBanner() {
 }
 /* ── 화면 ── */
 let _pmSel = null;   // null = 아직 안 건드림(추천값 사용)
-function openPayMatch() { if (!isAdmin()) { toast('관리자만 가능합니다'); return; } _pmSel = null; filters.payMatch = true; go('quote'); }
-function payMatchClose() { filters.payMatch = false; _pmSel = null; renderQuote(); }
+function openPayMatch() { if (!isAdmin()) { toast('관리자만 가능합니다'); return; } qListSave(); _pmSel = null; filters.payMatch = true; go('quote'); }
+function payMatchClose() { filters.payMatch = false; _pmSel = null; renderQuote(); qListRestore(); }
 function _pmSure(m) { return m.tier === 1 && !m.ambiguous && !m.late; }   // 확실한 건 = 금액 정확일치 + 후보 하나 + 견적이 입금보다 먼저
 function _pmChecked(m) { if (_pmSel) return !!_pmSel[m.tid]; return _pmSure(m); }   // 기본: 확실한 것만 체크
 function pmToggle(tid) {
@@ -5317,7 +5326,7 @@ async function submitTaxInvoice(id) {
     const token = await auth.currentUser.getIdToken();
     const r = await fetch(PUSH_FN + '?action=taxinvoice', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify(payload) });
     const j = await r.json().catch(() => ({}));
-    if (r.ok && j.ok) { await Store.update('quotes', id, { taxInvoice: true, taxDate: todayStr(), ntsConfirmNum: j.ntsConfirmNum || '', taxMgtKey: j.mgtKey || payload.mgtKey, taxReissue: _reN, taxTestMode: !!j.test, taxSupply: payload.supplyCostTotal, taxVat: payload.taxTotal, taxTotal: payload.totalAmount, taxIssuedAt: Date.now() }); _taxDraft = null; closeModal(); toast('세금계산서 발행 완료' + (j.ntsConfirmNum ? (' · 승인 ' + j.ntsConfirmNum) : '')); filters.taxEdit = ''; renderQuote(); _pageScrollTo(_taxRetScroll); }
+    if (r.ok && j.ok) { await Store.update('quotes', id, { taxInvoice: true, taxDate: todayStr(), ntsConfirmNum: j.ntsConfirmNum || '', taxMgtKey: j.mgtKey || payload.mgtKey, taxReissue: _reN, taxTestMode: !!j.test, taxSupply: payload.supplyCostTotal, taxVat: payload.taxTotal, taxTotal: payload.totalAmount, taxIssuedAt: Date.now() }); _taxDraft = null; closeModal(); toast('세금계산서 발행 완료' + (j.ntsConfirmNum ? (' · 승인 ' + j.ntsConfirmNum) : '')); filters.taxEdit = ''; renderQuote(); qListRestore(); }
     else { toast('발행 실패: ' + ((j && j.error) || ('HTTP ' + r.status))); }
   } catch (e) { toast('발행 오류: ' + ((e && e.message) || e)); }
   finally { setTimeout(() => { _busy = false; }, 700); }
