@@ -4836,9 +4836,9 @@ function renderLedger() {
     </div>
     ${pmN ? `<button class="card" style="width:100%;text-align:left;display:block;padding:10px 13px;margin-bottom:9px;border:1.5px solid var(--gd);background:var(--gl2,#f4fbf8);cursor:pointer" onclick="openPayMatch()">
       <span style="font-size:12.5px"><i class="ti ti-link" style="color:var(--gd)"></i> 금액이 맞는 <b>입금 ${pmN}건</b>이 아직 결제로 안 잡혔습니다 — 반영하면 미수가 그만큼 줄어듭니다 <i class="ti ti-chevron-right"></i></span></button>` : ''}
-    ${A.unassigned ? `<div class="banner warn" style="margin-bottom:9px;font-size:12.5px"><i class="ti ti-alert-triangle"></i> 거래처를 못 찾은 입금 <b>${A.unassigned}건 · ${fmtWon(A.unassignedSum)}원</b>
-      <button class="btn btn-sm btn-pri" style="margin-left:8px" onclick="ledgerFix()"><i class="ti ti-wand"></i>거래처 지정</button></div>` : ''}
-    ${totUn ? `<div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i> 거래처는 붙었지만 아직 견적에 연결 안 된 입금이 <b>${fmtWon(totUn)}원</b> 있습니다. 앱 쓰기 전 거래의 대금이거나 선입금입니다 — <b>미수 계산에는 안 들어갑니다.</b></div>` : ''}
+    ${A.unassigned ? `<div class="banner warn" style="margin-bottom:9px;font-size:12.5px"><i class="ti ti-alert-triangle"></i><span style="flex:1;min-width:0">거래처를 못 찾은 입금 <b>${A.unassigned}건 · ${fmtWon(A.unassignedSum)}원</b>
+      <button class="btn btn-sm btn-pri" style="margin-left:8px" onclick="ledgerFix()"><i class="ti ti-wand"></i>거래처 지정</button></span></div>` : ''}
+    ${totUn ? `<div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0">거래처는 붙었지만 아직 견적에 연결 안 된 입금이 <b>${fmtWon(totUn)}원</b> 있습니다. 앱 쓰기 전 거래의 대금이거나 선입금입니다 — <b>미수 계산에는 안 들어갑니다.</b></span></div>` : ''}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"><span style="font-size:11.5px;color:var(--t3);align-self:center;margin-right:2px">정렬</span>${sc('rem', '미수 많은 순')}${sc('sale', '매출 많은 순')}${sc('last', '최근 거래순')}${sc('name', '이름순')}</div>
     <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i>
       <input id="lg-search" placeholder="거래처 검색" value="${esc(filters.ledgerSearch || '')}" oninput="filters.ledgerSearch=this.value;ledgerFilter()" autocomplete="off" lang="ko"></div>
@@ -4916,7 +4916,7 @@ function ledgerDetailHtml(client) {
       <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:18px;color:${rem > 0 ? 'var(--red-t)' : 'var(--gd)'}">${fmtWon(rem)}</div><div class="l">${rem > 0 ? '미수금' : '완납'}</div></div>
       <div class="stat"><div class="ic b"><i class="ti ti-file-invoice"></i></div><div class="v" style="font-size:18px">${fmtWon(taxAmt)}</div><div class="l">계산서 발행</div><div class="s">${noTaxAmt ? '미발행 ' + fmtWon(noTaxAmt) : '전부 발행'}</div></div>
     </div>
-    ${un.length ? `<div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i>
+    ${un.length ? `<div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0;display:block">
       아직 견적에 연결 안 된 입금 <b>${un.length}건 · ${fmtWon(un.reduce((s, t) => s + (+t.amount || 0), 0))}원</b> — 앱 쓰기 전 거래의 대금이거나 선입금이라 <b>위 미수 계산에는 안 들어갑니다.</b>
       <div style="margin-top:7px;background:#fff;border:1px solid var(--bd);border-radius:9px;max-height:190px;overflow-y:auto">
         ${un.slice(0, 40).map(t => `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:6px 9px;border-bottom:1px solid var(--bd);font-size:12px">
@@ -4924,7 +4924,7 @@ function ledgerDetailHtml(client) {
           <span style="display:flex;gap:7px;align-items:center"><b style="color:var(--gd)">${fmtWon(t.amount)}</b>
             <button class="btn btn-sm btn-ghost" style="padding:1px 5px" title="거래처 바꾸기" onclick="txReassign('${t.id}')"><i class="ti ti-switch-horizontal"></i></button></span></div>`).join('')}
         ${un.length > 40 ? `<div style="padding:6px 9px;font-size:11.5px;color:var(--t3)">외 ${un.length - 40}건</div>` : ''}</div>
-      <div style="margin-top:7px"><button class="btn btn-sm" onclick="openPayMatch()"><i class="ti ti-link"></i>결제 반영 화면 열기</button></div></div>` : ''}
+      <div style="margin-top:7px"><button class="btn btn-sm" onclick="openPayMatch()"><i class="ti ti-link"></i>결제 반영 화면 열기</button></div></span></div>` : ''}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px">${rc('all', '전체')}${rc('3m', '최근 3개월')}${rc('tm', '이번 달')}${rc('lm', '지난 달')}</div>
     <div class="tbl-wrap"><table class="tbl">
       <thead><tr><th style="width:58px">날짜</th><th style="width:56px">구분</th><th>내용</th>
