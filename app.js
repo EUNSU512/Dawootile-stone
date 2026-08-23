@@ -4467,6 +4467,168 @@ function buildTaxPayload(id) {
     remark1: remark1, memo: '견적 ' + (q.docNo || '')
   };
 }
+/* ══════════════════════════════════════════════════════════
+   팝빌 계좌조회 → 입금 내역을 견적 입금액에 반영 (관리자)
+   ══════════════════════════════════════════════════════════ */
+let _bank = { accounts: [], accIdx: 0, jobID: '', rows: [], loading: false };
+function bankAppliedMap() { const m = (state.appmeta || []).find(x => x.key === 'bankApplied'); return (m && m.tids) || {}; }
+async function saveBankApplied(tids) {
+  const m = (state.appmeta || []).find(x => x.key === 'bankApplied');
+  if (m) await Store.update('appmeta', m.id, { tids }); else await Store.add('appmeta', { key: 'bankApplied', tids });
+}
+async function _bankCall(body) {
+  const token = await auth.currentUser.getIdToken();
+  const r = await fetch(PUSH_FN + '?action=bank', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!(r.ok && j.ok)) throw new Error((j && j.error) || ('HTTP ' + r.status));
+  return j;
+}
+function _bankDT(v) {
+  const t = String(v || '').replace(/[^0-9]/g, '');
+  if (t.length >= 12) return t.slice(0, 4) + '-' + t.slice(4, 6) + '-' + t.slice(6, 8) + ' ' + t.slice(8, 10) + ':' + t.slice(10, 12);
+  if (t.length >= 8) return t.slice(0, 4) + '-' + t.slice(4, 6) + '-' + t.slice(6, 8);
+  return String(v || '');
+}
+function _bankDate(v) { const t = String(v || '').replace(/[^0-9]/g, ''); return t.length >= 8 ? (t.slice(0, 4) + '-' + t.slice(4, 6) + '-' + t.slice(6, 8)) : todayStr(); }
+/* 입금자명 + 금액으로 후보 견적 찾기 — 이름 겹치는 미수 견적 우선, 금액 같으면 최우선 */
+function bankCandidates(payer, amount) {
+  const rem = q => Math.max(0, (+q.total || 0) - (+q.paidAmount || 0));
+  const unpaid = (state.quotes || []).filter(q => rem(q) > 0);
+  const key = _normName(payer || '');
+  const named = key ? unpaid.filter(q => { const c = _normName(q.client || ''); return c && (c.indexOf(key) >= 0 || key.indexOf(c) >= 0); }) : [];
+  const exact = named.filter(q => Math.abs(rem(q) - amount) < 1);
+  const sortR = (a, b) => rem(a) - rem(b);
+  return { exact: exact.sort(sortR), named: named.sort(sortR), unpaid: unpaid.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')) };
+}
+function openBankSync() {
+  if (!isAdmin()) { toast('입금 조회는 관리자만 가능합니다'); return; }
+  const d = new Date(); const ed = todayStr();
+  const sd = new Date(d.getTime() - 13 * 86400000).toISOString().slice(0, 10);
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-building-bank"></i>입금 내역 조회</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i> 팝빌에 연결된 계좌에서 <b>입금</b> 내역을 가져와 미수 견적과 맞춰봅니다. 수집할 때마다 팝빌 비용이 발생하니 필요할 때만 누르세요.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">
+      <div class="fld" style="flex:2;min-width:180px;margin:0"><label>계좌</label><select id="bk-acc" style="width:100%;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px"><option>불러오는 중…</option></select></div>
+      <div class="fld" style="flex:1;min-width:130px;margin:0"><label>시작일</label><input type="date" id="bk-sd" value="${sd}" style="width:100%;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px"></div>
+      <div class="fld" style="flex:1;min-width:130px;margin:0"><label>종료일</label><input type="date" id="bk-ed" value="${ed}" style="width:100%;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px"></div>
+    </div>
+    <button class="btn btn-pri btn-block" style="margin-bottom:10px" onclick="bankRun()"><i class="ti ti-download"></i>입금 내역 가져오기</button>
+    <div id="bk-status" style="font-size:12px;color:var(--t3);margin-bottom:8px"></div>
+    <div id="bk-body"></div>
+    <div class="frm-foot"><button class="btn btn-block" onclick="closeModal()">닫기</button></div>`);
+  bankLoadAccounts();
+}
+async function bankLoadAccounts() {
+  const sel = el('bk-acc'); if (!sel) return;
+  try {
+    const j = await _bankCall({ mode: 'accounts' });
+    _bank.accounts = (j.list || []).filter(a => a && a.accountNumber);
+    if (!_bank.accounts.length) { sel.innerHTML = '<option value="">팝빌에 등록된 계좌가 없습니다</option>'; return; }
+    sel.innerHTML = _bank.accounts.map((a, i) => `<option value="${i}">${esc((a.bankCode || '') + ' ' + (a.accountNumber || '') + (a.accountName ? ' · ' + a.accountName : ''))}${a.state == 1 ? '' : ' (사용중지)'}</option>`).join('');
+  } catch (e) {
+    sel.innerHTML = '<option value="">계좌 목록 실패</option>';
+    const st = el('bk-status'); if (st) st.innerHTML = '<span style="color:#c0341d">' + esc((e && e.message) || e) + '</span>';
+  }
+}
+async function bankRun() {
+  if (_bank.loading) return;
+  const sel = el('bk-acc'); const i = +(sel && sel.value); const a = _bank.accounts[i];
+  if (!a) { toast('계좌를 선택하세요'); return; }
+  const sd = (el('bk-sd').value || '').replace(/-/g, ''), ed = (el('bk-ed').value || '').replace(/-/g, '');
+  if (sd.length !== 8 || ed.length !== 8) { toast('조회 기간을 확인하세요'); return; }
+  const st = el('bk-status'); const setSt = h => { if (el('bk-status')) el('bk-status').innerHTML = h; };
+  _bank.loading = true; _bank.rows = [];
+  if (el('bk-body')) el('bk-body').innerHTML = '';
+  try {
+    setSt('수집 요청 중…');
+    const j = await _bankCall({ mode: 'job', bankCode: a.bankCode, accountNumber: a.accountNumber, sdate: sd, edate: ed });
+    _bank.jobID = j.jobID;
+    let done = false;
+    for (let n = 0; n < 30 && !done; n++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const s2 = await _bankCall({ mode: 'state', jobID: _bank.jobID });
+      const stt = s2.state || {};
+      if (String(stt.jobState) === '3') {
+        if (stt.errorCode && String(stt.errorCode) !== '1') { setSt('<span style="color:#c0341d">수집 실패: ' + esc(stt.errorCode + ' ' + (stt.errorReason || '')) + '</span>'); _bank.loading = false; return; }
+        done = true;
+      } else setSt('은행에서 수집 중… (' + ((n + 1) * 2) + '초)');
+    }
+    if (!done) { setSt('<span style="color:#c0341d">수집이 오래 걸립니다. 잠시 후 다시 시도하세요.</span>'); _bank.loading = false; return; }
+    setSt('내역 불러오는 중…');
+    const r2 = await _bankCall({ mode: 'search', jobID: _bank.jobID, tradeType: ['I'], perPage: 500, order: 'D' });
+    const list = (r2.result && r2.result.list) || [];
+    _bank.rows = list.map(x => ({
+      tid: x.tid || (x.trdate + '-' + x.trserial), when: _bankDT(x.trdt || x.trdate), date: _bankDate(x.trdate || x.trdt),
+      payer: (x.remark1 || x.remark2 || '').trim(), amount: Math.round(+x.deposit || 0), balance: Math.round(+x.balance || 0), memo: (x.memo || '').trim()
+    })).filter(x => x.amount > 0);
+    setSt(`입금 <b style="color:var(--gd)">${_bank.rows.length}건</b> · 합계 <b>${fmtWon(_bank.rows.reduce((s2b, x) => s2b + x.amount, 0))}</b>원`);
+    bankRender();
+  } catch (e) { setSt('<span style="color:#c0341d">' + esc((e && e.message) || e) + '</span>'); }
+  finally { _bank.loading = false; }
+}
+function bankRender() {
+  const box = el('bk-body'); if (!box) return;
+  if (!_bank.rows.length) { box.innerHTML = '<div class="empty"><i class="ti ti-cash-off"></i>해당 기간에 입금 내역이 없습니다</div>'; return; }
+  const applied = bankAppliedMap();
+  const rem = q => Math.max(0, (+q.total || 0) - (+q.paidAmount || 0));
+  box.innerHTML = _bank.rows.map((r, i) => {
+    const ap = applied[r.tid];
+    if (ap) {
+      const q = (state.quotes || []).find(x => x.id === ap.quoteId);
+      return `<div class="card" style="padding:10px 12px;margin-bottom:8px;background:var(--gl2,#eefaf5);border:1.5px solid var(--gbd,#bfe6d5)">
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
+          <div style="font-size:12.5px"><b>${esc(r.payer || '(입금자명 없음)')}</b> · ${esc(r.when)}</div>
+          <div style="font-size:15px;font-weight:800;color:var(--gd)">${fmtWon(r.amount)}원</div></div>
+        <div style="font-size:12px;color:var(--gd);margin-top:5px"><i class="ti ti-circle-check"></i> ${esc(q ? (q.client + ' · ' + (q.docNo || '')) : '견적 삭제됨')} 에 반영됨
+          <button class="btn btn-sm btn-ghost" style="margin-left:6px;color:var(--red-t)" onclick="bankUnapply('${esc(r.tid)}')"><i class="ti ti-arrow-back-up"></i>되돌리기</button></div>
+      </div>`;
+    }
+    const c = bankCandidates(r.payer, r.amount);
+    const optQ = q => `<option value="${q.id}">${esc(q.client)} · ${esc(q.docNo || '')} · 미수 ${fmtWon(rem(q))}</option>`;
+    const seen = {};
+    let opts = '';
+    if (c.exact.length) { opts += `<optgroup label="금액까지 일치">${c.exact.map(q => { seen[q.id] = 1; return optQ(q); }).join('')}</optgroup>`; }
+    const named2 = c.named.filter(q => !seen[q.id]);
+    if (named2.length) { opts += `<optgroup label="같은 거래처 미수">${named2.map(q => { seen[q.id] = 1; return optQ(q); }).join('')}</optgroup>`; }
+    const others = c.unpaid.filter(q => !seen[q.id]);
+    opts += `<optgroup label="전체 미수 견적">${others.map(optQ).join('')}</optgroup>`;
+    const auto = c.exact.length === 1;
+    return `<div class="card" style="padding:10px 12px;margin-bottom:8px${auto ? ';border:1.5px solid var(--gd)' : ''}">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
+        <div style="font-size:12.5px"><b>${esc(r.payer || '(입금자명 없음)')}</b> <span style="color:var(--t3)">· ${esc(r.when)}</span></div>
+        <div style="font-size:15px;font-weight:800;color:var(--gd)">${fmtWon(r.amount)}원</div></div>
+      ${auto ? `<div style="font-size:11.5px;color:var(--gd);font-weight:700;margin-top:4px"><i class="ti ti-target-arrow"></i> 금액까지 딱 맞는 견적을 찾았습니다</div>` : (c.named.length ? '' : `<div style="font-size:11.5px;color:var(--amber-t);margin-top:4px"><i class="ti ti-alert-triangle"></i> 이름이 맞는 미수 견적이 없습니다 — 직접 고르세요</div>`)}
+      <div style="display:flex;gap:6px;margin-top:7px;flex-wrap:wrap">
+        <select id="bk-q-${i}" style="flex:1;min-width:200px;font-size:13px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px">${opts}</select>
+        <button class="btn btn-sm btn-pri" style="flex:none" onclick="bankApply('${esc(r.tid)}',${i})"><i class="ti ti-check"></i>반영</button>
+      </div></div>`;
+  }).join('');
+}
+async function bankApply(tid, i) {
+  const r = _bank.rows.find(x => x.tid === tid); if (!r) return;
+  const sel = el('bk-q-' + i); const qid = sel && sel.value; if (!qid) { toast('견적을 고르세요'); return; }
+  const q = (state.quotes || []).find(x => x.id === qid); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
+  const tot = +q.total || 0; const cur = +q.paidAmount || 0;
+  const next = Math.min(tot, cur + r.amount);
+  if (!confirm(`${q.client} · ${q.docNo || ''}\n입금 ${fmtWon(r.amount)}원을 반영할까요?\n\n입금액 ${fmtWon(cur)} → ${fmtWon(next)} (합계 ${fmtWon(tot)})`)) return;
+  try {
+    await Store.update('quotes', qid, { paidAmount: next, paidDate: r.date, paid: tot > 0 && next >= tot });
+    const m = Object.assign({}, bankAppliedMap());
+    m[tid] = { quoteId: qid, amount: r.amount, at: Date.now(), by: (me && me.name) || '' };
+    await saveBankApplied(m);
+    toast('입금 반영됨 · ' + q.client);
+    setTimeout(bankRender, 400);
+  } catch (e) { toast('반영 실패: ' + ((e && e.message) || e)); }
+}
+async function bankUnapply(tid) {
+  const m = Object.assign({}, bankAppliedMap()); const ap = m[tid]; if (!ap) return;
+  const q = (state.quotes || []).find(x => x.id === ap.quoteId);
+  if (!confirm('이 입금 반영을 되돌릴까요?' + (q ? `\n${q.client} · ${q.docNo || ''} 에서 ${fmtWon(ap.amount)}원 차감` : ''))) return;
+  try {
+    if (q) { const next = Math.max(0, (+q.paidAmount || 0) - (+ap.amount || 0)); await Store.update('quotes', q.id, { paidAmount: next, paid: false }); }
+    delete m[tid]; await saveBankApplied(m);
+    toast('되돌렸습니다'); setTimeout(bankRender, 400);
+  } catch (e) { toast('실패: ' + ((e && e.message) || e)); }
+}
 /* ── 발행된 세금계산서 조회 ── */
 async function _taxDocCall(body) {
   const token = await auth.currentUser.getIdToken();
@@ -5871,7 +6033,7 @@ function renderQuote() {
     <button class="btn btn-sm ${filters.quoteBundle ? 'btn-pri' : ''}" style="margin-left:auto" onclick="quoteToggleBundle()"><i class="ti ti-stack-2"></i> 묶음청구</button></div>`;
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${isAdmin() ? `<button class="btn btn-sm" onclick="openTaxList()"><i class="ti ti-file-invoice"></i>계산서 내역</button>` : ''}<button class="btn btn-sm" onclick="openCutSim()"><i class="ti ti-layout-grid"></i>재단도</button><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${isAdmin() ? `<button class="btn btn-sm" onclick="openBankSync()"><i class="ti ti-building-bank"></i>입금 조회</button><button class="btn btn-sm" onclick="openTaxList()"><i class="ti ti-file-invoice"></i>계산서 내역</button>` : ''}<button class="btn btn-sm" onclick="openCutSim()"><i class="ti ti-layout-grid"></i>재단도</button><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
       <button class="stat tap" onclick="quoteShowConfUnpaid()" title="확정 주문 중 미결제만 보기"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(unpaidConf)}</div><div class="l">확정 미수금 <i class="ti ti-chevron-right tap-arrow"></i></div><div class="s">${_confUnpaidList.length}건 · 확정 전 포함 ${fmtWon(unpaid)}</div></button>
       <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행</div></div>
