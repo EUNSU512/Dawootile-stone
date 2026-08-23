@@ -1009,6 +1009,13 @@ function renderClientDetail() {
       <div style="max-height:52vh;overflow:auto">${ledger}</div>
     </div>`;
 }
+/* 화면을 갈아끼울 때 보던 위치를 기억했다가 되돌린다 (이 앱은 body 가 스크롤된다) */
+function _pageScrollTop() { return document.body.scrollTop || document.documentElement.scrollTop || window.scrollY || 0; }
+function _pageScrollTo(y) {
+  const go = () => { document.body.scrollTop = y; document.documentElement.scrollTop = y; try { window.scrollTo(0, y); } catch (e) { } };
+  requestAnimationFrame(() => { go(); requestAnimationFrame(go); });
+}
+let _taxRetScroll = 0;   // 세금계산서 화면 들어가기 직전 견적 목록 위치
 function keepScrolls() {
   const k = {};
   document.querySelectorAll('[data-keepscroll]').forEach(e => { if (e.id && e.scrollTop > 0) k[e.id] = e.scrollTop; });
@@ -4324,8 +4331,12 @@ function quoteToOrder(id) {
 /* ── 세금계산서 발행 (팝빌 Popbill · CF action=taxinvoice) ── */
 function clientTaxInfo(name) { const c = (state.clients || []).find(x => _normName(x.value) === _normName(name)); return (c && c.taxInfo) || {}; }
 async function saveClientTaxInfo(name, info) { const c = (state.clients || []).find(x => _normName(x.value) === _normName(name)); if (c) { try { await Store.update('clients', c.id, { taxInfo: info }); } catch (e) { } } }
-function openTaxForm(id) { if (!isAdmin()) { toast('세금계산서 발행은 관리자만 가능합니다'); return; } filters.taxEdit = id; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
-function taxCancel() { filters.taxEdit = ''; renderQuote(); }
+function openTaxForm(id) {
+  if (!isAdmin()) { toast('세금계산서 발행은 관리자만 가능합니다'); return; }
+  _taxRetScroll = _pageScrollTop();      // 보던 위치 기억 → 나올 때 그대로 되돌린다
+  filters.taxEdit = id; renderQuote(); _pageScrollTo(0);
+}
+function taxCancel() { filters.taxEdit = ''; renderQuote(); _pageScrollTo(_taxRetScroll); }
 function renderTaxForm() {
   const id = filters.taxEdit; const q = (state.quotes || []).find(x => x.id === id); if (!q) { filters.taxEdit = ''; renderQuote(); return; }
   const co = companyInfo(); const ti = clientTaxInfo(q.client);
@@ -4679,6 +4690,43 @@ function ledgerClientNames() {
   return _lcNames;
 }
 /* 입금 한 건이 어느 거래처인가 — ① 직접 지정 ② 별칭 ③ 이름 자동 추정 */
+/* ── 거래처 검색 선택기 — 길게 스크롤하지 않고 쳐서 찾는다 ──
+   쓰는 법: clientPickerHtml('fx0', 현재값)  →  clientPickValue('fx0') 로 고른 값을 읽는다 */
+function clientPickerHtml(idb, cur, ph) {
+  const inp = 'width:100%;font-size:13.5px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px';
+  return `<div style="width:100%">
+    <input id="${idb}-q" lang="ko" autocomplete="off" placeholder="${esc(ph || '거래처 이름 입력 (예: 거봉)')}" value="${esc(cur || '')}"
+      oninput="clientPickFilter('${idb}')" onfocus="clientPickFilter('${idb}')" style="${inp}">
+    <input type="hidden" id="${idb}" value="${esc(cur || '')}">
+    <div id="${idb}-list" style="display:none;margin-top:4px;max-height:200px;overflow-y:auto;-webkit-overflow-scrolling:touch;border:1px solid var(--bd);border-radius:9px;background:#fff"></div>
+    <div id="${idb}-msg" style="font-size:11.5px;color:var(--t3);margin-top:4px"></div>
+  </div>`;
+}
+function clientPickValue(idb) { const h = el(idb); return (h && h.value) || ''; }
+function clientPickFilter(idb) {
+  const q = ((el(idb + '-q') || {}).value || '').trim();
+  const box = el(idb + '-list'), msg = el(idb + '-msg'), hid = el(idb);
+  if (!box || !hid) return;
+  const names = ledgerClientNames();
+  const exact = names.find(c => c === q);
+  hid.value = exact || '';                                    // 목록에서 고르거나 이름이 정확히 맞아야 선택된 것
+  if (!q) { box.style.display = 'none'; box.innerHTML = ''; if (msg) msg.textContent = '이름 일부만 쳐도 아래에 나옵니다'; return; }
+  const key = _bankKey(q);
+  const hit = names.filter(c => c.indexOf(q) >= 0 || (key && _bankKey(c).indexOf(key) >= 0));
+  hit.sort((a, b) => (a.indexOf(q) >= 0 ? 0 : 1) - (b.indexOf(q) >= 0 ? 0 : 1) || a.length - b.length || a.localeCompare(b, 'ko'));
+  const show = hit.slice(0, 50);
+  if (!show.length) { box.style.display = 'none'; box.innerHTML = ''; if (msg) msg.innerHTML = '<span style="color:var(--amber-t)">그런 이름의 거래처가 없습니다</span>'; return; }
+  box.style.display = 'block';
+  box.innerHTML = show.map(c => `<button type="button" style="display:block;width:100%;text-align:left;padding:8px 10px;font-size:13px;border:none;border-bottom:1px solid var(--bd);background:${c === exact ? 'var(--gl2,#eefaf5)' : '#fff'};cursor:pointer"
+      onclick="clientPickSet('${idb}',${JSON.stringify(c).replace(/"/g, '&quot;')})">${esc(c)}</button>`).join('');
+  if (msg) msg.textContent = exact ? ('선택됨 · ' + exact) : (hit.length > show.length ? (hit.length + '곳 중 50곳 표시 — 더 쳐서 좁혀보세요') : (hit.length + '곳 — 눌러서 선택하세요'));
+}
+function clientPickSet(idb, name) {
+  const hid = el(idb), q = el(idb + '-q'), box = el(idb + '-list'), msg = el(idb + '-msg');
+  if (hid) hid.value = name; if (q) q.value = name;
+  if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+  if (msg) msg.innerHTML = '<b style="color:var(--gd)">선택됨 · ' + esc(name) + '</b>';
+}
 function txClientOf(t) {
   if (!t) return '';
   if (t.client) return t.client;
@@ -4829,13 +4877,11 @@ async function txToggleTax(id) {
 function txReassign(id) {
   const t = (state.banktx || []).find(x => x.id === id); if (!t) return;
   const cur = txClientOf(t);
-  const opts = ledgerClientNames().map(c => `<option value="${esc(c)}"${c === cur ? ' selected' : ''}>${esc(c)}</option>`).join('');
   openModal(`<div class="sheet-h"><h3><i class="ti ti-switch-horizontal"></i>거래처 지정</h3><button class="x" onclick="closeModal()">×</button></div>
     <div class="card" style="padding:11px 13px;margin-bottom:11px">
       <div style="font-size:13px"><b>${esc(t.payer || '')}</b> <span style="color:var(--t3)">· ${esc(t.dt || t.date || '')}${t.bankNm ? ' · ' + esc(t.bankNm) : ''}</span></div>
       <div style="font-size:17px;font-weight:800;color:var(--gd);margin-top:4px">${fmtWon(t.amount)}원</div></div>
-    <div class="fld full" style="margin-bottom:10px"><label>거래처</label>
-      <select id="tx-cli" style="width:100%;font-size:14px;padding:9px 10px;border:1.5px solid var(--bd2);border-radius:9px"><option value="">(지정 안 함)</option>${opts}</select></div>
+    <div class="fld full" style="margin-bottom:10px"><label>거래처</label>${clientPickerHtml('tx-cli', cur)}</div>
     <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;margin-bottom:12px;cursor:pointer">
       <input type="checkbox" id="tx-alias" checked style="width:16px;height:16px">
       <span>앞으로 <b>${esc(t.payer || '')}</b> 이름으로 들어오는 입금은 자동으로 이 거래처로</span></label>
@@ -4844,7 +4890,9 @@ function txReassign(id) {
 }
 async function txReassignSave(id) {
   const t = (state.banktx || []).find(x => x.id === id); if (!t) return;
-  const c = (el('tx-cli') && el('tx-cli').value) || '';
+  const c = clientPickValue('tx-cli');
+  const typed = ((el('tx-cli-q') || {}).value || '').trim();
+  if (typed && !c) { toast('아래 목록에서 거래처를 눌러 선택하세요'); return; }
   const mkAlias = !!(el('tx-alias') && el('tx-alias').checked);
   try {
     await Store.update('banktx', id, { client: c });
@@ -4862,7 +4910,6 @@ function ledgerFixHtml() {
   const g = {};
   list.forEach(t => { const k = t.pkey || _bankKey(t.payer); (g[k] || (g[k] = { payer: t.payer, k: k, n: 0, sum: 0, ids: [] })); g[k].n++; g[k].sum += (+t.amount || 0); g[k].ids.push(t.id); });
   const groups = Object.values(g).sort((a, b) => b.sum - a.sum);
-  const names = ledgerClientNames();
   return `
     <div class="ph"><div><h2><i class="ti ti-wand"></i>거래처 지정</h2><p>이름이 앱의 거래처와 안 맞는 입금 ${list.length}건 · ${groups.length}개 이름</p></div>
       <button class="btn btn-sm" onclick="ledgerBack()"><i class="ti ti-arrow-left"></i>원장</button></div>
@@ -4872,15 +4919,14 @@ function ledgerFixHtml() {
         <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
           <b style="font-size:13.5px">${esc(x.payer || '(이름 없음)')}</b>
           <span style="font-size:13px;font-weight:800;color:var(--gd)">${fmtWon(x.sum)}원 <span style="font-size:11px;font-weight:600;color:var(--t3)">${x.n}건</span></span></div>
-        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
-          <select id="fx-${i}" style="flex:1;min-width:180px;font-size:13.5px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px">
-            <option value="">거래처 선택…</option>${names.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}</select>
-          <button class="btn btn-sm btn-pri" onclick="ledgerFixSave('${esc(x.k)}',${i})"><i class="ti ti-check"></i>지정</button></div>
+        <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;align-items:flex-start">
+          <div style="flex:1;min-width:200px">${clientPickerHtml('fx-' + i, '', '거래처 이름 입력')}</div>
+          <button class="btn btn-sm btn-pri" style="flex:none" onclick="ledgerFixSave('${esc(x.k)}',${i})"><i class="ti ti-check"></i>지정</button></div>
       </div>`).join('') : '<div class="empty"><i class="ti ti-circle-check"></i>모든 입금에 거래처가 지정되어 있습니다</div>'}`;
 }
 async function ledgerFixSave(pkey, i) {
-  const sel = el('fx-' + i); const c = (sel && sel.value) || '';
-  if (!c) { toast('거래처를 선택하세요'); return; }
+  const c = clientPickValue('fx-' + i);
+  if (!c) { toast('거래처 이름을 치고 아래 목록에서 눌러 선택하세요'); return; }
   const ids = (state.banktx || []).filter(t => (t.pkey || _bankKey(t.payer)) === pkey && !t.client).map(t => t.id);
   if (!confirm(`${ids.length}건을 "${c}" 로 지정할까요?\n앞으로 같은 이름은 자동으로 이 거래처가 됩니다.`)) return;
   try {
@@ -5271,7 +5317,7 @@ async function submitTaxInvoice(id) {
     const token = await auth.currentUser.getIdToken();
     const r = await fetch(PUSH_FN + '?action=taxinvoice', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify(payload) });
     const j = await r.json().catch(() => ({}));
-    if (r.ok && j.ok) { await Store.update('quotes', id, { taxInvoice: true, taxDate: todayStr(), ntsConfirmNum: j.ntsConfirmNum || '', taxMgtKey: j.mgtKey || payload.mgtKey, taxReissue: _reN, taxTestMode: !!j.test, taxSupply: payload.supplyCostTotal, taxVat: payload.taxTotal, taxTotal: payload.totalAmount, taxIssuedAt: Date.now() }); _taxDraft = null; closeModal(); toast('세금계산서 발행 완료' + (j.ntsConfirmNum ? (' · 승인 ' + j.ntsConfirmNum) : '')); filters.taxEdit = ''; renderQuote(); }
+    if (r.ok && j.ok) { await Store.update('quotes', id, { taxInvoice: true, taxDate: todayStr(), ntsConfirmNum: j.ntsConfirmNum || '', taxMgtKey: j.mgtKey || payload.mgtKey, taxReissue: _reN, taxTestMode: !!j.test, taxSupply: payload.supplyCostTotal, taxVat: payload.taxTotal, taxTotal: payload.totalAmount, taxIssuedAt: Date.now() }); _taxDraft = null; closeModal(); toast('세금계산서 발행 완료' + (j.ntsConfirmNum ? (' · 승인 ' + j.ntsConfirmNum) : '')); filters.taxEdit = ''; renderQuote(); _pageScrollTo(_taxRetScroll); }
     else { toast('발행 실패: ' + ((j && j.error) || ('HTTP ' + r.status))); }
   } catch (e) { toast('발행 오류: ' + ((e && e.message) || e)); }
   finally { setTimeout(() => { _busy = false; }, 700); }
