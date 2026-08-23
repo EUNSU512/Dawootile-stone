@@ -4490,15 +4490,46 @@ function _bankDT(v) {
   return String(v || '');
 }
 function _bankDate(v) { const t = String(v || '').replace(/[^0-9]/g, ''); return t.length >= 8 ? (t.slice(0, 4) + '-' + t.slice(4, 6) + '-' + t.slice(6, 8)) : todayStr(); }
+/* 은행 입금자명 정리 — (주)/㈜/주식회사 같은 법인 표기와 공백·기호를 떼어낸 비교용 키.
+   은행이 이름을 9글자쯤에서 잘라 보내기 때문에 "주식회사비나인스튜" 같은 토막 이름도 맞춰야 한다. */
+function _bankKey(s) {
+  return String(s == null ? '' : s)
+    .replace(/㈜|주식회사|주식회|유한회사|합자회사/g, '')
+    .replace(/[（(\[]\s*[주유]\s*[)）\]]/g, '')
+    .replace(/[^0-9A-Za-z가-힣]/g, '')
+    .toUpperCase();
+}
+/* 두 이름이 얼마나 같은가 — 3=완전일치, 2=한쪽이 다른 쪽에 통째로 들어감, 1=3글자 이상 겹침, 0=관계없음 */
+function _bankNameHit(payer, name) {
+  const a = _bankKey(payer), b = _bankKey(name);
+  if (!a || !b) return 0;
+  if (a === b) return 3;
+  if (a.length >= 2 && b.indexOf(a) >= 0) return 2;
+  if (b.length >= 2 && a.indexOf(b) >= 0) return 2;
+  const sh = a.length <= b.length ? a : b, lo = a.length <= b.length ? b : a;
+  for (let n = Math.min(sh.length, 8); n >= 3; n--)
+    for (let i = 0; i + n <= sh.length; i++) if (lo.indexOf(sh.substr(i, n)) >= 0) return 1;
+  return 0;
+}
 /* 입금자명 + 금액으로 후보 견적 찾기 — 이름 겹치는 미수 견적 우선, 금액 같으면 최우선 */
 function bankCandidates(payer, amount) {
   const rem = q => Math.max(0, (+q.total || 0) - (+q.paidAmount || 0));
   const unpaid = (state.quotes || []).filter(q => rem(q) > 0);
-  const key = _normName(payer || '');
-  const named = key ? unpaid.filter(q => { const c = _normName(q.client || ''); return c && (c.indexOf(key) >= 0 || key.indexOf(c) >= 0); }) : [];
+  const key = _bankKey(payer || '');
+  const score = q => key ? Math.max(
+    _bankNameHit(payer, q.client || ''),
+    _bankNameHit(payer, q.attn || '') ? 1 : 0,
+    _bankNameHit(payer, q.siteName || '') ? 1 : 0
+  ) : 0;
+  const named = unpaid.filter(q => score(q) > 0);
   const exact = named.filter(q => Math.abs(rem(q) - amount) < 1);
-  const sortR = (a, b) => rem(a) - rem(b);
-  return { exact: exact.sort(sortR), named: named.sort(sortR), unpaid: unpaid.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')) };
+  const seenE = {}; exact.forEach(q => seenE[q.id] = 1);
+  const amt = unpaid.filter(q => !seenE[q.id] && Math.abs(rem(q) - amount) < 1);   // 이름은 달라도 금액이 딱 맞는 건
+  const sortR = (a, b) => (score(b) - score(a)) || (rem(a) - rem(b));
+  return {
+    exact: exact.sort(sortR), named: named.sort(sortR), amt: amt.sort((a, b) => (b.date || '').localeCompare(a.date || '')),
+    unpaid: unpaid.slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+  };
 }
 function openBankSync() {
   if (!isAdmin()) { toast('입금 조회는 관리자만 가능합니다'); return; }
@@ -4558,9 +4589,14 @@ async function bankRun() {
     const list = (r2.result && r2.result.list) || [];
     _bank.rows = list.map(x => ({
       tid: x.tid || (x.trdate + '-' + x.trserial), when: _bankDT(x.trdt || x.trdate), date: _bankDate(x.trdate || x.trdt),
-      payer: (x.remark1 || x.remark2 || '').trim(), amount: Math.round(+x.deposit || 0), balance: Math.round(+x.balance || 0), memo: (x.memo || '').trim()
+      payer: (x.remark1 || '').trim() || (x.remark2 || '').trim(),
+      bank: (x.remark2 || '').trim(), way: (x.remark3 || '').trim(),
+      amount: Math.round(+x.accIn || +x.deposit || 0),   // ★ 팝빌 입금액 필드는 accIn (deposit 아님)
+      balance: Math.round(+x.balance || 0), memo: (x.memo || '').trim()
     })).filter(x => x.amount > 0);
-    setSt(`입금 <b style="color:var(--gd)">${_bank.rows.length}건</b> · 합계 <b>${fmtWon(_bank.rows.reduce((s2b, x) => s2b + x.amount, 0))}</b>원`);
+    const _tot = +((r2.result && r2.result.total) || 0);
+    setSt(`입금 <b style="color:var(--gd)">${_bank.rows.length}건</b> · 합계 <b>${fmtWon(_bank.rows.reduce((s2b, x) => s2b + x.amount, 0))}</b>원`
+      + (_tot > list.length ? ` <span style="color:var(--amber-t)">· 전체 ${_tot}건 중 ${list.length}건만 표시 (기간을 좁혀 주세요)</span>` : ''));
     bankRender();
   } catch (e) { setSt('<span style="color:#c0341d">' + esc((e && e.message) || e) + '</span>'); }
   finally { _bank.loading = false; }
@@ -4589,12 +4625,14 @@ function bankRender() {
     if (c.exact.length) { opts += `<optgroup label="금액까지 일치">${c.exact.map(q => { seen[q.id] = 1; return optQ(q); }).join('')}</optgroup>`; }
     const named2 = c.named.filter(q => !seen[q.id]);
     if (named2.length) { opts += `<optgroup label="같은 거래처 미수">${named2.map(q => { seen[q.id] = 1; return optQ(q); }).join('')}</optgroup>`; }
+    const amt2 = (c.amt || []).filter(q => !seen[q.id]);
+    if (amt2.length) { opts += `<optgroup label="금액이 같은 미수 (이름 다름)">${amt2.map(q => { seen[q.id] = 1; return optQ(q); }).join('')}</optgroup>`; }
     const others = c.unpaid.filter(q => !seen[q.id]);
     opts += `<optgroup label="전체 미수 견적">${others.map(optQ).join('')}</optgroup>`;
     const auto = c.exact.length === 1;
     return `<div class="card" style="padding:10px 12px;margin-bottom:8px${auto ? ';border:1.5px solid var(--gd)' : ''}">
       <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
-        <div style="font-size:12.5px"><b>${esc(r.payer || '(입금자명 없음)')}</b> <span style="color:var(--t3)">· ${esc(r.when)}</span></div>
+        <div style="font-size:12.5px"><b>${esc(r.payer || '(입금자명 없음)')}</b> <span style="color:var(--t3)">· ${esc(r.when)}${r.bank ? ' · ' + esc(r.bank) : ''}</span></div>
         <div style="font-size:15px;font-weight:800;color:var(--gd)">${fmtWon(r.amount)}원</div></div>
       ${auto ? `<div style="font-size:11.5px;color:var(--gd);font-weight:700;margin-top:4px"><i class="ti ti-target-arrow"></i> 금액까지 딱 맞는 견적을 찾았습니다</div>` : (c.named.length ? '' : `<div style="font-size:11.5px;color:var(--amber-t);margin-top:4px"><i class="ti ti-alert-triangle"></i> 이름이 맞는 미수 견적이 없습니다 — 직접 고르세요</div>`)}
       <div style="display:flex;gap:6px;margin-top:7px;flex-wrap:wrap">
