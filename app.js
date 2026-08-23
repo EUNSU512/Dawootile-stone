@@ -4745,34 +4745,65 @@ function txClientOf(t) {
 }
 function txIsGuess(t) { return !!(t && !t.client && !bankAliasMap()[t.pkey || _bankKey(t.payer)]); }
 function ledgerRange() {
-  const r = filters.ledgerRange || '3m';
+  const r = filters.ledgerRange || 'all';
   const t = todayStr();
-  if (r === 'all') return { sd: '0000-00-00', ed: '9999-99-99', label: '전체' };
+  if (r === 'all') return { sd: '0000-00-00', ed: '9999-99-99', label: '전체 기간' };
   if (r === 'tm') return { sd: t.slice(0, 7) + '-01', ed: t, label: '이번 달' };
   if (r === 'lm') { const d = new Date(t.slice(0, 7) + '-01T00:00'); d.setMonth(d.getMonth() - 1); const ym = _ymd(d).slice(0, 7); const last = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate(); return { sd: ym + '-01', ed: ym + '-' + String(last).padStart(2, '0'), label: '지난 달' }; }
-  const d = _ymd(new Date(Date.now() - 89 * 86400000));
-  return { sd: d, ed: t, label: '최근 3개월' };
+  return { sd: _ymd(new Date(Date.now() - 89 * 86400000)), ed: t, label: '최근 3개월' };
 }
-/* 거래처별 집계 */
+/* ── 거래처 한 곳의 원장 줄 만들기 ──
+   매출(확정 견적) → 잔액 +   /   결제 → 잔액 −   /   세금계산서 → 표시만(잔액 무관)
+   결제는 ① 은행 입금 중 그 견적에 연결된 것 ② 나머지 수기 입력분 — 둘을 합치면 정확히 견적의 입금액이 된다 */
+function ledgerRows(client) {
+  const qs = (state.quotes || []).filter(q => !!q.ordered && (q.client || '').trim() === client);
+  if (!qs.length && !(state.banktx || []).some(t => txClientOf(t) === client)) return [];
+  const qid = {}; qs.forEach(q => qid[q.id] = q);
+  const rows = [];
+  qs.forEach(q => {
+    rows.push({ d: q.date || '', k: 'sale', amt: +q.total || 0, docNo: q.docNo || '', site: (q.siteName || q.siteAddr || q.attn || '').trim(), id: q.id });
+    if (q.taxInvoice) rows.push({ d: q.taxDate || q.date || '', k: 'tax', amt: (+q.taxTotal || +q.total || 0), docNo: q.docNo || '', id: q.id, nts: q.ntsConfirmNum || '', mgt: q.taxMgtKey || '' });
+  });
+  const allocQ = {};   // 견적별 은행 연결 금액
+  (state.banktx || []).forEach(t => {
+    if (!Array.isArray(t.alloc) || !t.alloc.length) return;
+    const mine = t.alloc.filter(a => qid[a.quoteId]);
+    if (!mine.length) return;
+    mine.forEach(a => allocQ[a.quoteId] = (allocQ[a.quoteId] || 0) + (+a.amount || 0));
+    rows.push({ d: t.date || '', k: 'pay', amt: mine.reduce((s, a) => s + (+a.amount || 0), 0), src: 'bank', payer: t.payer || '', bankNm: t.bankNm || '', docNo: mine.map(a => a.docNo).filter(Boolean).join(', '), tid: t.id });
+  });
+  qs.forEach(q => {                       // 은행 연결로 설명이 안 되는 나머지 = 손으로 넣은 입금
+    const rest = Math.max(0, (+q.paidAmount || 0) - (allocQ[q.id] || 0));
+    if (rest > 0) rows.push({ d: q.paidDate || q.date || '', k: 'pay', amt: rest, src: 'manual', docNo: q.docNo || '', id: q.id });
+  });
+  const ord = { sale: 0, tax: 1, pay: 2 };
+  rows.sort((a, b) => (a.d || '').localeCompare(b.d || '') || (ord[a.k] - ord[b.k]) || (a.docNo || '').localeCompare(b.docNo || ''));
+  let bal = 0;
+  rows.forEach(r => { if (r.k === 'sale') bal += r.amt; else if (r.k === 'pay') bal -= r.amt; r.bal = bal; });
+  return rows;
+}
+/* 아직 어느 견적에도 안 붙은 입금 = 선입금이거나 앱 쓰기 전 거래의 대금 */
+function ledgerUnalloc(client) { return (state.banktx || []).filter(t => txClientOf(t) === client && !txIsLinked(t) && (+t.amount || 0) > 0); }
+/* 거래처별 요약 — 미수는 기간과 무관하게 누적으로 계산한다 (원장이니까) */
 function ledgerAgg() {
-  const R = ledgerRange();
-  const inR = d => (d || '') >= R.sd && (d || '') <= R.ed;
   const map = {};
-  const get = c => map[c] || (map[c] = { c: c, qn: 0, qsum: 0, dn: 0, dsum: 0, noTax: 0, last: '' });
+  const get = c => map[c] || (map[c] = { c: c, qn: 0, sale: 0, pay: 0, rem: 0, taxAmt: 0, noTaxAmt: 0, noTaxN: 0, unAllocN: 0, unAlloc: 0, last: '' });
   (state.quotes || []).forEach(q => {
-    if (!q.ordered) return;                       // 확정된 견적만 매출로 본다
-    const c = (q.client || '').trim(); if (!c) return;
-    const d = q.date || ''; if (!inR(d)) return;
-    const o = get(c); o.qn++; o.qsum += (+q.total || 0); if (d > o.last) o.last = d;
+    if (!q.ordered) return; const c = (q.client || '').trim(); if (!c) return;
+    const o = get(c); const tot = +q.total || 0, pa = Math.min(tot, +q.paidAmount || 0);
+    o.qn++; o.sale += tot; o.pay += pa; o.rem += Math.max(0, tot - pa);
+    if (q.taxInvoice) o.taxAmt += (+q.taxTotal || tot); else { o.noTaxAmt += tot; o.noTaxN++; }
+    const d = q.date || ''; if (d > o.last) o.last = d;
   });
   let unassigned = 0, unassignedSum = 0;
   (state.banktx || []).forEach(t => {
-    if (!inR(t.date)) return;
-    const c = txClientOf(t);
-    if (!c) { unassigned++; unassignedSum += (+t.amount || 0); return; }
-    const o = get(c); o.dn++; o.dsum += (+t.amount || 0); if (!t.taxInvoice) o.noTax++; if ((t.date || '') > o.last) o.last = t.date;
+    const c = txClientOf(t); const amt = +t.amount || 0; if (amt <= 0) return;
+    if (!c) { unassigned++; unassignedSum += amt; return; }
+    const o = get(c);
+    if (!txIsLinked(t)) { o.unAllocN++; o.unAlloc += amt; }
+    if ((t.date || '') > o.last) o.last = t.date || '';
   });
-  return { R: R, rows: Object.values(map), unassigned: unassigned, unassignedSum: unassignedSum };
+  return { rows: Object.values(map), unassigned: unassigned, unassignedSum: unassignedSum };
 }
 function openLedger() { if (!isAdmin()) { toast('원장은 관리자만 볼 수 있습니다'); return; } qListSave(); filters.ledger = true; filters.ledgerClient = ''; go('quote'); }
 function ledgerClose() { filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; renderQuote(); qListRestore(); }
@@ -4786,95 +4817,129 @@ function renderLedger() {
   if (filters.ledgerFix) { root.innerHTML = ledgerFixHtml(); return; }
   if (filters.ledgerClient) { root.innerHTML = ledgerDetailHtml(filters.ledgerClient); return; }
   const A = ledgerAgg();
-  const totQ = A.rows.reduce((s, r) => s + r.qsum, 0), totD = A.rows.reduce((s, r) => s + r.dsum, 0);
-  const totNoTax = A.rows.reduce((s, r) => s + r.noTax, 0);
-  const rc = (v, l) => `<button class="chip ${(filters.ledgerRange || '3m') === v ? 'active' : ''}" onclick="ledgerSetRange('${v}')">${l}</button>`;
-  const sc = (v, l) => `<button class="chip ${(filters.ledgerSort || 'dsum') === v ? 'active' : ''}" onclick="ledgerSetSort('${v}')">${l}</button>`;
-  return void (root.innerHTML = `
-    <div class="ph"><div><h2><i class="ti ti-book"></i>거래처 원장</h2><p>${esc(A.R.label)} · 확정 견적과 은행 입금을 나란히 봅니다</p></div>
+  const totSale = A.rows.reduce((s, r) => s + r.sale, 0), totPay = A.rows.reduce((s, r) => s + r.pay, 0);
+  const totRem = A.rows.reduce((s, r) => s + r.rem, 0), totNoTax = A.rows.reduce((s, r) => s + r.noTaxAmt, 0);
+  const totUn = A.rows.reduce((s, r) => s + r.unAlloc, 0);
+  const sc = (v, l) => `<button class="chip ${(filters.ledgerSort || 'rem') === v ? 'active' : ''}" onclick="ledgerSetSort('${v}')">${l}</button>`;
+  const pmN = payMatchCount();
+  root.innerHTML = `
+    <div class="ph"><div><h2><i class="ti ti-book"></i>거래처 원장</h2><p>매출 · 결제 · 미수를 자동으로 계산합니다</p></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-sm" onclick="openBankSync()"><i class="ti ti-download"></i>입금 가져오기</button>
-        <button class="btn btn-sm" onclick="openPayMatch()"><i class="ti ti-link"></i>결제 반영</button>
+        <button class="btn btn-sm" onclick="openPayMatch()"><i class="ti ti-link"></i>결제 반영${pmN ? ` <b style="color:var(--gd)">${pmN}</b>` : ''}</button>
         <button class="btn btn-sm" onclick="ledgerClose()"><i class="ti ti-arrow-left"></i>견적 목록</button></div></div>
-    <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
-      <div class="stat"><div class="ic g"><i class="ti ti-file-text"></i></div><div class="v" style="font-size:19px">${fmtWon(totQ)}</div><div class="l">확정 견적</div><div class="s">${A.rows.reduce((s, r) => s + r.qn, 0)}건</div></div>
-      <div class="stat"><div class="ic b"><i class="ti ti-cash"></i></div><div class="v" style="font-size:19px">${fmtWon(totD)}</div><div class="l">은행 입금</div><div class="s">${A.rows.reduce((s, r) => s + r.dn, 0)}건</div></div>
-      <div class="stat"><div class="ic r"><i class="ti ti-file-off"></i></div><div class="v">${totNoTax}</div><div class="l">입금 중 계산서 미발행</div><div class="s">거래처 ${A.rows.length}곳</div></div>
+    <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
+      <div class="stat"><div class="ic g"><i class="ti ti-file-text"></i></div><div class="v" style="font-size:18px">${fmtWon(totSale)}</div><div class="l">확정 매출</div><div class="s">${A.rows.reduce((s, r) => s + r.qn, 0)}건</div></div>
+      <div class="stat"><div class="ic b"><i class="ti ti-cash"></i></div><div class="v" style="font-size:18px">${fmtWon(totPay)}</div><div class="l">결제됨</div><div class="s">${totSale > 0 ? Math.round(totPay / totSale * 100) : 0}%</div></div>
+      <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:18px;color:var(--red-t)">${fmtWon(totRem)}</div><div class="l">미수금</div><div class="s">거래처 ${A.rows.filter(r => r.rem > 0).length}곳</div></div>
+      <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v" style="font-size:18px">${fmtWon(totNoTax)}</div><div class="l">계산서 미발행</div><div class="s">${A.rows.reduce((s, r) => s + r.noTaxN, 0)}건</div></div>
     </div>
-    ${A.unassigned ? `<div class="banner warn" style="margin-bottom:10px;font-size:12.5px"><i class="ti ti-alert-triangle"></i> 거래처를 못 찾은 입금이 <b>${A.unassigned}건 · ${fmtWon(A.unassignedSum)}원</b> 있습니다.
-      <div style="margin-top:7px"><button class="btn btn-sm btn-pri" onclick="ledgerFix()"><i class="ti ti-wand"></i>거래처 지정하기</button></div></div>` : ''}
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${rc('tm', '이번 달')}${rc('lm', '지난 달')}${rc('3m', '최근 3개월')}${rc('all', '전체')}</div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"><span style="font-size:11.5px;color:var(--t3);align-self:center;margin-right:2px">정렬</span>${sc('dsum', '입금 많은 순')}${sc('qsum', '견적 많은 순')}${sc('last', '최근 거래순')}${sc('name', '이름순')}</div>
+    ${pmN ? `<button class="card" style="width:100%;text-align:left;display:block;padding:10px 13px;margin-bottom:9px;border:1.5px solid var(--gd);background:var(--gl2,#f4fbf8);cursor:pointer" onclick="openPayMatch()">
+      <span style="font-size:12.5px"><i class="ti ti-link" style="color:var(--gd)"></i> 금액이 맞는 <b>입금 ${pmN}건</b>이 아직 결제로 안 잡혔습니다 — 반영하면 미수가 그만큼 줄어듭니다 <i class="ti ti-chevron-right"></i></span></button>` : ''}
+    ${A.unassigned ? `<div class="banner warn" style="margin-bottom:9px;font-size:12.5px"><i class="ti ti-alert-triangle"></i> 거래처를 못 찾은 입금 <b>${A.unassigned}건 · ${fmtWon(A.unassignedSum)}원</b>
+      <button class="btn btn-sm btn-pri" style="margin-left:8px" onclick="ledgerFix()"><i class="ti ti-wand"></i>거래처 지정</button></div>` : ''}
+    ${totUn ? `<div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i> 거래처는 붙었지만 아직 견적에 연결 안 된 입금이 <b>${fmtWon(totUn)}원</b> 있습니다. 앱 쓰기 전 거래의 대금이거나 선입금입니다 — <b>미수 계산에는 안 들어갑니다.</b></div>` : ''}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"><span style="font-size:11.5px;color:var(--t3);align-self:center;margin-right:2px">정렬</span>${sc('rem', '미수 많은 순')}${sc('sale', '매출 많은 순')}${sc('last', '최근 거래순')}${sc('name', '이름순')}</div>
     <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i>
       <input id="lg-search" placeholder="거래처 검색" value="${esc(filters.ledgerSearch || '')}" oninput="filters.ledgerSearch=this.value;ledgerFilter()" autocomplete="off" lang="ko"></div>
-    <div id="lg-listwrap">${_ledgerListInner(A)}</div>`);
+    <div id="lg-listwrap">${_ledgerListInner(A)}</div>`;
 }
-/* 검색·정렬만 다시 그린다 (검색창 포커스·한글 입력이 끊기지 않게) */
 function ledgerFilter() { const w = el('lg-listwrap'); if (w) w.innerHTML = _ledgerListInner(ledgerAgg()); }
 function _ledgerListInner(A) {
-  const sort = filters.ledgerSort || 'dsum';
+  const sort = filters.ledgerSort || 'rem';
   const qy = (filters.ledgerSearch || '').trim().toLowerCase();
   let rows = A.rows;
   if (qy) rows = rows.filter(r => r.c.toLowerCase().includes(qy));
   rows = rows.slice().sort((a, b) =>
-    sort === 'qsum' ? b.qsum - a.qsum : sort === 'name' ? a.c.localeCompare(b.c, 'ko') : sort === 'last' ? (b.last || '').localeCompare(a.last || '') : b.dsum - a.dsum);
-  if (!rows.length) return '<div class="empty"><i class="ti ti-book-off"></i>이 기간에 거래 내역이 없습니다</div>';
-  return rows.map(r => `
-      <button class="card" style="width:100%;text-align:left;padding:11px 13px;margin-bottom:8px;display:block;border:1px solid var(--bd)" onclick="ledgerOpen(${JSON.stringify(r.c).replace(/"/g, '&quot;')})">
-        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
-          <b style="font-size:13.5px">${esc(r.c)}</b>
-          <span style="font-size:11.5px;color:var(--t3)">${esc(r.last || '')} <i class="ti ti-chevron-right"></i></span></div>
-        <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:6px;font-size:12px">
-          <span style="color:var(--t2)">견적 <b style="color:var(--tx)">${fmtWon(r.qsum)}</b> <span style="color:var(--t3)">${r.qn}건</span></span>
-          <span style="color:var(--t2)">입금 <b style="color:var(--gd)">${fmtWon(r.dsum)}</b> <span style="color:var(--t3)">${r.dn}건</span></span>
-          ${r.noTax ? `<span style="color:var(--red-t)">계산서 미발행 <b>${r.noTax}</b></span>` : ''}</div>
-      </button>`).join('');
+    sort === 'sale' ? b.sale - a.sale : sort === 'name' ? a.c.localeCompare(b.c, 'ko') : sort === 'last' ? (b.last || '').localeCompare(a.last || '') : (b.rem - a.rem) || (b.sale - a.sale));
+  if (!rows.length) return '<div class="empty"><i class="ti ti-book-off"></i>거래 내역이 없습니다</div>';
+  return rows.map(r => {
+    const pct = r.sale > 0 ? Math.min(100, Math.round(r.pay / r.sale * 100)) : 0;
+    return `<button class="card" style="width:100%;text-align:left;padding:11px 13px;margin-bottom:8px;display:block;border:1px solid ${r.rem > 0 ? '#e6c3c3' : 'var(--bd)'}" onclick="ledgerOpen(${JSON.stringify(r.c).replace(/"/g, '&quot;')})">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
+        <b style="font-size:13.5px">${esc(r.c)}</b>
+        <span style="font-size:11.5px;color:var(--t3)">${esc(r.last || '')} <i class="ti ti-chevron-right"></i></span></div>
+      <div style="display:flex;gap:5px;align-items:center;margin:7px 0 5px">
+        <div style="flex:1;height:6px;background:var(--soft);border-radius:4px;overflow:hidden"><div style="width:${pct}%;height:100%;background:var(--gd)"></div></div>
+        <span style="font-size:10.5px;color:var(--t3);white-space:nowrap">${pct}% 결제</span></div>
+      <div style="display:flex;gap:13px;flex-wrap:wrap;font-size:12px">
+        <span style="color:var(--t2)">매출 <b style="color:var(--tx)">${fmtWon(r.sale)}</b> <span style="color:var(--t3)">${r.qn}건</span></span>
+        <span style="color:var(--t2)">결제 <b style="color:var(--gd)">${fmtWon(r.pay)}</b></span>
+        ${r.rem > 0 ? `<span style="color:var(--t2)">미수 <b style="color:var(--red-t)">${fmtWon(r.rem)}</b></span>` : '<span style="color:var(--gd);font-weight:700"><i class="ti ti-circle-check"></i> 완납</span>'}
+        ${r.noTaxN ? `<span style="color:var(--amber-t)">계산서 미발행 <b>${fmtWon(r.noTaxAmt)}</b></span>` : ''}
+        ${r.unAlloc ? `<span style="color:var(--t3)">미배정 입금 ${fmtWon(r.unAlloc)}</span>` : ''}</div>
+    </button>`;
+  }).join('');
 }
-/* ── 거래처 한 곳의 원장 (견적 + 입금을 날짜순으로) ── */
+/* ── 거래처 한 곳의 원장 (잔액이 굴러간다) ── */
 function ledgerDetailHtml(client) {
   const R = ledgerRange();
+  const all = ledgerRows(client);
+  const un = ledgerUnalloc(client);
+  const sale = all.filter(r => r.k === 'sale').reduce((s, r) => s + r.amt, 0);
+  const pay = all.filter(r => r.k === 'pay').reduce((s, r) => s + r.amt, 0);
+  const rem = sale - pay;
+  const taxAmt = all.filter(r => r.k === 'tax').reduce((s, r) => s + r.amt, 0);
+  const noTaxAmt = (state.quotes || []).filter(q => !!q.ordered && (q.client || '').trim() === client && !q.taxInvoice).reduce((s, q) => s + (+q.total || 0), 0);
   const inR = d => (d || '') >= R.sd && (d || '') <= R.ed;
-  const qs = (state.quotes || []).filter(q => !!q.ordered && (q.client || '').trim() === client && inR(q.date));
-  const txs = (state.banktx || []).filter(t => inR(t.date) && txClientOf(t) === client);
-  const qsum = qs.reduce((s, q) => s + (+q.total || 0), 0), dsum = txs.reduce((s, t) => s + (+t.amount || 0), 0);
-  const lines = []
-    .concat(qs.map(q => ({ d: q.date || '', k: 'q', q: q })))
-    .concat(txs.map(t => ({ d: t.date || '', k: 't', t: t })))
-    .sort((a, b) => (b.d || '').localeCompare(a.d || '') || (a.k === 'q' ? -1 : 1));
-  const row = L => {
-    if (L.k === 'q') {
-      const q = L.q; const site = (q.siteName || q.siteAddr || q.attn || '').trim();
-      return `<tr>
-        <td style="white-space:nowrap;color:var(--t3)">${esc((q.date || '').slice(5))}</td>
-        <td><span class="pill p-gray">견적</span></td>
-        <td>${esc(q.docNo || '')}${site ? ` <span style="color:var(--t3)">· ${esc(site)}</span>` : ''}</td>
-        <td style="text-align:right;white-space:nowrap">${fmtWon(q.total)}</td>
-        <td style="text-align:right;white-space:nowrap"><span class="pill ${q.taxInvoice ? 'p-done' : 'p-wait'}">${q.taxInvoice ? '발행' : '미발행'}</span></td>
-        <td style="text-align:right;white-space:nowrap"><button class="btn btn-sm btn-ghost" onclick="openQuoteView('${q.id}')"><i class="ti ti-eye"></i></button></td></tr>`;
-    }
-    const t = L.t;
+  const shown = all.filter(r => inR(r.d));
+  const before = all.filter(r => !inR(r.d) && (r.d || '') < R.sd);
+  const openBal = before.length ? before[before.length - 1].bal : 0;
+  const rc = (v, l) => `<button class="chip ${(filters.ledgerRange || 'all') === v ? 'active' : ''}" onclick="ledgerSetRange('${v}')">${l}</button>`;
+  const money = (v, col) => `<td style="text-align:right;white-space:nowrap${col ? ';color:' + col : ''}">${v ? fmtWon(v) : '<span style="color:var(--bd2)">·</span>'}</td>`;
+  const row = r => {
+    if (r.k === 'sale') return `<tr>
+      <td style="white-space:nowrap;color:var(--t3)">${esc((r.d || '').slice(2))}</td>
+      <td><span class="pill p-gray">매출</span></td>
+      <td style="cursor:pointer" onclick="openQuoteView('${r.id}')"><b>${esc(r.docNo)}</b>${r.site ? ` <span style="color:var(--t3)">· ${esc(r.site)}</span>` : ''}</td>
+      ${money(r.amt)}${money(0)}
+      <td style="text-align:right;white-space:nowrap;font-weight:700">${fmtWon(r.bal)}</td></tr>`;
+    if (r.k === 'tax') return `<tr style="background:#fbfaf7">
+      <td style="white-space:nowrap;color:var(--t3)">${esc((r.d || '').slice(2))}</td>
+      <td><span class="pill p-prog">계산서</span></td>
+      <td style="color:var(--t2)">${esc(r.docNo)} 발행${r.nts ? ` <span style="color:var(--t3)">· 승인 ${esc(r.nts)}</span>` : ''}${r.mgt ? ` <button class="btn btn-sm btn-ghost" style="padding:1px 5px" onclick="taxOpenDoc('${esc(r.mgt)}')"><i class="ti ti-external-link"></i></button>` : ''}</td>
+      <td style="text-align:right;white-space:nowrap;color:var(--t3)">(${fmtWon(r.amt)})</td>${money(0)}
+      <td style="text-align:right;white-space:nowrap;color:var(--t3)">${fmtWon(r.bal)}</td></tr>`;
     return `<tr style="background:var(--gl2,#f4fbf8)">
-      <td style="white-space:nowrap;color:var(--t3)">${esc((t.date || '').slice(5))}</td>
+      <td style="white-space:nowrap;color:var(--t3)">${esc((r.d || '').slice(2))}</td>
       <td><span class="pill p-done">입금</span></td>
-      <td>${esc(t.payer || '')}${t.bankNm ? ` <span style="color:var(--t3)">· ${esc(t.bankNm)}</span>` : ''}${txIsGuess(t) ? ' <span style="color:var(--amber-t);font-size:11px">(이름 추정)</span>' : ''}</td>
-      <td style="text-align:right;white-space:nowrap;font-weight:700;color:var(--gd)">${fmtWon(t.amount)}</td>
-      <td style="text-align:right;white-space:nowrap"><button class="btn btn-sm ${t.taxInvoice ? 'btn-ghost' : ''}" onclick="txToggleTax('${t.id}')"><span class="pill ${t.taxInvoice ? 'p-done' : 'p-wait'}">${t.taxInvoice ? '발행' : '미발행'}</span></button></td>
-      <td style="text-align:right;white-space:nowrap"><button class="btn btn-sm btn-ghost" onclick="txReassign('${t.id}')"><i class="ti ti-switch-horizontal"></i></button></td></tr>`;
+      <td>${r.src === 'bank' ? `<b>${esc(r.payer)}</b>${r.bankNm ? ` <span style="color:var(--t3)">· ${esc(r.bankNm)}</span>` : ''}` : '<span style="color:var(--t2)">직접 입력</span>'}${r.docNo ? ` <span style="color:var(--t3)">→ ${esc(r.docNo)}</span>` : ''}</td>
+      ${money(0)}<td style="text-align:right;white-space:nowrap;font-weight:700;color:var(--gd)">${fmtWon(r.amt)}</td>
+      <td style="text-align:right;white-space:nowrap;font-weight:700">${fmtWon(r.bal)}</td></tr>`;
   };
-  const noTax = txs.filter(t => !t.taxInvoice);
   return `
-    <div class="ph"><div><h2><i class="ti ti-book"></i>${esc(client)}</h2><p>${esc(R.label)} · 견적 ${qs.length}건 · 입금 ${txs.length}건</p></div>
+    <div class="ph"><div><h2><i class="ti ti-book"></i>${esc(client)}</h2><p>${esc(R.label)} · 매출 ${all.filter(r => r.k === 'sale').length}건 · 입금 ${all.filter(r => r.k === 'pay').length}건</p></div>
       <button class="btn btn-sm" onclick="ledgerBack()"><i class="ti ti-arrow-left"></i>거래처 목록</button></div>
-    <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
-      <div class="stat"><div class="ic g"><i class="ti ti-file-text"></i></div><div class="v" style="font-size:19px">${fmtWon(qsum)}</div><div class="l">확정 견적</div></div>
-      <div class="stat"><div class="ic b"><i class="ti ti-cash"></i></div><div class="v" style="font-size:19px">${fmtWon(dsum)}</div><div class="l">은행 입금</div></div>
-      <div class="stat"><div class="ic r"><i class="ti ti-file-off"></i></div><div class="v">${noTax.length}</div><div class="l">계산서 미발행 입금</div><div class="s">${fmtWon(noTax.reduce((s, t) => s + (+t.amount || 0), 0))}</div></div>
+    <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:11px">
+      <div class="stat"><div class="ic g"><i class="ti ti-file-text"></i></div><div class="v" style="font-size:18px">${fmtWon(sale)}</div><div class="l">확정 매출</div></div>
+      <div class="stat"><div class="ic b"><i class="ti ti-cash"></i></div><div class="v" style="font-size:18px">${fmtWon(pay)}</div><div class="l">결제됨</div><div class="s">${sale > 0 ? Math.round(pay / sale * 100) : 0}%</div></div>
+      <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:18px;color:${rem > 0 ? 'var(--red-t)' : 'var(--gd)'}">${fmtWon(rem)}</div><div class="l">${rem > 0 ? '미수금' : '완납'}</div></div>
+      <div class="stat"><div class="ic b"><i class="ti ti-file-invoice"></i></div><div class="v" style="font-size:18px">${fmtWon(taxAmt)}</div><div class="l">계산서 발행</div><div class="s">${noTaxAmt ? '미발행 ' + fmtWon(noTaxAmt) : '전부 발행'}</div></div>
     </div>
-    <div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i> 견적과 입금은 <b>짝을 맞추지 않고 그대로</b> 보여드립니다. 앱을 쓰기 전 거래의 대금도 입금에 섞여 있어서 두 숫자를 빼면 실제 미수와 다릅니다.</div>
+    ${un.length ? `<div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i>
+      아직 견적에 연결 안 된 입금 <b>${un.length}건 · ${fmtWon(un.reduce((s, t) => s + (+t.amount || 0), 0))}원</b> — 앱 쓰기 전 거래의 대금이거나 선입금이라 <b>위 미수 계산에는 안 들어갑니다.</b>
+      <div style="margin-top:7px;background:#fff;border:1px solid var(--bd);border-radius:9px;max-height:190px;overflow-y:auto">
+        ${un.slice(0, 40).map(t => `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:6px 9px;border-bottom:1px solid var(--bd);font-size:12px">
+          <span><span style="color:var(--t3)">${esc((t.date || '').slice(2))}</span> <b>${esc(t.payer || '')}</b></span>
+          <span style="display:flex;gap:7px;align-items:center"><b style="color:var(--gd)">${fmtWon(t.amount)}</b>
+            <button class="btn btn-sm btn-ghost" style="padding:1px 5px" title="거래처 바꾸기" onclick="txReassign('${t.id}')"><i class="ti ti-switch-horizontal"></i></button></span></div>`).join('')}
+        ${un.length > 40 ? `<div style="padding:6px 9px;font-size:11.5px;color:var(--t3)">외 ${un.length - 40}건</div>` : ''}</div>
+      <div style="margin-top:7px"><button class="btn btn-sm" onclick="openPayMatch()"><i class="ti ti-link"></i>결제 반영 화면 열기</button></div></div>` : ''}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px">${rc('all', '전체')}${rc('3m', '최근 3개월')}${rc('tm', '이번 달')}${rc('lm', '지난 달')}</div>
     <div class="tbl-wrap"><table class="tbl">
-      <thead><tr><th style="width:56px">날짜</th><th style="width:52px">구분</th><th>내용</th><th style="text-align:right;width:96px">금액</th><th style="text-align:right;width:74px">계산서</th><th style="width:44px"></th></tr></thead>
-      <tbody>${lines.length ? lines.map(row).join('') : '<tr><td colspan="6" style="text-align:center;color:var(--t3);padding:18px">내역이 없습니다</td></tr>'}</tbody>
-    </table></div>`;
+      <thead><tr><th style="width:58px">날짜</th><th style="width:56px">구분</th><th>내용</th>
+        <th style="text-align:right;width:92px">매출</th><th style="text-align:right;width:92px">입금</th><th style="text-align:right;width:98px">잔액(미수)</th></tr></thead>
+      <tbody>
+        ${(R.sd !== '0000-00-00' && before.length) ? `<tr style="background:var(--soft)"><td colspan="5" style="color:var(--t2)"><i class="ti ti-corner-down-right"></i> 이월 (${esc(R.sd)} 이전)</td>
+          <td style="text-align:right;font-weight:800">${fmtWon(openBal)}</td></tr>` : ''}
+        ${shown.length ? shown.map(row).join('') : `<tr><td colspan="6" style="text-align:center;color:var(--t3);padding:18px">이 기간에 내역이 없습니다</td></tr>`}
+        <tr style="background:var(--soft);font-weight:800"><td colspan="3">합계</td>
+          <td style="text-align:right">${fmtWon(shown.filter(r => r.k === 'sale').reduce((s, r) => s + r.amt, 0))}</td>
+          <td style="text-align:right;color:var(--gd)">${fmtWon(shown.filter(r => r.k === 'pay').reduce((s, r) => s + r.amt, 0))}</td>
+          <td style="text-align:right;color:${rem > 0 ? 'var(--red-t)' : 'var(--gd)'}">${fmtWon(all.length ? all[all.length - 1].bal : 0)}</td></tr>
+      </tbody>
+    </table></div>
+    <div style="font-size:11.5px;color:var(--t3);margin-top:7px">잔액 = 확정 매출 누계 − 입금 누계. 세금계산서 줄은 발행 사실만 표시하고 잔액에는 영향을 주지 않습니다.</div>`;
 }
 /* 입금 건의 계산서 발행 여부 표시 토글 */
 async function txToggleTax(id) {
