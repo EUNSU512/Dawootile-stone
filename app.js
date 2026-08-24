@@ -5658,34 +5658,93 @@ function _cutTry(sh, pc, Ws, Hs, kerf) {
   }
   return false;
 }
-function _packOrder(order, Ws, Hs, kerf) {
+/* ══════════════════════════════════════════════════════════
+   재단 배치 — 기요틴(guillotine) 방식
+   ★ 톱날은 한 번 들어가면 판재 끝까지 쭉 나간다. 중간에 멈추거나
+     지그재그로 돌 수 없다. 그래서 "남은 공간을 직선 한 방으로 둘로 가르기"만
+     반복해서, 실제 톱으로 자를 수 있는 배치만 만든다.
+   ══════════════════════════════════════════════════════════ */
+/* 빈 자리 f 에 부재 R 을 왼쪽위에 놓고, 남는 부분을 직선 한 번으로 둘로 나눈다.
+   mode 'H' = 가로로 쭉 자름(아래쪽이 판재 폭 전체) / 'V' = 세로로 쭉 자름(오른쪽이 높이 전체) */
+function _gSplit(f, R, kerf, mode) {
+  const rightW = f.w - R.w - kerf;      // 부재 오른쪽에 남는 폭
+  const bottomH = f.h - R.h - kerf;     // 부재 아래에 남는 높이
+  const out = [];
+  if (mode === 'H') {
+    if (rightW > 0.01) out.push({ x: f.x + R.w + kerf, y: f.y, w: rightW, h: R.h });
+    if (bottomH > 0.01) out.push({ x: f.x, y: f.y + R.h + kerf, w: f.w, h: bottomH });
+  } else {
+    if (rightW > 0.01) out.push({ x: f.x + R.w + kerf, y: f.y, w: rightW, h: f.h });
+    if (bottomH > 0.01) out.push({ x: f.x, y: f.y + R.h + kerf, w: R.w, h: bottomH });
+  }
+  return out;
+}
+/* 딱 붙어 있고 변이 정확히 맞는 자투리 둘을 하나로 합친다 (기요틴 성질 유지) */
+function _gMerge(free, kerf) {
+  let merged = true, guard = 0;
+  while (merged && guard++ < 40) {
+    merged = false;
+    for (let i = 0; i < free.length && !merged; i++) {
+      for (let j = i + 1; j < free.length && !merged; j++) {
+        const a = free[i], b = free[j];
+        const eq = (p, q) => Math.abs(p - q) < 0.01;
+        // 위아래로 붙은 경우 (x, w 가 같음)
+        if (eq(a.x, b.x) && eq(a.w, b.w)) {
+          if (eq(a.y + a.h, b.y)) { a.h += b.h; free.splice(j, 1); merged = true; break; }
+          if (eq(b.y + b.h, a.y)) { b.h += a.h; free.splice(i, 1); merged = true; break; }
+        }
+        // 좌우로 붙은 경우 (y, h 가 같음)
+        if (eq(a.y, b.y) && eq(a.h, b.h)) {
+          if (eq(a.x + a.w, b.x)) { a.w += b.w; free.splice(j, 1); merged = true; break; }
+          if (eq(b.x + b.w, a.x)) { b.w += a.w; free.splice(i, 1); merged = true; break; }
+        }
+      }
+    }
+  }
+  return free;
+}
+function _packOrderG(order, Ws, Hs, kerf, mode) {
   const sheets = [];
-  const contains = (A, B) => B.x >= A.x - 0.01 && B.y >= A.y - 0.01 && B.x + B.w <= A.x + A.w + 0.01 && B.y + B.h <= A.y + A.h + 0.01;
-  function prune(free) { for (let i = 0; i < free.length; i++) { for (let j = 0; j < free.length; j++) { if (i !== j && contains(free[j], free[i])) { free.splice(i, 1); i--; break; } } } }
   function place(sh, pc) {
     const orients = (pc.l === pc.w || pc.rot === false) ? [[pc.l, pc.w]] : [[pc.l, pc.w], [pc.w, pc.l]];
     let best = null;
-    for (const f of sh.free) { for (const o of orients) { const ol = o[0], ow = o[1]; if (ol <= f.w + 0.01 && ow <= f.h + 0.01) { const score = Math.min(f.w - ol, f.h - ow); if (!best || score < best.score) best = { f, ol, ow, score }; } } }
-    if (!best) return false;
-    const R = { x: best.f.x, y: best.f.y, w: best.ol, h: best.ow };
-    sh.placed.push({ x: R.x, y: R.y, l: best.ol, w: best.ow, idx: pc.idx, subs: pc.subs, rotated: pc.subs && pc.subs.length ? (Math.abs(best.ol - pc.l) > 0.01) : false });
-    const nf = [];
-    for (const f of sh.free) {
-      if (R.x < f.x + f.w - 0.01 && R.x + R.w > f.x + 0.01 && R.y < f.y + f.h - 0.01 && R.y + R.h > f.y + 0.01) {
-        if (R.x > f.x + 0.01) nf.push({ x: f.x, y: f.y, w: R.x - f.x, h: f.h });
-        if (R.x + R.w < f.x + f.w - 0.01) nf.push({ x: R.x + R.w + kerf, y: f.y, w: f.x + f.w - (R.x + R.w) - kerf, h: f.h });
-        if (R.y > f.y + 0.01) nf.push({ x: f.x, y: f.y, w: f.w, h: R.y - f.y });
-        if (R.y + R.h < f.y + f.h - 0.01) nf.push({ x: f.x, y: R.y + R.h + kerf, w: f.w, h: f.y + f.h - (R.y + R.h) - kerf });
-      } else nf.push(f);
+    for (let fi = 0; fi < sh.free.length; fi++) {
+      const f = sh.free[fi];
+      for (const [ol, ow] of orients) {
+        if (ol <= f.w + 0.01 && ow <= f.h + 0.01) {
+          const leftover = Math.min(f.w - ol, f.h - ow);   // 남는 쪽이 가장 짧게 = 자투리를 덜 잘게 쪼갬
+          const area = (f.w * f.h) - (ol * ow);
+          if (!best || leftover < best.leftover - 0.01 || (Math.abs(leftover - best.leftover) < 0.01 && area < best.area)) best = { fi, ol, ow, leftover, area };
+        }
+      }
     }
-    sh.free = nf.filter(f => f.w > 0.01 && f.h > 0.01);
-    prune(sh.free);
+    if (!best) return false;
+    const f = sh.free[best.fi];
+    const R = { x: f.x, y: f.y, w: best.ol, h: best.ow };
+    sh.placed.push({ x: R.x, y: R.y, l: best.ol, w: best.ow, idx: pc.idx, subs: pc.subs, rotated: pc.subs && pc.subs.length ? (Math.abs(best.ol - pc.l) > 0.01) : false });
+    // 이 빈 자리를 가르는 재단선 기록 (실제 톱질 선)
+    const rightW = f.w - R.w - kerf, bottomH = f.h - R.h - kerf;
+    const m = (mode === 'auto') ? ((R.w * bottomH >= rightW * R.h) ? 'H' : 'V') : mode;
+    if (m === 'H') {
+      if (bottomH > 0.01) sh.cuts.push({ x1: f.x, y1: f.y + R.h, x2: f.x + f.w, y2: f.y + R.h });
+      if (rightW > 0.01) sh.cuts.push({ x1: f.x + R.w, y1: f.y, x2: f.x + R.w, y2: f.y + R.h });
+    } else {
+      if (rightW > 0.01) sh.cuts.push({ x1: f.x + R.w, y1: f.y, x2: f.x + R.w, y2: f.y + f.h });
+      if (bottomH > 0.01) sh.cuts.push({ x1: f.x, y1: f.y + R.h, x2: f.x + R.w, y2: f.y + R.h });
+    }
+    sh.free.splice(best.fi, 1);
+    _gSplit(f, R, kerf, m).forEach(nf => sh.free.push(nf));
+    _gMerge(sh.free, kerf);
     return true;
   }
   for (const pc of order) {
     let ok = false;
     for (const sh of sheets) { if (place(sh, pc)) { ok = true; break; } }
-    if (!ok) { const sh = { placed: [], free: [{ x: 0, y: 0, w: Ws, h: Hs }] }; sheets.push(sh); if (!place(sh, pc)) sh.placed.push({ x: 0, y: 0, l: Math.min(pc.l, Ws), w: Math.min(pc.w, Hs), idx: pc.idx, subs: pc.subs, over: true }); }
+    if (!ok) {
+      const sh = { placed: [], cuts: [], free: [{ x: 0, y: 0, w: Ws, h: Hs }] };
+      sheets.push(sh);
+      if (!place(sh, pc)) sh.placed.push({ x: 0, y: 0, l: Math.min(pc.l, Ws), w: Math.min(pc.w, Hs), idx: pc.idx, subs: pc.subs, over: true });
+    }
   }
   return sheets;
 }
@@ -5700,9 +5759,11 @@ function _packPieces(Ws, Hs, pieces, kerf) {
   let best = null;
   for (const st of strategies) {
     const order = st(pieces.slice());
-    const sheets = _packOrder(order, Ws, Hs, kerf);
-    let freeArea = 0; sheets.forEach(sh => sh.free.forEach(f => freeArea += f.w * f.h));
-    if (!best || sheets.length < best.n || (sheets.length === best.n && freeArea < best.fa)) best = { n: sheets.length, fa: freeArea, sheets };
+    for (const mode of ['auto', 'H', 'V']) {          // 자르는 방향까지 바꿔가며 가장 잘 나오는 걸 고른다
+      const sheets = _packOrderG(order, Ws, Hs, kerf, mode);
+      let freeArea = 0; sheets.forEach(sh => sh.free.forEach(f => freeArea += f.w * f.h));
+      if (!best || sheets.length < best.n || (sheets.length === best.n && freeArea < best.fa)) best = { n: sheets.length, fa: freeArea, sheets };
+    }
   }
   return best.sheets;
 }
@@ -5725,7 +5786,9 @@ function cutSheetSvg(sh, Ws, Hs, n) {
     return `<g><rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="${c}" stroke="#555" stroke-width="0.7"/>` +
       (w > 40 && h > 16 ? `<text x="${(x + w / 2).toFixed(1)}" y="${(y + h / 2 + 3).toFixed(1)}" text-anchor="middle" font-size="10" fill="#333">${pc.l}×${pc.w}${pc.idx ? ' #' + pc.idx : ''}</text>` : '') + `</g>`;
   }).join('');
-  return `<div style="margin-bottom:10px"><div style="font-size:12px;color:var(--t3);margin-bottom:3px">판재 ${n} · ${Ws}×${Hs}</div><svg viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" style="width:100%;max-width:${W.toFixed(0)}px;border:1px solid #999;background:#fff">${rects}<rect x="0.5" y="0.5" width="${(W - 1).toFixed(1)}" height="${(H - 1).toFixed(1)}" fill="none" stroke="#333" stroke-width="1"/></svg></div>`;
+  // 톱질 선 — 한 번 들어가면 그 조각 끝까지 쭉 나가는 직선만 그린다
+  const cuts = (sh.cuts || []).map(c => `<line x1="${(c.x1 * sc).toFixed(1)}" y1="${(c.y1 * sc).toFixed(1)}" x2="${(c.x2 * sc).toFixed(1)}" y2="${(c.y2 * sc).toFixed(1)}" stroke="#d94a3d" stroke-width="1.1" stroke-dasharray="6 4" opacity=".85"/>`).join('');
+  return `<div style="margin-bottom:10px"><div style="font-size:12px;color:var(--t3);margin-bottom:3px">판재 ${n} · ${Ws}×${Hs} <span style="color:#d94a3d">— 빨간 점선 = 톱질 선</span></div><svg viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" style="width:100%;max-width:${W.toFixed(0)}px;border:1px solid #999;background:#fff">${rects}${cuts}<rect x="0.5" y="0.5" width="${(W - 1).toFixed(1)}" height="${(H - 1).toFixed(1)}" fill="none" stroke="#333" stroke-width="1"/></svg></div>`;
 }
 function runCutSim() {
   const Ws = _numv(el('cut-sheetL').value) || 3200, Hs = _numv(el('cut-sheetW').value) || 1600;
@@ -5776,6 +5839,7 @@ function cutSimBodyHtml() {
         <span style="margin-left:12px;font-size:12px;color:var(--t3)">톱날두께</span> <span id="cut-kerf-fix" style="display:inline-flex;align-items:center;gap:3px;font-size:14px;font-weight:800;color:var(--gd);background:var(--soft);border:1.5px solid var(--bd2);border-radius:9px;padding:8px 12px">${CUT_KERF}<span style="font-size:11.5px;font-weight:600;color:var(--t3)">mm</span></span> <span style="font-size:11px;color:var(--t3)">고정</span>
       </div>
       <label style="display:inline-flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;background:var(--soft);border-radius:9px;padding:8px 11px;cursor:pointer"><input type="checkbox" id="cut-grain" onchange="cutGrainToggle()" style="width:17px;height:17px"> 결방향 자재 (무늬결 있음) <span style="color:var(--t3);font-size:11.5px">— 체크 시 회전 없이 결 방향 유지</span></label>
+      <div style="margin-top:9px;font-size:11.5px;color:var(--t2);background:#fdf4f3;border:1px solid #f0cfcb;border-radius:9px;padding:8px 11px"><i class="ti ti-info-circle" style="color:#d94a3d"></i> <b>톱날은 한 번 들어가면 끝까지 나갑니다.</b> 중간에 멈추거나 꺾는 배치는 만들지 않습니다 — 실제로 자를 수 있는 모양만 나옵니다.</div>
     </div>
     <div class="card" style="padding:13px 15px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-weight:700;font-size:13.5px">부재 목록 (길이 × 폭 × 수량)</div><button class="btn btn-sm" onclick="addCutRow()"><i class="ti ti-plus"></i>행 추가</button></div>
