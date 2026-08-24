@@ -6885,16 +6885,35 @@ function combinedBillDocHtml(qs) {
   qs = qs.slice().sort((a, b) => (qDate(a) || '').localeCompare(qDate(b) || ''));
   const co = companyInfo(); const client = qs[0].client || '';
   const _staff = (state.members || []).find(m => _normName(m.name) === _normName(qs[0].by || '')); const _staffPhone = (_staff && _staff.phone) || '';
-  let supply = 0, vat = 0, disc = 0, total = 0, idx = 0, rows = '', hasBasin = false;
+  let supply = 0, vat = 0, disc = 0, total = 0, rows = '', hasBasin = false;
   qs.forEach(q => {
     supply += +q.supply || 0; vat += +q.vat || 0; disc += +q.discount || 0; total += +q.total || 0;
-    const its = q.items || []; if (hasBasinItems(its)) hasBasin = true;
-    const _site = billSiteOf(q), _who = (q.by || '').trim();
-    rows += `<tr class="grp"><td colspan="6">
-      <span style="font-size:12.5px;color:#201c17">${_site ? e(_site) : '현장 미지정'}</span>${_who ? `<span style="font-weight:500;color:#8a7350"> · 담당 ${e(_who)}</span>` : ''}
-      &nbsp;—&nbsp; 소계 ${fmtWon(q.total)}원
-      <span style="float:right;font-weight:500;color:#b0a795;letter-spacing:0">${e(q.docNo)} · ${e(qDate(q))}</span></td></tr>`;
-    its.forEach(it => { idx++; rows += `<tr><td class="c">${idx}</td><td class="l">${e(it.name)}${it.stone ? `<div style="font-size:10.5px;color:#8a7350;font-weight:600">석종(자재): ${e(it.stone)}</div>` : ''}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}${it.unit ? ' ' + e(it.unit) : ''}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`; });
+    const its = (q.items || []); if (hasBasinItems(its)) hasBasin = true;
+    if (!its.length) return;
+    // 품목 금액(amt)은 보통 공급가액인데 단가를 VAT 포함으로 넣은 견적이 간혹 있다 → 그런 건만 역산
+    const _sumAmt = its.reduce((x, it) => x + (+it.amt || 0), 0);
+    const _vatIncl = Math.abs(_sumAmt - (+q.supply || 0)) >= 2 && Math.abs(_sumAmt - (+q.total || 0)) < 2;
+    const _site = billSiteOf(q), _who = (q.by || '').trim(), _when = qDate(q);
+    its.forEach((it, i) => {
+      const raw = Math.round(+it.amt || 0);
+      const sup = _vatIncl ? Math.round(raw / 1.1) : raw;
+      const tx = _vatIncl ? (raw - sup) : Math.round(raw * 0.1);
+      rows += `<tr>
+        <td class="c dt">${e(_when.slice(2))}</td>
+        <td class="l">${e(it.name)}${it.stone ? `<div style="font-size:9.5px;color:#8a7350;font-weight:600">석종: ${e(it.stone)}</div>` : ''}</td>
+        <td class="c sp">${e(it.spec)}</td>
+        <td class="c">${e(it.unit)}</td>
+        <td class="r">${e(it.qty)}</td>
+        <td class="r">${fmtWon(it.price)}</td>
+        <td class="r">${fmtWon(sup)}</td>
+        <td class="r">${fmtWon(tx)}</td>
+        <td class="r" style="font-weight:700;color:#201c17">${fmtWon(sup + tx)}</td>
+        ${i === 0 ? `<td class="note" rowspan="${its.length}">
+          <b>${_site ? e(_site) : '현장 미지정'}</b>${_who ? `<div style="color:#8a7350">담당 ${e(_who)}</div>` : ''}
+          <div style="color:#201c17;font-weight:700;margin-top:3px">소계 ${fmtWon(q.total)}</div>
+          <div style="color:#b0a795;font-size:9px;margin-top:2px">${e(q.docNo)}</div></td>` : ''}
+      </tr>`;
+    });
   });
   const docNos = qs.map(q => q.docNo).filter(Boolean).join(', ');
   const siteList = [...new Set(qs.map(billSiteOf).filter(Boolean))].join(' / ');
@@ -6921,7 +6940,12 @@ function combinedBillDocHtml(qs) {
 .items th{background:#201c17;color:#f3ece0;font-weight:600;font-size:11px;padding:10px 6px;letter-spacing:2px}
 .items td{border-bottom:1px solid #ece4d6;padding:9px 7px;font-size:12px;color:#332f28}
 .items tr.grp td{background:#f6f1e8;color:#8a7350;font-weight:700;font-size:11px;text-align:left;padding-left:12px;letter-spacing:1px}
-.items td.c{text-align:center}.items td.l{text-align:left;padding-left:12px;font-weight:600;color:#201c17}.items td.r{text-align:right;padding-right:12px}
+.items td.c{text-align:center}.items td.l{text-align:left;padding-left:10px;font-weight:600;color:#201c17}.items td.r{text-align:right;padding-right:9px}
+.items th{padding:9px 4px;letter-spacing:0;font-size:10.5px}
+.items td{padding:7px 4px;font-size:10.5px;word-break:break-all}
+.items td.dt{color:#8a8178;font-size:10px;white-space:nowrap}
+.items td.sp{font-size:9.5px;color:#6b6355}
+.items td.note{background:#faf6ee;border-left:1px solid #e6ddcf;text-align:center;vertical-align:middle;font-size:10px;line-height:1.5;padding:6px 5px}
 .bottom{display:flex;gap:15px;margin-top:16px;align-items:stretch}
 .bottom .memo{flex:1;border:1px solid #e6ddcf;border-radius:2px;overflow:hidden;display:flex;flex-direction:column}
 .memo .mh{background:#f6f1e8;color:#8a7350;font-weight:700;font-size:10px;padding:7px 13px;letter-spacing:2px}
@@ -6946,8 +6970,8 @@ function combinedBillDocHtml(qs) {
     <div class="box"><div class="bh">수신</div><div class="bb"><div class="recip-name">${e(client)} 귀중</div><div style="color:#666">아래 견적 ${qs.length}건을 합산하여 청구합니다.</div></div></div>
     <div class="box"><div class="bh">공급자</div><div class="bb">${co.stampImg ? `<img class="stampimg" src="${co.stampImg}">` : `<div class="stamp">DAWOO<br>(인)</div>`}<b style="font-size:13px;color:#111">${e(co.name)}</b><br>대표 ${e(co.ceo)}<br>사업자등록번호 ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}</div></div>
   </div>
-  <table class="items"><colgroup><col style="width:7%"><col style="width:33%"><col style="width:22%"><col style="width:10%"><col style="width:14%"><col style="width:14%"></colgroup>
-    <thead><tr><th>No</th><th>품목</th><th>규격</th><th>수량</th><th>단가</th><th>금액</th></tr></thead><tbody>${rows}</tbody></table>
+  <table class="items"><colgroup><col style="width:7%"><col style="width:21%"><col style="width:13%"><col style="width:5%"><col style="width:6%"><col style="width:10%"><col style="width:11%"><col style="width:9%"><col style="width:11%"><col style="width:12%"></colgroup>
+    <thead><tr><th>날짜</th><th>품목명</th><th>규격</th><th>단위</th><th>수량</th><th>단가</th><th>공급가</th><th>부가세</th><th>합계금액</th><th>현장 · 담당</th></tr></thead><tbody>${rows}</tbody></table>
   <div class="bottom">
     <div class="memo"><div class="mh">비 고</div><div class="mb">${[...new Set(qs.map(q => (q.memo || '').trim()).filter(Boolean))].map(m => e(m)).join('<br><br>')}</div></div>
     <table class="sum">
