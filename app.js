@@ -746,7 +746,7 @@ function go(t) {
   if (isRestrictedRole()) t = 'stock';   // 고객·시공팀은 전용 화면만
   else if (!tabAllowed(t)) t = 'home';   // 접근 권한 없는 메뉴 차단
   filters.costEdit = '';   // 원가 입력 폼은 메뉴 이동 시 항상 닫기
-  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; filters.cutSim = false; filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; filters.payMatch = false; }   // 견적 화면 상태 초기화
+  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; filters.cutSim = false; filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; filters.payMatch = false; filters.billEdit = false; _billEdit = null; }   // 견적 화면 상태 초기화
   if (t !== 'clients') filters.clientDetail = '';
   tab = t;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -6672,6 +6672,7 @@ function renderQuote() {
   if (filters.cutSim) { const _pq = el('pg-quote'); if (!(_pq && _pq.querySelector('#cutsim-root'))) renderCutSim(); return; }   // 재단 시뮬레이션
   if (filters.ledger) { renderLedger(); return; }   // 거래처 원장 (견적 + 은행 입금)
   if (filters.payMatch) { renderPayMatch(); return; }   // 입금 → 견적 결제 일괄 반영
+  if (filters.billEdit) { renderBillEdit(); return; }   // 묶음 청구 항목 편집
   if (filters.quoteEdit) { if (!document.getElementById('qform-root')) renderQuoteForm(); return; }   // 편집 중엔 실시간 재렌더로 폼을 덮어쓰지 않음
   if (filters.taxEdit) { if (!document.getElementById('taxform-root')) renderTaxForm(); return; }   // 세금계산서 발행 화면
   if (filters.costEdit) { if (!document.getElementById('cost-root')) renderCostForm(); return; }   // 원가 정리(관리자)
@@ -6932,11 +6933,148 @@ function toggleQSel(id) {
   renderQuote();
 }
 function qSelClear() { _qSel.clear(); _qSelClient = ''; renderQuote(); }
+/* ══════════════════════════════════════════════════════════
+   묶음 청구 — 항목 편집 단계
+   출력 전에 어떤 품목을 넣을지 고르고 수량·단가를 손볼 수 있다.
+   여기서 고친 값은 청구서에만 반영되고 견적서 원본은 그대로다.
+   ══════════════════════════════════════════════════════════ */
+let _billEdit = null;
 function printCombinedBill() {
   const qs = (state.quotes || []).filter(x => _qSel.has(x.id));
   if (qs.length < 2) { toast('2건 이상 선택하세요'); return; }
+  openBillEdit(qs);
+}
+function openBillEdit(qs) {
+  qs = qs.slice().sort((a, b) => (qDate(a) || '').localeCompare(qDate(b) || ''));
+  const items = [];
+  qs.forEach(q => {
+    const its = q.items || [];
+    const sumAmt = its.reduce((x, it) => x + (+it.amt || 0), 0);
+    const vatIncl = Math.abs(sumAmt - (+q.supply || 0)) >= 2 && Math.abs(sumAmt - (+q.total || 0)) < 2;
+    its.forEach((it, i) => items.push({
+      qid: q.id, i: i, on: true, vatIncl: vatIncl,
+      name: it.name || '', spec: it.spec || '', unit: it.unit || '', stone: it.stone || '',
+      qty: +it.qty || 0, price: +it.price || 0, amt: Math.round(+it.amt || 0), cat: marginCat(it.name)
+    }));
+  });
+  _billEdit = { qids: qs.map(q => q.id), items: items };
+  qListSave(); filters.billEdit = true; go('quote');
+}
+function billEditClose() { filters.billEdit = false; _billEdit = null; renderQuote(); qListRestore(); }
+function _billQs() { return (_billEdit ? _billEdit.qids : []).map(id => (state.quotes || []).find(q => q.id === id)).filter(Boolean); }
+/* 선택된 줄만 모아 금액 계산 — 할인은 그 견적에서 넣은 비율만큼만 적용 */
+function billEditTotals() {
+  const out = { n: 0, supply: 0, vat: 0, disc: 0, total: 0 };
+  if (!_billEdit) return out;
+  _billQs().forEach(q => {
+    const mine = _billEdit.items.filter(x => x.qid === q.id);
+    const on = mine.filter(x => x.on);
+    if (!on.length) return;
+    let sup = 0, tax = 0;
+    on.forEach(x => { const raw = Math.round(x.amt || 0); const s = x.vatIncl ? Math.round(raw / 1.1) : raw; sup += s; tax += x.vatIncl ? (raw - s) : Math.round(raw * 0.1); });
+    const fullSup = mine.reduce((a, x) => { const raw = Math.round(x.amt || 0); return a + (x.vatIncl ? Math.round(raw / 1.1) : raw); }, 0);
+    const ratio = fullSup > 0 ? Math.min(1, sup / fullSup) : 1;
+    const d = Math.round((+q.discount || 0) * ratio);
+    out.n += on.length; out.supply += sup; out.vat += tax; out.disc += d;
+  });
+  out.total = out.supply + out.vat - out.disc;
+  return out;
+}
+function billSet(qid, i, field, v) {
+  if (!_billEdit) return;
+  const it = _billEdit.items.find(x => x.qid === qid && x.i === i); if (!it) return;
+  if (field === 'on') it.on = !it.on;
+  else {
+    const n = Math.max(0, _numv(v) || 0);
+    it[field] = n;
+    it.amt = Math.round((+it.qty || 0) * (+it.price || 0));
+  }
+  billEditRefresh();
+}
+function billPick(mode) {
+  if (!_billEdit) return;
+  _billEdit.items.forEach(x => {
+    if (mode === 'all') x.on = true;
+    else if (mode === 'none') x.on = false;
+    else if (mode === 'ship') x.on = (x.cat === '운송');
+    else if (mode === 'noship') x.on = (x.cat !== '운송');
+    else if (mode === 'mat') x.on = (x.cat === '자재');
+    else if (mode === 'work') x.on = (x.cat === '가공' || x.cat === '시공');
+  });
+  renderBillEdit();
+}
+function billEditRefresh() {
+  const b = el('be-sum'); if (b) b.innerHTML = _billSumInner();
+  (_billEdit ? _billEdit.items : []).forEach(x => {
+    const a = el(`be-amt-${x.qid}-${x.i}`); if (a) a.textContent = fmtWon(x.amt);
+    const row = el(`be-row-${x.qid}-${x.i}`); if (row) row.style.opacity = x.on ? '1' : '.4';
+  });
+}
+function _billSumInner() {
+  const t = billEditTotals();
+  const cell = (k, v, col) => `<div style="text-align:center"><div style="font-size:10.5px;color:var(--t2)">${k}</div><div style="font-size:15px;font-weight:800;color:${col || 'var(--tx)'}">${v}</div></div>`;
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:8px;align-items:center">
+      ${cell('선택 품목', t.n + '개')}
+      ${cell('공급가액', fmtWon(t.supply))}
+      ${cell('부가세', fmtWon(t.vat))}
+      ${t.disc > 0 ? cell('할인', '-' + fmtWon(t.disc), '#c0341d') : ''}
+      ${cell('청구 합계', fmtWon(t.total) + '원', 'var(--gd)')}
+    </div>`;
+}
+function renderBillEdit() {
+  const root = el('pg-quote'); if (!root) return;
+  if (!_billEdit) { filters.billEdit = false; renderQuote(); return; }
+  const qs = _billQs();
+  const client = (qs[0] && qs[0].client) || '';
+  const catPill = c => `<span class="pill ${c === '운송' ? 'p-issue' : c === '가공' ? 'p-prog' : c === '시공' ? 'p-hold' : 'p-gray'}" style="font-size:9.5px;padding:0 5px">${c}</span>`;
+  const pick = (m, l) => `<button class="btn btn-sm" onclick="billPick('${m}')">${l}</button>`;
+  const inp = 'width:100%;font-size:12.5px;padding:5px 6px;border:1px solid var(--bd2);border-radius:7px;text-align:right';
+  const groups = qs.map(q => {
+    const mine = _billEdit.items.filter(x => x.qid === q.id);
+    if (!mine.length) return '';
+    const onN = mine.filter(x => x.on).length;
+    return `<div class="card" style="padding:0;margin-bottom:10px;overflow:hidden">
+      <div style="background:var(--soft);padding:9px 12px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
+        <div style="font-size:12.5px"><b>${esc(billSiteOf(q) || '현장 미지정')}</b>${q.by ? ` <span style="color:var(--t3)">· 담당 ${esc(q.by)}</span>` : ''}
+          <span style="color:var(--t3)"> · ${esc(q.docNo || '')} · ${esc(qDate(q))}</span></div>
+        <div style="font-size:11.5px;color:${onN ? 'var(--gd)' : 'var(--t3)'}">${onN}/${mine.length} 선택</div></div>
+      <div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th style="width:34px"></th><th>품목</th><th style="width:96px">규격</th><th style="text-align:right;width:74px">수량</th><th style="text-align:right;width:92px">단가</th><th style="text-align:right;width:96px">금액</th></tr></thead>
+        <tbody>${mine.map(x => `<tr id="be-row-${esc(x.qid)}-${x.i}" style="opacity:${x.on ? '1' : '.4'}">
+          <td style="text-align:center"><input type="checkbox" ${x.on ? 'checked' : ''} onchange="billSet('${esc(x.qid)}',${x.i},'on')" style="width:17px;height:17px"></td>
+          <td><b>${esc(x.name)}</b> ${catPill(x.cat)}${x.stone ? `<div style="font-size:10.5px;color:#8a7350">석종: ${esc(x.stone)}</div>` : ''}</td>
+          <td style="font-size:11px;color:var(--t2)">${esc(x.spec)}</td>
+          <td><input inputmode="decimal" value="${esc(x.qty)}" onchange="billSet('${esc(x.qid)}',${x.i},'qty',this.value)" style="${inp}"></td>
+          <td><input inputmode="numeric" value="${esc(x.price)}" onchange="billSet('${esc(x.qid)}',${x.i},'price',this.value)" style="${inp}"></td>
+          <td style="text-align:right;font-weight:700" id="be-amt-${esc(x.qid)}-${x.i}">${fmtWon(x.amt)}</td></tr>`).join('')}</tbody>
+      </table></div></div>`;
+  }).join('');
+  root.innerHTML = `
+    <div class="ph"><div><h2><i class="ti ti-list-check"></i>청구 항목 편집</h2><p>${esc(client)} · 견적 ${qs.length}건 — 넣을 품목만 고르고 출력하세요</p></div>
+      <button class="btn btn-sm" onclick="billEditClose()"><i class="ti ti-arrow-left"></i>견적 목록</button></div>
+    <div class="banner info" style="margin-bottom:11px;font-size:12px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0">
+      체크를 풀면 그 품목은 청구서에 안 나옵니다. 수량·단가도 여기서 고칠 수 있고 <b>견적서 원본은 바뀌지 않습니다.</b>
+      할인이 있는 견적은 <b>넣은 금액 비율만큼만</b> 할인이 적용됩니다.</span></div>
+    <div class="card" style="padding:11px 13px;margin-bottom:11px">
+      <div style="font-size:11.5px;color:var(--t3);margin-bottom:7px">빠른 선택</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${pick('all', '전체')}${pick('none', '전체 해제')}
+        <span style="width:1px;background:var(--bd);margin:2px 3px"></span>
+        ${pick('ship', '운송비만')}${pick('noship', '운송비 빼고')}${pick('mat', '자재만')}${pick('work', '가공·시공만')}</div>
+    </div>
+    <div class="card" style="padding:11px 13px;margin-bottom:11px;position:sticky;top:6px;z-index:5;border:1.5px solid var(--gd)">
+      <div id="be-sum">${_billSumInner()}</div>
+      <button class="btn btn-pri btn-block" style="margin-top:10px" onclick="billEditPrint()"><i class="ti ti-printer"></i>이 내용으로 청구서 출력</button>
+    </div>
+    ${groups}`;
+}
+function billEditPrint() {
+  const t = billEditTotals();
+  if (!t.n) { toast('청구할 품목을 하나 이상 선택하세요'); return; }
+  const qs = _billQs().filter(q => _billEdit.items.some(x => x.qid === q.id && x.on));
+  if (!qs.length) { toast('청구할 품목이 없습니다'); return; }
   const w = window.open('', '_blank'); if (!w) { toast('팝업이 차단되었습니다. 팝업 허용 후 다시'); return; }
-  w.document.write(combinedBillDocHtml(qs)); w.document.close(); w.focus(); setTimeout(() => { try { w.print(); } catch (e) { } }, 500);
+  w.document.write(combinedBillDocHtml(qs, _billEdit.items.filter(x => x.on)));
+  w.document.close(); w.focus(); setTimeout(() => { try { w.print(); } catch (e) { } }, 500);
 }
 /* 청구서에 쓸 현장 이름 — 현장명 > 현장주소 > 수신·참조 순으로 있는 것을 쓴다 */
 function billSiteOf(q) {
@@ -6944,24 +7082,33 @@ function billSiteOf(q) {
   const cands = [q.siteName, q.siteAddr, q.attn].map(v => String(v == null ? '' : v).trim()).filter(Boolean);
   return cands[0] || '';
 }
-function combinedBillDocHtml(qs) {
+function combinedBillDocHtml(qs, picked) {
   const e = s => esc(s == null ? '' : String(s));
   qs = qs.slice().sort((a, b) => (qDate(a) || '').localeCompare(qDate(b) || ''));
   const co = companyInfo(); const client = qs[0].client || '';
   const _staff = (state.members || []).find(m => _normName(m.name) === _normName(qs[0].by || '')); const _staffPhone = (_staff && _staff.phone) || '';
   let supply = 0, vat = 0, disc = 0, total = 0, rows = '', hasBasin = false;
   qs.forEach(q => {
-    supply += +q.supply || 0; vat += +q.vat || 0; disc += +q.discount || 0; total += +q.total || 0;
-    const its = (q.items || []); if (hasBasinItems(its)) hasBasin = true;
+    const all = (q.items || []);
+    // 편집 단계에서 고른 품목만 (편집 안 했으면 견적 그대로)
+    const its = picked ? picked.filter(x => x.qid === q.id).map(x => ({ name: x.name, spec: x.spec, unit: x.unit, stone: x.stone, qty: x.qty, price: x.price, amt: x.amt })) : all;
+    if (hasBasinItems(its)) hasBasin = true;
     if (!its.length) return;
-    // 품목 금액(amt)은 보통 공급가액인데 단가를 VAT 포함으로 넣은 견적이 간혹 있다 → 그런 건만 역산
-    const _sumAmt = its.reduce((x, it) => x + (+it.amt || 0), 0);
+    // 품목 금액(amt)은 보통 공급가액인데 단가를 VAT 포함으로 넣은 견적이 간혹 있다 → 그런 건만 역산 (판별은 견적 전체 기준)
+    const _sumAmt = all.reduce((x, it) => x + (+it.amt || 0), 0);
     const _vatIncl = Math.abs(_sumAmt - (+q.supply || 0)) >= 2 && Math.abs(_sumAmt - (+q.total || 0)) < 2;
+    const _supOf = it => { const raw = Math.round(+it.amt || 0); return _vatIncl ? Math.round(raw / 1.1) : raw; };
+    const _taxOf = it => { const raw = Math.round(+it.amt || 0); return _vatIncl ? (raw - _supOf(it)) : Math.round(raw * 0.1); };
+    // 이 견적에서 실제로 청구하는 금액 — 뺀 품목은 빠지고, 할인도 넣은 비율만큼만
+    const _sup = its.reduce((a, it) => a + _supOf(it), 0);
+    const _tax = its.reduce((a, it) => a + _taxOf(it), 0);
+    const _fullSup = all.reduce((a, it) => a + _supOf(it), 0);
+    const _d = Math.round((+q.discount || 0) * (_fullSup > 0 ? Math.min(1, _sup / _fullSup) : 1));
+    const _subTotal = _sup + _tax - _d;
+    supply += _sup; vat += _tax; disc += _d; total += _subTotal;
+    const _partial = picked && its.length < all.length;
     const _site = billSiteOf(q), _who = (q.by || '').trim(), _when = qDate(q);
     its.forEach((it, i) => {
-      const raw = Math.round(+it.amt || 0);
-      const sup = _vatIncl ? Math.round(raw / 1.1) : raw;
-      const tx = _vatIncl ? (raw - sup) : Math.round(raw * 0.1);
       rows += `<tr>
         <td class="c dt">${e(_when.slice(2))}</td>
         <td class="l">${e(it.name)}${it.stone ? `<div style="font-size:9.5px;color:#8a7350;font-weight:600">석종: ${e(it.stone)}</div>` : ''}</td>
@@ -6969,12 +7116,13 @@ function combinedBillDocHtml(qs) {
         <td class="c">${e(it.unit)}</td>
         <td class="r">${e(it.qty)}</td>
         <td class="r">${fmtWon(it.price)}</td>
-        <td class="r">${fmtWon(sup)}</td>
-        <td class="r">${fmtWon(tx)}</td>
-        <td class="r" style="font-weight:700;color:#201c17">${fmtWon(sup + tx)}</td>
+        <td class="r">${fmtWon(_supOf(it))}</td>
+        <td class="r">${fmtWon(_taxOf(it))}</td>
+        <td class="r" style="font-weight:700;color:#201c17">${fmtWon(_supOf(it) + _taxOf(it))}</td>
         ${i === 0 ? `<td class="note" rowspan="${its.length}">
           <b>${_site ? e(_site) : '현장 미지정'}</b>${_who ? `<div style="color:#8a7350">담당 ${e(_who)}</div>` : ''}
-          <div class="sub" style="color:#201c17;font-weight:700;margin-top:3px;font-size:10px">소계 ${fmtWon(q.total)}</div>
+          <div class="sub" style="color:#201c17;font-weight:700;margin-top:3px;font-size:10px">소계 ${fmtWon(_subTotal)}</div>
+          ${_partial ? `<div class="sub" style="color:#b07a3c;font-size:8.5px;margin-top:1px">일부 품목</div>` : ''}
           <div class="sub" style="color:#b0a795;font-size:8.5px;margin-top:2px">${e(q.docNo)}</div></td>` : ''}
       </tr>`;
     });
@@ -7048,7 +7196,7 @@ function combinedBillDocHtml(qs) {
     </table>
   </div>
   ${hasBasin ? `<div class="notice"><div class="nh">⚠ 세면대 주문제작 특이사항 (필독)</div><ul>${BASIN_NOTICE.map(l => `<li>${e(l)}</li>`).join('')}</ul></div>` : ''}
-  <div class="foot"><span>※ 본 청구서는 상기 견적 ${qs.length}건(${e(docNos)})을 합산한 것이며, 부가세 별도(공급가액 기준)로 산정되었습니다.</span><span>${e(co.name)}</span></div>
+  <div class="foot"><span>※ 본 청구서는 상기 견적 ${qs.length}건(${e(docNos)})을 합산한 것이며, 부가세 별도(공급가액 기준)로 산정되었습니다.${picked ? ' 견적 중 일부 품목만 청구한 건입니다.' : ''}</span><span>${e(co.name)}</span></div>
   </div></div>
 </body></html>`;
 }
