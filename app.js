@@ -6619,7 +6619,7 @@ function renderQuote() {
       <div style="display:flex;gap:6px;flex-wrap:wrap">${isAdmin() ? `<button class="btn btn-sm" onclick="openLedger()"><i class="ti ti-book"></i>거래처 원장</button><button class="btn btn-sm" onclick="openTaxList()"><i class="ti ti-file-invoice"></i>계산서 내역</button>` : ''}<button class="btn btn-sm" onclick="openCutSim()"><i class="ti ti-layout-grid"></i>재단도</button><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
       <button class="stat tap" onclick="quoteShowConfUnpaid()" title="확정 주문 중 미결제만 보기"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(unpaidConf)}</div><div class="l">확정 미수금 <i class="ti ti-chevron-right tap-arrow"></i></div><div class="s">${_confUnpaidList.length}건 · 확정 전 포함 ${fmtWon(unpaid)}</div></button>
-      <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행</div></div>
+      <button class="stat tap" onclick="quoteSetConf('all');quoteSetStat('notax')" title="계산서 미발행만 보기"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행 <i class="ti ti-chevron-right tap-arrow"></i></div></button>
       <div class="stat"><div class="ic g"><i class="ti ti-calendar-stats"></i></div><div class="v" style="font-size:19px">${fmtWon(monthSum)}</div><div class="l">이번 달 견적</div></div>
     </div>
     ${_pmBanner()}
@@ -6638,62 +6638,72 @@ function _quoteListInner() {
   const ym = todayStr().slice(0, 7);
   let list = all.slice().sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
   if (qy) list = list.filter(q => (q.client || '').toLowerCase().includes(qy) || (q.docNo || '').toLowerCase().includes(qy) || (q.items || []).some(it => (it.name || '').toLowerCase().includes(qy)));
-  // 상태 필터: 계산서 미발행 / 세면대 미발주 / 미결제
-  const stat = filters.quoteStat || 'all';
+  // ── 상태 필터: 2단 (확정/미확정) × (계산서·결제·세면대) 를 겹쳐서 본다 ──
+  const fConf = filters.qConf || 'all';    // all | conf | pending
+  const fStat = filters.qStat || 'all';    // all | notax | tax | paid | unpaid | basin
   const _isBasinQ = q => (q.items || []).some(it => (it.name || '').includes('세면대') && /주문제작|비규격/.test(it.name || ''));
+  const _isDoneQ = q => !!(q.basinDone || q.manualDone || q.shipped || q.siteDone);   // 자체완료·출고·현장완료면 발주할 게 없다
+  const _isBasinPend = q => _isBasinQ(q) && !_isDoneQ(q);
   const _isNoTax = q => !q.taxInvoice;
-  const _isBasinPend = q => _isBasinQ(q) && !q.basinDone;
-  const _isUnpaid = q => (+q.paidAmount || 0) < (+q.total || 0);
-  const _isConfUnpaid = q => !!q.ordered && _isUnpaid(q);   // 확정 주문된 건 중 미결제 = 실제 미수금
+  const _isTax = q => !!q.taxInvoice;
   const _remOf = q => Math.max(0, (+q.total || 0) - (+q.paidAmount || 0));
-  const _isConf = q => !!q.ordered;              // 확정주문된 견적
-  const _isPending = q => !q.ordered;            // 아직 확정 안 된 견적(제안 단계)
-  const _cNoTax = list.filter(_isNoTax).length, _cBasin = list.filter(_isBasinPend).length, _cUnpaid = list.filter(_isUnpaid).length, _cConfUnpaid = list.filter(_isConfUnpaid).length;
-  const _cConf = list.filter(_isConf).length, _cPending = list.filter(_isPending).length;
-  if (stat === 'notax') list = list.filter(_isNoTax);
-  else if (stat === 'basin') list = list.filter(_isBasinPend);
-  else if (stat === 'unpaid') list = list.filter(_isUnpaid);
-  else if (stat === 'cunpaid') list = list.filter(_isConfUnpaid);
-  else if (stat === 'conf') list = list.filter(_isConf);
-  else if (stat === 'pending') list = list.filter(_isPending);
-  const _sc = (v, label, cnt, col) => `<button class="chip ${stat === v ? 'active' : ''}" onclick="quoteSetStat('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? (col || 'var(--red-t)') : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
-  const statChips = `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
-      ${_sc('all', '전체')}${_sc('pending', '미확정', _cPending, 'var(--amber-t)')}${_sc('conf', '확정', _cConf, 'var(--gd)')}
+  const _isUnpaid = q => _remOf(q) > 0;                                   // 미수가 남은 것 (부분 결제 포함)
+  const _isPaid = q => (+q.total || 0) > 0 && _remOf(q) <= 0;             // 완납
+  const _isConf = q => !!q.ordered;
+  const _isPending = q => !q.ordered;
+  const _confFn = { conf: _isConf, pending: _isPending };
+  const _statFn = { notax: _isNoTax, tax: _isTax, paid: _isPaid, unpaid: _isUnpaid, basin: _isBasinPend };
+  // 각 칩의 건수는 "다른 축이 걸린 상태에서" 세어야 눌렀을 때 숫자가 맞는다
+  const baseForConf = fStat === 'all' ? list : list.filter(_statFn[fStat] || (() => true));
+  const baseForStat = fConf === 'all' ? list : list.filter(_confFn[fConf] || (() => true));
+  const cConf = baseForConf.filter(_isConf).length, cPending = baseForConf.filter(_isPending).length;
+  const cNoTax = baseForStat.filter(_isNoTax).length, cTax = baseForStat.filter(_isTax).length;
+  const cUnpaid = baseForStat.filter(_isUnpaid).length, cPaid = baseForStat.filter(_isPaid).length;
+  const cBasin = baseForStat.filter(_isBasinPend).length;
+  if (_confFn[fConf]) list = list.filter(_confFn[fConf]);
+  if (_statFn[fStat]) list = list.filter(_statFn[fStat]);
+  const chipC = (v, label, cnt, col) => `<button class="chip ${fConf === v ? 'active' : ''}" onclick="quoteSetConf('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? (col || 'var(--t2)') : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
+  const chipS = (v, label, cnt, col) => `<button class="chip ${fStat === v ? 'active' : ''}" onclick="quoteSetStat('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? (col || 'var(--red-t)') : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
+  const _lbl = { all: '', conf: '확정', pending: '미확정' }[fConf] + (fConf !== 'all' && fStat !== 'all' ? ' · ' : '') +
+    ({ all: '', notax: '계산서 미발행', tax: '계산서 발행', paid: '결제 완료', unpaid: '미결제', basin: '세면대 미발주' }[fStat] || '');
+  const statChips = `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+      <span style="font-size:11px;color:var(--t3);width:38px;flex:none">주문</span>
+      ${chipC('all', '전체')}${chipC('pending', '미확정', cPending, 'var(--amber-t)')}${chipC('conf', '확정', cConf, 'var(--gd)')}
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+      <span style="font-size:11px;color:var(--t3);width:38px;flex:none">상태</span>
+      ${chipS('all', '전체')}${chipS('unpaid', '미결제', cUnpaid)}${chipS('paid', '결제 완료', cPaid, 'var(--gd)')}
       <span style="width:1px;background:var(--bd);margin:2px 3px"></span>
-      ${_sc('cunpaid', '확정·미결제', _cConfUnpaid)}${_sc('unpaid', '미결제(전체)', _cUnpaid)}${_sc('notax', '계산서 미발행', _cNoTax)}${_sc('basin', '세면대 미발주', _cBasin)}
+      ${chipS('notax', '계산서 미발행', cNoTax)}${chipS('tax', '계산서 발행', cTax, 'var(--gd)')}
+      <span style="width:1px;background:var(--bd);margin:2px 3px"></span>
+      ${chipS('basin', '세면대 미발주', cBasin, 'var(--amber-t)')}
+      ${(fConf !== 'all' || fStat !== 'all') ? `<button class="chip" style="margin-left:auto" onclick="quoteClearFilter()"><i class="ti ti-x"></i>필터 해제</button>` : ''}
     </div>`;
   // 필터별 요약 바
   let unpaidBar = '';
-  if (stat === 'cunpaid' || stat === 'unpaid') {
-    const _sum = list.reduce((a, q) => a + _remOf(q), 0);
-    const _paidIn = list.reduce((a, q) => a + (+q.paidAmount || 0), 0);
-    unpaidBar = `<div class="card" style="margin-bottom:10px;padding:11px 13px;border:1.5px solid #e6a9a9;background:#fff6f5">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-        <div style="font-size:12.5px"><b style="color:var(--red-t)"><i class="ti ti-cash-off"></i> ${stat === 'cunpaid' ? '확정 주문 미수금' : '전체 미결제'}</b> · <b>${list.length}건</b>${_paidIn > 0 ? ` · 부분입금 ${fmtWon(_paidIn)}원` : ''}</div>
-        <div style="font-size:16px;font-weight:800;color:var(--red-t)">${fmtWon(_sum)}<span style="font-size:12px;font-weight:600">원</span></div>
-      </div>
-      <div style="font-size:11px;color:var(--t3);margin-top:5px">${stat === 'cunpaid' ? '확정주문 이후 아직 입금이 안 끝난 건입니다. 미수가 큰 순으로 정렬됩니다.' : '확정 전 견적(제안 단계)도 포함된 숫자입니다.'}</div>
-    </div>`;
-    list = list.slice().sort((a, b) => _remOf(b) - _remOf(a));   // 미수 큰 순
-  } else if (stat === 'conf' || stat === 'pending') {
+  if (fConf !== 'all' || fStat !== 'all') {
     const _amt = list.reduce((a, q) => a + (+q.total || 0), 0);
     const _rem2 = list.reduce((a, q) => a + _remOf(q), 0);
-    const _c = stat === 'conf' ? 'var(--gd)' : 'var(--amber-t)';
-    const _bg = stat === 'conf' ? '#f2fbf6' : '#fdf8ee';
-    const _bd = stat === 'conf' ? 'var(--gd)' : '#e0c088';
+    const _paidIn = list.reduce((a, q) => a + Math.min(+q.total || 0, +q.paidAmount || 0), 0);
+    const warm = fStat === 'unpaid' || fStat === 'notax' || fStat === 'basin';
+    const _c = warm ? 'var(--red-t)' : 'var(--gd)';
+    const _bg = warm ? '#fff6f5' : '#f2fbf6';
+    const _bd = warm ? '#e6a9a9' : 'var(--gd)';
+    const _ic = fStat === 'unpaid' ? 'cash-off' : fStat === 'paid' ? 'cash' : fStat === 'notax' ? 'file-off' : fStat === 'tax' ? 'file-invoice' : fStat === 'basin' ? 'bath' : (fConf === 'conf' ? 'clipboard-check' : 'clock-pause');
     unpaidBar = `<div class="card" style="margin-bottom:10px;padding:11px 13px;border:1.5px solid ${_bd};background:${_bg}">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
-        <div style="font-size:12.5px"><b style="color:${_c}"><i class="ti ti-${stat === 'conf' ? 'clipboard-check' : 'clock-pause'}"></i> ${stat === 'conf' ? '확정 주문' : '미확정 (제안 단계)'}</b> · <b>${list.length}건</b>${_rem2 > 0 ? ` · 미수 <b style="color:var(--red-t)">${fmtWon(_rem2)}</b>원` : ''}</div>
-        <div style="font-size:16px;font-weight:800;color:${_c}">${fmtWon(_amt)}<span style="font-size:12px;font-weight:600">원</span></div>
+        <div style="font-size:12.5px"><b style="color:${_c}"><i class="ti ti-${_ic}"></i> ${esc(_lbl || '전체')}</b> · <b>${list.length}건</b>${_paidIn > 0 && fStat !== 'paid' ? ` · 입금 ${fmtWon(_paidIn)}원` : ''}</div>
+        <div style="font-size:16px;font-weight:800;color:${_c};text-align:right">${fmtWon(_amt)}<span style="font-size:12px;font-weight:600">원</span>${_rem2 > 0 ? `<div style="font-size:12px;font-weight:700;color:var(--red-t)">미수 ${fmtWon(_rem2)}원</div>` : ''}</div>
       </div>
-      <div style="font-size:11px;color:var(--t3);margin-top:5px">${stat === 'conf' ? '고객이 확정한 주문입니다. 출고·현장·세면대 발주로 이어집니다.' : '아직 확정 전인 견적입니다. 매출로 잡히기 전 단계라 미수금에 넣지 않습니다.'}</div>
     </div>`;
+    if (fStat === 'unpaid') list = list.slice().sort((a, b) => _remOf(b) - _remOf(a));   // 미수 큰 순
   }
   const view = filters.quoteView || 'all';
   const curMonth = filters.quoteMonth || ym;
   const curDay = filters.quoteDay || todayStr();
   const WD = ['일', '월', '화', '수', '목', '금', '토'];
-  const _flatUnpaid = (stat === 'cunpaid' || stat === 'unpaid');   // 미결제 보기는 월/일 묶음 없이 미수 큰 순 전체
+  const _flatUnpaid = (fStat !== 'all');   // 상태 필터를 걸면 월/일 묶음 없이 전체를 한 번에 본다
   let body, navBar = '';
   if (view === 'month' && !_flatUnpaid) {
     const mlist = list.filter(q => qDate(q).startsWith(curMonth));
@@ -6725,10 +6735,13 @@ function _quoteListInner() {
   return `${statChips}${unpaidBar}${navBar}<div id="q-list" data-keepscroll style="max-height:calc(100vh - 300px);min-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${body}</div>`;
 }
 function quotesFilter() { const w = el('q-listwrap'); if (!w) { renderQuote(); return; } w.innerHTML = _quoteListInner(); }
-function quoteSetStat(v) { filters.quoteStat = v; quotesFilter(); }
+/* 견적 필터는 두 축을 겹쳐서 쓴다: (확정/미확정) × (결제·계산서·세면대) */
+function quoteSetConf(v) { filters.qConf = v; quotesFilter(); }
+function quoteSetStat(v) { filters.qStat = v; quotesFilter(); }
+function quoteClearFilter() { filters.qConf = 'all'; filters.qStat = 'all'; quotesFilter(); }
 /* 상단 '확정 미수금' 카드 → 확정 주문 중 미결제만 보기 */
 function quoteShowConfUnpaid() {
-  filters.quoteStat = 'cunpaid'; quotesFilter();
+  filters.qConf = 'conf'; filters.qStat = 'unpaid'; quotesFilter();
   const w = el('q-listwrap'); if (w) { try { w.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (e) { w.scrollIntoView(); } }
 }
 function quoteDocHtml(q) {
