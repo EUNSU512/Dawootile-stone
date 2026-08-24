@@ -4432,6 +4432,7 @@ function taxLedgerHtml(client, curId) {
 }
 /* 계산서에서 가공비를 묶어 표기할 품명 */
 const TAX_GAGONG_NAME = '세라믹 가공';
+const TAX_DC_NAME = '할인 (D/C)';
 /* 이 항목이 '가공 용역'인가 — 자재명에 '타공' 등이 들어간 실제 재고 품목은 제외 */
 function isGagongItem(it) {
   const nm = (it && it.name) || ''; if (!nm) return false;
@@ -4478,8 +4479,20 @@ function buildTaxPayload(id) {
     const spec = nm.length <= 3 ? nm.join(', ') : (nm.slice(0, 2).join(', ') + ' 외 ' + (nm.length - 2));
     detailList.push({ itemName: TAX_GAGONG_NAME, spec: spec, qty: 1, unitCost: sc, supplyCost: sc, tax: Math.round(sc * 0.1), remark: '' });
   }
+  // 할인(D/C) — 견적의 할인은 '합계금액'에서 빼는 방식이라 공급가액분과 세액분으로 나눠 마이너스 줄로 넣는다.
+  // 팝빌 규격상 supplyCost / tax 는 마이너스 입력이 허용된다.
+  const _dc = Math.round(+q.discount || 0);
+  if (_dc > 0) {
+    const _sumSup = detailList.reduce((a, b) => a + (+b.supplyCost || 0), 0);
+    const _sumTax = detailList.reduce((a, b) => a + (+b.tax || 0), 0);
+    const _target = Math.round(+q.total || 0);                 // 계산서 합계가 견적 합계와 정확히 같아지게
+    const _dcSup = Math.round(_dc / 1.1);                      // 할인의 공급가액분
+    const _newSup = _sumSup - _dcSup;
+    const _dcTax = _target > 0 ? (_sumTax - (_target - _newSup)) : (_dc - _dcSup);   // 나머지를 세액분으로
+    detailList.push({ itemName: TAX_DC_NAME, spec: '', qty: '', unitCost: '', supplyCost: -_dcSup, tax: -_dcTax, remark: '' });
+  }
   const supplyTotal = detailList.reduce((a, b) => a + (+b.supplyCost || 0), 0);
-  const taxTotal = detailList.reduce((a, b) => a + b.tax, 0); const totalAmount = supplyTotal + taxTotal;
+  const taxTotal = detailList.reduce((a, b) => a + (+b.tax || 0), 0); const totalAmount = supplyTotal + taxTotal;
   const remark1 = taxRemarkOf(q);   // 계산서 비고 = 현장명(없으면 견적번호)
   return {
     _quoteId: id, _buyer: buyer, _reN: _reN,
@@ -5359,11 +5372,11 @@ function taxPreviewInner() {
   const _q = (state.quotes || []).find(x => x.id === d._quoteId) || {};
   const _dc = +_q.discount || 0;
   const _gap = (+_q.total || 0) - d.totalAmount;
-  const warn = (_dc > 0 || Math.abs(_gap) > 1)
+  const warn = (Math.abs(_gap) > 1)
     ? `<div class="banner" style="margin-bottom:11px;font-size:12.5px;background:#fdf1ef;border-left:4px solid #c0341d;border-radius:0 10px 10px 0;padding:10px 13px;color:#8a2b1a">
         <b><i class="ti ti-alert-triangle"></i> 견적 합계와 다릅니다</b><br>
         견적 <b>${fmtWon(_q.total)}원</b> · 계산서 <b>${fmtWon(d.totalAmount)}원</b> · 차이 <b>${fmtWon(Math.abs(_gap))}원</b>
-        ${_dc > 0 ? `<br>견적에 <b>할인 ${fmtWon(_dc)}원</b>이 있는데 계산서에는 자동 반영되지 않습니다. 아래 품목 금액을 직접 조정하세요.` : ''}
+        <br>아래 품목 금액을 확인하세요.
       </div>` : '';
   return `
     <div class="banner info" style="margin-bottom:11px;font-size:12.5px"><i class="ti ti-info-circle"></i> 아래 내용 그대로 국세청에 전송됩니다. <b>품명·수량·단가·금액을 여기서 고칠 수 있습니다.</b> 확인 후 맨 아래 발행 버튼을 누르세요.</div>
