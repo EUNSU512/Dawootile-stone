@@ -6910,13 +6910,14 @@ function combinedBillDocHtml(qs) {
         <td class="r" style="font-weight:700;color:#201c17">${fmtWon(sup + tx)}</td>
         ${i === 0 ? `<td class="note" rowspan="${its.length}">
           <b>${_site ? e(_site) : '현장 미지정'}</b>${_who ? `<div style="color:#8a7350">담당 ${e(_who)}</div>` : ''}
-          <div style="color:#201c17;font-weight:700;margin-top:3px">소계 ${fmtWon(q.total)}</div>
-          <div style="color:#b0a795;font-size:9px;margin-top:2px">${e(q.docNo)}</div></td>` : ''}
+          <div class="sub" style="color:#201c17;font-weight:700;margin-top:3px;font-size:10px">소계 ${fmtWon(q.total)}</div>
+          <div class="sub" style="color:#b0a795;font-size:8.5px;margin-top:2px">${e(q.docNo)}</div></td>` : ''}
       </tr>`;
     });
   });
   const docNos = qs.map(q => q.docNo).filter(Boolean).join(', ');
-  const siteList = [...new Set(qs.map(billSiteOf).filter(Boolean))].join(' / ');
+  const _sites = [...new Set(qs.map(billSiteOf).filter(Boolean))];
+  const siteList = _sites.slice(0, 3).join(' / ') + (_sites.length > 3 ? ` 외 ${_sites.length - 3}곳` : '');
   const dRange = qs.length > 1 ? (qDate(qs[0]) + ' ~ ' + qDate(qs[qs.length - 1])) : qDate(qs[0]);
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>청구서 ${e(client)} (${qs.length}건)</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@1.3.9/dist/web/static/pretendard.min.css">
@@ -6945,7 +6946,8 @@ function combinedBillDocHtml(qs) {
 .items td{padding:7px 4px;font-size:10.5px;word-break:break-all}
 .items td.dt{color:#8a8178;font-size:10px;white-space:nowrap}
 .items td.sp{font-size:9.5px;color:#6b6355}
-.items td.note{background:#faf6ee;border-left:1px solid #e6ddcf;text-align:center;vertical-align:middle;font-size:10px;line-height:1.5;padding:6px 5px}
+.items td.note{background:#faf6ee;border-left:1px solid #e6ddcf;text-align:center;vertical-align:middle;font-size:9.5px;line-height:1.45;padding:6px 5px;word-break:keep-all;overflow-wrap:break-word}
+.items td.note .sub{white-space:nowrap}
 .bottom{display:flex;gap:15px;margin-top:16px;align-items:stretch}
 .bottom .memo{flex:1;border:1px solid #e6ddcf;border-radius:2px;overflow:hidden;display:flex;flex-direction:column}
 .memo .mh{background:#f6f1e8;color:#8a7350;font-weight:700;font-size:10px;padding:7px 13px;letter-spacing:2px}
@@ -6970,7 +6972,7 @@ function combinedBillDocHtml(qs) {
     <div class="box"><div class="bh">수신</div><div class="bb"><div class="recip-name">${e(client)} 귀중</div><div style="color:#666">아래 견적 ${qs.length}건을 합산하여 청구합니다.</div></div></div>
     <div class="box"><div class="bh">공급자</div><div class="bb">${co.stampImg ? `<img class="stampimg" src="${co.stampImg}">` : `<div class="stamp">DAWOO<br>(인)</div>`}<b style="font-size:13px;color:#111">${e(co.name)}</b><br>대표 ${e(co.ceo)}<br>사업자등록번호 ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}</div></div>
   </div>
-  <table class="items"><colgroup><col style="width:7%"><col style="width:21%"><col style="width:13%"><col style="width:5%"><col style="width:6%"><col style="width:10%"><col style="width:11%"><col style="width:9%"><col style="width:11%"><col style="width:12%"></colgroup>
+  <table class="items"><colgroup><col style="width:6.5%"><col style="width:20%"><col style="width:12%"><col style="width:4%"><col style="width:5%"><col style="width:9.5%"><col style="width:10.5%"><col style="width:8.5%"><col style="width:10.5%"><col style="width:13%"></colgroup>
     <thead><tr><th>날짜</th><th>품목명</th><th>규격</th><th>단위</th><th>수량</th><th>단가</th><th>공급가</th><th>부가세</th><th>합계금액</th><th>현장 · 담당</th></tr></thead><tbody>${rows}</tbody></table>
   <div class="bottom">
     <div class="memo"><div class="mh">비 고</div><div class="mb">${[...new Set(qs.map(q => (q.memo || '').trim()).filter(Boolean))].map(m => e(m)).join('<br><br>')}</div></div>
