@@ -6630,7 +6630,12 @@ function renderQuote() {
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         <div style="font-size:12.5px"><b style="color:var(--gd)"><i class="ti ti-stack-2"></i> 청구 묶음</b> · ${_selQs.length ? `${esc(_qSelClient)} · <b>${_selQs.length}건</b> · 합계 <b style="color:var(--gd)">${fmtWon(_selTotal)}</b>원` : '같은 거래처 견적을 2건 이상 선택하세요'}</div>
         <div style="display:flex;gap:6px">${_selQs.length ? `<button class="btn btn-sm" onclick="qSelClear()">선택 해제</button>` : ''}<button class="btn btn-sm btn-pri" ${_selQs.length >= 2 ? '' : 'disabled style="opacity:.5"'} onclick="printCombinedBill()"><i class="ti ti-printer"></i> 합산 청구서 출력</button></div>
-      </div></div>` : '';
+      </div>
+      ${_selQs.length ? `<div style="margin-top:7px;border-top:1px dashed var(--bd);padding-top:6px;font-size:11.5px;color:var(--t2);line-height:1.7">
+        ${_selQs.slice().sort((a, b) => (qDate(a) || '').localeCompare(qDate(b) || '')).map(q => `<div style="display:flex;justify-content:space-between;gap:8px">
+          <span style="min-width:0"><b style="color:var(--tx)">${esc(billSiteOf(q) || '현장 미지정')}</b>${q.by ? ` <span style="color:var(--t3)">· 담당 ${esc(q.by)}</span>` : ''}</span>
+          <span style="white-space:nowrap;color:var(--t3)">${fmtWon(q.total)}</span></div>`).join('')}
+      </div>` : ''}</div>` : '';
   const toggle = `<div style="display:flex;gap:6px;margin-bottom:10px">
     <button class="btn btn-sm ${view === 'all' ? 'btn-pri' : ''}" onclick="filters.quoteView='all';renderQuote()">전체</button>
     <button class="btn btn-sm ${view === 'month' ? 'btn-pri' : ''}" onclick="filters.quoteView='month';renderQuote()"><i class="ti ti-calendar-month"></i> 월별</button>
@@ -6869,6 +6874,12 @@ function printCombinedBill() {
   const w = window.open('', '_blank'); if (!w) { toast('팝업이 차단되었습니다. 팝업 허용 후 다시'); return; }
   w.document.write(combinedBillDocHtml(qs)); w.document.close(); w.focus(); setTimeout(() => { try { w.print(); } catch (e) { } }, 500);
 }
+/* 청구서에 쓸 현장 이름 — 현장명 > 현장주소 > 수신·참조 순으로 있는 것을 쓴다 */
+function billSiteOf(q) {
+  if (!q) return '';
+  const cands = [q.siteName, q.siteAddr, q.attn].map(v => String(v == null ? '' : v).trim()).filter(Boolean);
+  return cands[0] || '';
+}
 function combinedBillDocHtml(qs) {
   const e = s => esc(s == null ? '' : String(s));
   qs = qs.slice().sort((a, b) => (qDate(a) || '').localeCompare(qDate(b) || ''));
@@ -6878,10 +6889,15 @@ function combinedBillDocHtml(qs) {
   qs.forEach(q => {
     supply += +q.supply || 0; vat += +q.vat || 0; disc += +q.discount || 0; total += +q.total || 0;
     const its = q.items || []; if (hasBasinItems(its)) hasBasin = true;
-    rows += `<tr class="grp"><td colspan="6">견적 ${e(q.docNo)} · ${e(qDate(q))}${q.attn ? ' · ' + e(q.attn) : ''} &nbsp;—&nbsp; 소계 ${fmtWon(q.total)}원</td></tr>`;
+    const _site = billSiteOf(q), _who = (q.by || '').trim();
+    rows += `<tr class="grp"><td colspan="6">
+      <span style="font-size:12.5px;color:#201c17">${_site ? e(_site) : '현장 미지정'}</span>${_who ? `<span style="font-weight:500;color:#8a7350"> · 담당 ${e(_who)}</span>` : ''}
+      &nbsp;—&nbsp; 소계 ${fmtWon(q.total)}원
+      <span style="float:right;font-weight:500;color:#b0a795;letter-spacing:0">${e(q.docNo)} · ${e(qDate(q))}</span></td></tr>`;
     its.forEach(it => { idx++; rows += `<tr><td class="c">${idx}</td><td class="l">${e(it.name)}${it.stone ? `<div style="font-size:10.5px;color:#8a7350;font-weight:600">석종(자재): ${e(it.stone)}</div>` : ''}</td><td class="c">${e(it.spec)}</td><td class="r">${e(it.qty)}${it.unit ? ' ' + e(it.unit) : ''}</td><td class="r">${fmtWon(it.price)}</td><td class="r">${fmtWon(it.amt)}</td></tr>`; });
   });
   const docNos = qs.map(q => q.docNo).filter(Boolean).join(', ');
+  const siteList = [...new Set(qs.map(billSiteOf).filter(Boolean))].join(' / ');
   const dRange = qs.length > 1 ? (qDate(qs[0]) + ' ~ ' + qDate(qs[qs.length - 1])) : qDate(qs[0]);
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>청구서 ${e(client)} (${qs.length}건)</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@1.3.9/dist/web/static/pretendard.min.css">
@@ -6925,7 +6941,7 @@ function combinedBillDocHtml(qs) {
     <div class="brand"><img src="${DAWOO_LOGO}" alt="" style="height:42px;display:block"></div>
     <div class="title"><h1>청 구 서</h1></div>
   </div>
-  <div class="meta"><span style="display:flex;flex-direction:column;gap:2px;color:#201c17;font-weight:600"><span>담당자 : ${e(qs[0].by) || '-'}${_staffPhone ? ` <span style="color:#9a9086;font-weight:500">${e(_staffPhone)}</span>` : ''}</span><span style="color:#9a9086;font-weight:500">묶음 견적 : ${e(docNos)}</span></span><span style="display:flex;gap:22px"><span>견적 <b>${qs.length}건 묶음</b></span><span>기간 <b>${e(dRange)}</b></span><span>출력일 <b>${e(todayStr())}</b></span></span></div>
+  <div class="meta"><span style="display:flex;flex-direction:column;gap:2px;color:#201c17;font-weight:600"><span>담당자 : ${e(qs[0].by) || '-'}${_staffPhone ? ` <span style="color:#9a9086;font-weight:500">${e(_staffPhone)}</span>` : ''}</span><span style="color:#9a9086;font-weight:500">현장 : ${e(siteList) || '-'}</span></span><span style="display:flex;gap:22px"><span>견적 <b>${qs.length}건 묶음</b></span><span>기간 <b>${e(dRange)}</b></span><span>출력일 <b>${e(todayStr())}</b></span></span></div>
   <div class="info">
     <div class="box"><div class="bh">수신</div><div class="bb"><div class="recip-name">${e(client)} 귀중</div><div style="color:#666">아래 견적 ${qs.length}건을 합산하여 청구합니다.</div></div></div>
     <div class="box"><div class="bh">공급자</div><div class="bb">${co.stampImg ? `<img class="stampimg" src="${co.stampImg}">` : `<div class="stamp">DAWOO<br>(인)</div>`}<b style="font-size:13px;color:#111">${e(co.name)}</b><br>대표 ${e(co.ceo)}<br>사업자등록번호 ${e(co.bizno)}<br>${e(co.addr)}<br>${e(co.tel)}<br>${e(co.biztype)}</div></div>
@@ -6942,7 +6958,7 @@ function combinedBillDocHtml(qs) {
     </table>
   </div>
   ${hasBasin ? `<div class="notice"><div class="nh">⚠ 세면대 주문제작 특이사항 (필독)</div><ul>${BASIN_NOTICE.map(l => `<li>${e(l)}</li>`).join('')}</ul></div>` : ''}
-  <div class="foot"><span>※ 본 청구서는 상기 견적 ${qs.length}건을 합산한 것이며, 부가세 별도(공급가액 기준)로 산정되었습니다.</span><span>${e(co.name)}</span></div>
+  <div class="foot"><span>※ 본 청구서는 상기 견적 ${qs.length}건(${e(docNos)})을 합산한 것이며, 부가세 별도(공급가액 기준)로 산정되었습니다.</span><span>${e(co.name)}</span></div>
   </div></div>
 </body></html>`;
 }
