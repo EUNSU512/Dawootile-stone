@@ -4479,18 +4479,10 @@ function buildTaxPayload(id) {
     const spec = nm.length <= 3 ? nm.join(', ') : (nm.slice(0, 2).join(', ') + ' 외 ' + (nm.length - 2));
     detailList.push({ itemName: TAX_GAGONG_NAME, spec: spec, qty: 1, unitCost: sc, supplyCost: sc, tax: Math.round(sc * 0.1), remark: '' });
   }
-  // 할인(D/C) — 견적의 할인은 '합계금액'에서 빼는 방식이라 공급가액분과 세액분으로 나눠 마이너스 줄로 넣는다.
+  // 할인(D/C) — 견적에 적은 할인 금액을 그대로 마이너스 한 줄로 넣는다 (사용자 지정 방식).
   // 팝빌 규격상 supplyCost / tax 는 마이너스 입력이 허용된다.
   const _dc = Math.round(+q.discount || 0);
-  if (_dc > 0) {
-    const _sumSup = detailList.reduce((a, b) => a + (+b.supplyCost || 0), 0);
-    const _sumTax = detailList.reduce((a, b) => a + (+b.tax || 0), 0);
-    const _target = Math.round(+q.total || 0);                 // 계산서 합계가 견적 합계와 정확히 같아지게
-    const _dcSup = Math.round(_dc / 1.1);                      // 할인의 공급가액분
-    const _newSup = _sumSup - _dcSup;
-    const _dcTax = _target > 0 ? (_sumTax - (_target - _newSup)) : (_dc - _dcSup);   // 나머지를 세액분으로
-    detailList.push({ itemName: TAX_DC_NAME, spec: '', qty: '', unitCost: '', supplyCost: -_dcSup, tax: -_dcTax, remark: '' });
-  }
+  if (_dc > 0) detailList.push({ itemName: TAX_DC_NAME, spec: '', qty: '', unitCost: -_dc, supplyCost: -_dc, tax: 0, remark: '' });
   const supplyTotal = detailList.reduce((a, b) => a + (+b.supplyCost || 0), 0);
   const taxTotal = detailList.reduce((a, b) => a + (+b.tax || 0), 0); const totalAmount = supplyTotal + taxTotal;
   const remark1 = taxRemarkOf(q);   // 계산서 비고 = 현장명(없으면 견적번호)
