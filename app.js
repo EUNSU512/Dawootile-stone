@@ -3854,7 +3854,8 @@ function qRowHtml(d) {
     ${basinCalcHtml(_isBasin)}
     <div style="display:flex;gap:6px;align-items:center">
       <input class="q-spec" lang="en" placeholder="규격" value="${esc(d.spec || '')}" style="flex:1.7;min-width:0;${inp}">
-      <input class="q-qty" inputmode="numeric" placeholder="수량" value="${esc(d.qty || '')}" oninput="quoteRecalc()" style="flex:1;min-width:44px;${inp};text-align:right">
+      <input class="q-qty" inputmode="text" placeholder="수량" value="${esc(d.qty || '')}" oninput="quoteRecalc()" style="flex:1;min-width:44px;${inp};text-align:right">
+      <button type="button" class="btn btn-sm" title="환불(마이너스) 전환" onclick="qFlipQty(this)" style="flex:none;padding:8px 7px;font-weight:800">±</button>
       <input class="q-price" inputmode="numeric" placeholder="단가" value="${esc(d.price || '')}" oninput="quoteRecalc()" style="flex:1.3;min-width:56px;${inp};text-align:right">
       <div class="q-amt" style="flex:1.4;min-width:62px;text-align:right;font-weight:700;padding:8px 2px;color:var(--t1);font-size:14px">0</div>
     </div>
@@ -3944,7 +3945,8 @@ function quoteRefillPrices() {
 let _qRawTotal = 0;
 function quoteRecalc() {
   let supply = 0;
-  document.querySelectorAll('#q-rows .q-row').forEach(r => { const qty = _numv(r.querySelector('.q-qty').value); const price = _numv(r.querySelector('.q-price').value); const amt = Math.round(qty * price); r.querySelector('.q-amt').textContent = fmtWon(amt); supply += amt; });
+  document.querySelectorAll('#q-rows .q-row').forEach(r => { const qty = _numv(r.querySelector('.q-qty').value); const price = _numv(r.querySelector('.q-price').value); const amt = Math.round(qty * price); const ac = r.querySelector('.q-amt'); ac.textContent = fmtWon(amt); ac.style.color = amt < 0 ? '#c0341d' : 'var(--t1)'; supply += amt; });
+  try { qMarkMinus(); } catch (e) { }
   document.querySelectorAll('.qx-row').forEach(r => { const qty = _numv(r.querySelector('.qx-qty').value); const price = _numv(r.querySelector('.qx-price').value); const amt = Math.round(qty * price); r.querySelector('.qx-amt').textContent = fmtWon(amt); supply += amt; });
   const noteEl = el('q-basin-note');
   if (noteEl) {
@@ -3970,6 +3972,26 @@ function quoteTruncate(place) {
   toast(unit + ' 단위 내림 · 할인 ' + fmtWon(rem) + '원 → 합계 ' + fmtWon((_qRawTotal || 0) - rem) + '원');
 }
 function quoteDcClear() { if (el('q-dc')) el('q-dc').value = ''; quoteRecalc(); }
+/* 수량 부호 뒤집기 — 모바일 숫자 키패드엔 마이너스가 없어서 버튼으로 넣는다 (환불·반품 행) */
+function qFlipQty(btn) {
+  const row = btn.closest('.q-row'); if (!row) return;
+  const q = row.querySelector('.q-qty'); if (!q) return;
+  const v = _numv(q.value);
+  q.value = v ? String(-v) : '-';
+  quoteRecalc();
+}
+/* 마이너스 행은 한눈에 보이게 빨간 테두리 */
+function qMarkMinus() {
+  document.querySelectorAll('#q-rows .q-row').forEach(r => {
+    const v = _numv(r.querySelector('.q-qty') ? r.querySelector('.q-qty').value : 0);
+    const on = v < 0;
+    r.style.border = on ? '1.5px solid #e0a0a0' : '1px solid var(--bd2)';
+    r.style.background = on ? '#fff7f6' : '';
+    let tag = r.querySelector('.q-minus-tag');
+    if (on && !tag) { const a = r.querySelector('.q-avail'); if (a) a.insertAdjacentHTML('afterend', '<div class="q-minus-tag" style="font-size:11.5px;color:#c0341d;font-weight:700;margin:-2px 2px 6px"><i class="ti ti-arrow-back-up"></i> 환불·반품 (출고에는 안 넘어갑니다)</div>'); }
+    else if (!on && tag) tag.remove();
+  });
+}
 function addQRow() { const c = el('q-rows'); if (c) { c.insertAdjacentHTML('beforeend', qRowHtml({})); } }
 function openQuoteInline(id, copy) { filters.quoteEdit = id || 'new'; filters.quoteCopy = !!copy; filters.quoteCat = ''; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
 function quoteCancel() { filters.quoteEdit = ''; filters.quoteCopy = false; filters.quoteCat = ''; renderQuote(); }
@@ -4151,7 +4173,7 @@ function collectQItems() {
     const name = (r.querySelector('.q-mat').value || '').trim(); const spec = (r.querySelector('.q-spec').value || '').trim();
     const qty = _numv(r.querySelector('.q-qty').value); const price = _numv(r.querySelector('.q-price').value);
     const stone = (r.querySelector('.q-stone') && r.querySelector('.q-stone').value) || '';
-    if (name && qty > 0) items.push(Object.assign({ name, spec, unit: '', qty, price, amt: Math.round(qty * price) }, stone ? { stone } : {}));
+    if (name && qty !== 0) items.push(Object.assign({ name, spec, unit: '', qty, price, amt: Math.round(qty * price) }, stone ? { stone } : {}));   // 마이너스 = 환불/반품
   });
   document.querySelectorAll('.qx-row').forEach(r => {
     const name = r.getAttribute('data-name'); const unit = r.getAttribute('data-unit') || ''; const qty = _numv(r.querySelector('.qx-qty').value); const price = _numv(r.querySelector('.qx-price').value);
@@ -4249,11 +4271,11 @@ function quoteCancelOrder(id) {
 function quoteRegister(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
   const isOrderBasin = n => (n || '').includes('세면대') && /주문제작|비규격/.test(n || '');   // 주문제작·비규격 세면대만 발주. 그 외 재고 세면대는 바로 출고
-  const items = (q.items || []).filter(it => marginCat(it.name) === '자재' || ((it.name || '').includes('세면대') && !isOrderBasin(it.name))).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' }));   // 출고엔 자재 + 재고 세면대 (가공·운송·주문제작세면대 제외)
+  const items = (q.items || []).filter(it => (+it.qty || 0) > 0 && (marginCat(it.name) === '자재' || ((it.name || '').includes('세면대') && !isOrderBasin(it.name)))).map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' }));   // 출고엔 자재 + 재고 세면대 (가공·운송·주문제작세면대·환불행 제외)
   const hasBasinOrder = (q.items || []).some(it => isOrderBasin(it.name));
   const hasGagong = (q.items || []).some(it => marginCat(it.name) === '가공' && !(it.name || '').includes('세면대'));
   if (hasBasinOrder) {
-    let bi = (q.items || []).filter(it => isOrderBasin(it.name)).map(it => ({ stone: it.stone || '', spec: it.spec || '', qty: it.qty || '', quoteNo: q.docNo || '' }));
+    let bi = (q.items || []).filter(it => isOrderBasin(it.name) && (+it.qty || 0) > 0).map(it => ({ stone: it.stone || '', spec: it.spec || '', qty: it.qty || '', quoteNo: q.docNo || '' }));
     if (!bi.length) bi = (q.items || []).map(it => ({ stone: it.name, spec: it.spec || '', qty: it.qty || '' }));
     go('basin'); setTimeout(() => { try { openBasinForm(null, { vendor: q.client, items: bi, quoteId: id }); } catch (e) { } }, 90);
     toast('세면대 발주로 불러왔습니다');
@@ -4308,6 +4330,7 @@ function quoteMaterialItems(q) {
   let matSet; try { matSet = new Set(quotePriceItems().map(i => _normName(i.name))); } catch (e) { matSet = new Set(); }
   return (q && q.items || []).filter(it => {
     const nm = it.name || ''; if (!nm) return false;
+    if ((+it.qty || 0) <= 0) return false;           // ★ 환불(마이너스) 행은 출고·홀딩·재고에 반영하지 않는다
     if (it.extra) return false;                      // 부대비용·가공 칸에서 입력된 항목
     if (extraSet.has(_normName(nm))) return false;   // 부대비용 항목명과 같음(예전 견적 호환)
     if (isOrderBasin(nm)) return false;              // 주문제작 세면대는 재고 아님
@@ -4470,7 +4493,7 @@ function buildTaxPayload(id) {
   const _mgtBase = String(q.docNo || ('Q' + Date.now())).replace(/[^0-9A-Za-z\-_]/g, '').slice(0, 20) || ('Q' + Date.now());
   const _reN = q.taxMgtKey ? ((+q.taxReissue || 0) + 1) : 0;
   const _mgtKey = _reN ? (_mgtBase + '-R' + _reN) : _mgtBase;
-  const items = (q.items || []).filter(it => (+it.amt > 0) || (+it.qty > 0));
+  const items = (q.items || []).filter(it => (+it.amt || 0) !== 0 || (+it.qty || 0) !== 0);   // 환불(마이너스) 행도 그대로 넣는다
   const _gag = items.filter(isGagongItem), _rest = items.filter(it => !isGagongItem(it));
   const detailList = _rest.map(it => { const sc = Math.round(+it.amt || 0); return { itemName: it.name, spec: it.spec || '', qty: it.qty || '', unitCost: it.price || '', supplyCost: sc, tax: Math.round(sc * 0.1), remark: '' }; });
   if (_gag.length) {   // 가공비는 '세라믹 가공' 한 줄로 합침 — 세무서에서 가공 내용 구분 요청
