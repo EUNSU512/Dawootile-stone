@@ -4368,6 +4368,44 @@ function openTaxForm(id) {
   qListSave();                           // 보던 위치 기억 → 나올 때 그대로 되돌린다
   filters.taxEdit = id; renderQuote(); _pageScrollTo(0);
 }
+/* ══════════════════════════════════════════════════════════
+   영수 / 청구 — 드롭다운 대신 버튼 두 개로 고른다. 기본은 '청구'.
+   고른 값은 눈에 안 보이는 칸(input#tx-purpose)에 담아두고,
+   발행할 때 buildTaxPayload 가 그 값을 그대로 읽어간다.
+   ══════════════════════════════════════════════════════════ */
+const TAX_PURPOSE_DEFAULT = '청구';
+/* 버튼 한 개 모양 — sel(선택됨) 이면 금색으로 꽉 채운다 */
+function _ppStyle(sel, sm) {
+  const pad = sm ? '6px 7px' : '8px 10px', fs = sm ? '13px' : '14px', br = sm ? '7px' : '9px';
+  return `flex:1;min-width:0;padding:${pad};font-size:${fs};font-weight:700;border-radius:${br};cursor:pointer;`
+    + (sel ? 'background:var(--gd);color:#fff;border:1.5px solid var(--gd)' : 'background:#fff;color:var(--t2);border:1.5px solid var(--bd2)');
+}
+/* 세금계산서 작성 폼용 (숨은 칸 + 버튼 2개) */
+function taxPurposeHtml(cur) {
+  const v = (cur === '영수') ? '영수' : TAX_PURPOSE_DEFAULT;
+  const b = k => `<button type="button" id="tx-pp-${k === '영수' ? 'r' : 'c'}" style="${_ppStyle(v === k, false)}" onclick="taxSetPurpose('${k}')">${k}</button>`;
+  return `<input type="hidden" id="tx-purpose" value="${v}"><div style="display:flex;gap:6px">${b('영수')}${b('청구')}</div>`;
+}
+function taxSetPurpose(v) {
+  v = (v === '영수') ? '영수' : '청구';
+  const h = el('tx-purpose'); if (h) h.value = v;
+  const r = el('tx-pp-r'), c = el('tx-pp-c');
+  if (r) r.setAttribute('style', _ppStyle(v === '영수', false));
+  if (c) c.setAttribute('style', _ppStyle(v === '청구', false));
+}
+/* 발행 직전 미리보기용 (여기서 고치면 _taxDraft 에 바로 반영) */
+function taxPrevPurposeHtml(cur) {
+  const v = (cur === '영수') ? '영수' : '청구';
+  const b = k => `<button type="button" id="tp-pp-${k === '영수' ? 'r' : 'c'}" style="${_ppStyle(v === k, true)}" onclick="taxPrevSetPurpose('${k}')">${k}</button>`;
+  return `<div style="display:flex;gap:6px">${b('영수')}${b('청구')}</div>`;
+}
+function taxPrevSetPurpose(v) {
+  v = (v === '영수') ? '영수' : '청구';
+  taxPrevSetTop('purposeType', v);
+  const r = el('tp-pp-r'), c = el('tp-pp-c');
+  if (r) r.setAttribute('style', _ppStyle(v === '영수', true));
+  if (c) c.setAttribute('style', _ppStyle(v === '청구', true));
+}
 function taxCancel() { filters.taxEdit = ''; renderQuote(); qListRestore(); }
 function renderTaxForm() {
   const id = filters.taxEdit; const q = (state.quotes || []).find(x => x.id === id); if (!q) { filters.taxEdit = ''; renderQuote(); return; }
@@ -4387,7 +4425,7 @@ function renderTaxForm() {
       <div class="fld full" style="margin-bottom:13px"><label>담당자 이메일 <span class="req">*</span> <span style="color:var(--t3);font-weight:500">(발행 안내메일 수신)</span></label><input id="tx-email" lang="en" value="${esc(ti.email || '')}" placeholder="name@company.com" style="${inp}"></div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
         <div class="fld" style="flex:1;min-width:150px;margin:0"><label>작성일자</label><input type="date" id="tx-date" value="${esc(todayStr())}" style="${inp}"></div>
-        <div class="fld" style="flex:1;min-width:150px;margin:0"><label>영수/청구</label><select id="tx-purpose" style="${inp}"><option>영수</option><option>청구</option></select></div>
+        <div class="fld" style="flex:1;min-width:150px;margin:0"><label>영수/청구</label>${taxPurposeHtml(TAX_PURPOSE_DEFAULT)}</div>
       </div>
       <div style="background:var(--soft);border-radius:11px;padding:12px 14px;margin-bottom:12px;font-size:13px">
         <div style="color:var(--t2);margin-bottom:5px">공급자: <b>${esc(co.name)}</b> (${esc(co.bizno)})</div>
@@ -4479,7 +4517,7 @@ function buildTaxPayload(id) {
   if (!email) { toast('발행 안내메일 수신 이메일을 입력하세요'); return null; }
   const buyer = { bizNo, corpName: (el('tx-corp').value || '').trim() || q.client, ceo: (el('tx-ceo').value || '').trim(), contact: (el('tx-contact').value || '').trim(), addr: (el('tx-addr').value || '').trim(), bizType: (el('tx-biztype').value || '').trim(), bizClass: (el('tx-bizclass').value || '').trim(), email };
   const writeDate = (el('tx-date').value || todayStr()).replace(/-/g, '');
-  const purposeType = (el('tx-purpose') && el('tx-purpose').value) || '영수';
+  const purposeType = (el('tx-purpose') && el('tx-purpose').value) || TAX_PURPOSE_DEFAULT;
   // 공급자 업태/종목: '제조업 | 건축 자재' 처럼 | 로 구분된 경우 우선, 없으면 공백 기준
   const _btRaw = (co.biztype || '').trim();
   let _btType = '', _btClass = '';
@@ -5402,7 +5440,7 @@ function taxPreviewInner() {
     </div>
     <div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:11px">
       <div class="fld" style="flex:1;min-width:130px;margin:0"><label>작성일자</label><input type="date" value="${esc(wd)}" onchange="taxPrevSetTop('writeDate',(this.value||'').replace(/-/g,''))" style="${inp}"></div>
-      <div class="fld" style="flex:1;min-width:110px;margin:0"><label>영수/청구</label><select onchange="taxPrevSetTop('purposeType',this.value)" style="${inp}"><option ${d.purposeType === '영수' ? 'selected' : ''}>영수</option><option ${d.purposeType === '청구' ? 'selected' : ''}>청구</option></select></div>
+      <div class="fld" style="flex:1;min-width:110px;margin:0"><label>영수/청구</label>${taxPrevPurposeHtml(d.purposeType)}</div>
       <div class="fld" style="flex:1.4;min-width:150px;margin:0"><label>문서번호 <span style="color:var(--t3);font-weight:500">(팝빌 관리번호)</span></label><input value="${esc(d.mgtKey)}" onchange="taxPrevSetTop('mgtKey',(this.value||'').trim())" style="${inp}"></div>
     </div>
     <div class="sec-label"><i class="ti ti-list-details"></i>품목 명세 <span style="font-weight:500;color:var(--t3)">${d.detailList.length}건 · 칸을 눌러 수정</span></div>
