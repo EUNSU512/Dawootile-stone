@@ -29,7 +29,7 @@ function prefillEmail() {
 }
 function cref(name) { return db.collection('teams').doc(TEAM).collection(name); }
 
-const COLLS = ['members', 'sites', 'inventory', 'holdings', 'transactions', 'specs', 'factories', 'teams', 'suppliers', 'clients', 'issues', 'restocks', 'basins', 'holdRequests', 'shipments', 'chulgoReqs', 'chulgoHandlers', 'quotes', 'clientPrices', 'priceList', 'appmeta', 'expenses', 'banktx'];
+const COLLS = ['members', 'sites', 'inventory', 'holdings', 'transactions', 'specs', 'factories', 'teams', 'suppliers', 'clients', 'issues', 'restocks', 'basins', 'holdRequests', 'shipments', 'chulgoReqs', 'chulgoHandlers', 'quotes', 'clientPrices', 'priceList', 'appmeta', 'expenses', 'banktx', 'purchases'];
 const CTYPES = ['유통', '대리점', '인테리어', '소비자', '별도'];   // 거래처 유형 (별도 = 예외 업체 단가)
 function ctypeKey(t) { return t === '유통' ? 'dist' : (t === '대리점' ? 'agency' : (t === '인테리어' ? 'interior' : (t === '별도' ? 'special' : 'consumer'))); }
 const QCATS = ['세라믹+세면대', '석재', '통관비용'];
@@ -6626,6 +6626,421 @@ function crewSettleCard() {
   </div>`;
 }
 
+/* ══════════════════════════════════════════════════════════
+   매입 세금계산서 — 홈택스에서 통째로 끌어와 정산에 반영
+   ─────────────────────────────────────────────────────────
+   무엇을 하나:
+     ① 홈택스에 들어온 우리 회사 '매입' 계산서를 팝빌을 통해 가져온다
+     ② 그 달 총지출(회사지출 + 매입)을 한 눈에 본다
+     ③ 매입처별로 얼마 샀는지 쌓아서 본다
+     ④ 매출세액 − 매입세액 = 이번 분기 낼 부가세를 미리 계산한다
+     ⑤ 매입 한 건을 특정 견적(현장)의 원가로 연결한다
+   저장 위치: purchases 컬렉션. 문서 ID 는 국세청 승인번호라
+   같은 걸 여러 번 수집해도 덮어써질 뿐 중복으로 쌓이지 않는다.
+   ══════════════════════════════════════════════════════════ */
+let _ht = { busy: false };
+async function _htCall(body) {
+  const token = await auth.currentUser.getIdToken();
+  const r = await fetch(PUSH_FN + '?action=hometax', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify(body) });
+  const j = await r.json().catch(() => ({}));
+  if (!(r.ok && j.ok)) throw new Error((j && j.error) || ('HTTP ' + r.status));
+  return j;
+}
+/* 20260825 → 2026-08-25 */
+function _htYmd(v) { const t = String(v == null ? '' : v).replace(/[^0-9]/g, ''); return t.length >= 8 ? (t.slice(0, 4) + '-' + t.slice(4, 6) + '-' + t.slice(6, 8)) : ''; }
+/* 팝빌이 필드 이름을 조금씩 다르게 주는 경우가 있어 여러 후보를 순서대로 본다 */
+function _htPick(o, ks) { for (let i = 0; i < ks.length; i++) { const v = o[ks[i]]; if (v != null && v !== '') return v; } return ''; }
+function _htNum(o, ks) { for (let i = 0; i < ks.length; i++) { const v = o[ks[i]]; if (v != null && v !== '') { const n = Math.round(+String(v).replace(/[^0-9.\-]/g, '') || 0); if (!isNaN(n)) return n; } } return 0; }
+const _HT_TAXTYPE = { T: '과세', N: '면세', Z: '영세', '과세': '과세', '면세': '면세', '영세': '영세' };
+const _HT_PURPOSE = { R: '영수', C: '청구', N: '', '영수': '영수', '청구': '청구' };
+/* 문서 ID — 국세청 승인번호가 있으면 그걸, 없으면 날짜+사업자번호+금액으로 만든다 */
+function _purKey(x) {
+  const nts = String(_htPick(x, ['ntsconfirmNum', 'ntsConfirmNum', 'NTSConfirmNum']) || '').replace(/[^0-9A-Za-z]/g, '');
+  if (nts.length >= 10) return 'N' + nts;
+  const d = String(_htPick(x, ['writeDate', 'WriteDate', 'issueDate'])).replace(/[^0-9]/g, '');
+  const c = String(_htPick(x, ['invoicerCorpNum', 'InvoicerCorpNum'])).replace(/[^0-9]/g, '');
+  const a = _htNum(x, ['totalAmount', 'TotalAmount', 'supplyCostTotal']);
+  return ('X' + d + '-' + c + '-' + a).slice(0, 60);
+}
+/* 팝빌 응답 한 줄 → 우리가 쓰는 모양 */
+function _purFrom(x, kind) {
+  const sup = _htNum(x, ['supplyCostTotal', 'SupplyCostTotal', 'supplyCost']);
+  const vat = _htNum(x, ['taxTotal', 'TaxTotal', 'tax']);
+  let tot = _htNum(x, ['totalAmount', 'TotalAmount']);
+  if (!tot) tot = sup + vat;
+  const tt = String(_htPick(x, ['taxType', 'TaxType']) || '');
+  const pp = String(_htPick(x, ['purposeType', 'PurposeType']) || '');
+  return {
+    kind: kind || 'BUY',
+    date: _htYmd(_htPick(x, ['writeDate', 'WriteDate'])) || _htYmd(_htPick(x, ['issueDate', 'IssueDate'])) || todayStr(),
+    issueDate: _htYmd(_htPick(x, ['issueDate', 'IssueDate'])),
+    sendDate: _htYmd(_htPick(x, ['sendDate', 'SendDate'])),
+    supplier: String(_htPick(x, ['invoicerCorpName', 'InvoicerCorpName']) || '').trim(),
+    supplierBiz: String(_htPick(x, ['invoicerCorpNum', 'InvoicerCorpNum']) || '').replace(/[^0-9]/g, ''),
+    supplierCeo: String(_htPick(x, ['invoicerCEOName', 'InvoicerCEOName']) || '').trim(),
+    buyer: String(_htPick(x, ['invoiceeCorpName', 'InvoiceeCorpName']) || '').trim(),
+    item: String(_htPick(x, ['itemName', 'ItemName', 'remark1']) || '').trim(),
+    supply: sup, vat: vat, total: tot,
+    taxType: _HT_TAXTYPE[tt] || tt || '',
+    purpose: _HT_PURPOSE[pp] != null ? _HT_PURPOSE[pp] : pp,
+    docType: String(_htPick(x, ['taxinvoiceType', 'TaxinvoiceType', 'modifyCode']) || ''),
+    nts: String(_htPick(x, ['ntsconfirmNum', 'ntsConfirmNum', 'NTSConfirmNum']) || ''),
+    src: 'hometax', fetchedAt: Date.now()
+  };
+}
+/* 기간을 3개월 이하 토막으로 자른다 (팝빌 제한) */
+function _htSplit(sd, ed) {
+  const out = []; let a = new Date(sd + 'T00:00:00'); const z = new Date(ed + 'T00:00:00');
+  while (a <= z) {
+    const b = new Date(a.getFullYear(), a.getMonth() + 3, 0);   // 3개월 뒤 말일
+    const e = b > z ? z : b;
+    out.push([_ymd(a), _ymd(e)]);
+    a = new Date(e.getFullYear(), e.getMonth(), e.getDate() + 1);
+  }
+  return out.length ? out : [[sd, ed]];
+}
+
+/* ── 연동 상태 확인 · 인증 등록 안내 ───────────────────────── */
+async function openHtSetup() {
+  if (!isAdmin()) { toast('관리자만 가능합니다'); return; }
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-plug-connected"></i>홈택스 매입 계산서 연동</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div id="ht-body"><div class="empty"><i class="ti ti-loader"></i>연동 상태 확인 중…</div></div>`);
+  try {
+    const j = await _htCall({ mode: 'state' });
+    const fr = j.flatRate || {};
+    const paid = !!(fr.referenceID || fr.contractDT || fr.state === 1 || fr.state === '1');
+    const okDept = !!j.deptUser, okLogin = !!j.deptLogin;
+    const line = (ok, t, sub) => `<div style="display:flex;gap:9px;align-items:flex-start;padding:9px 11px;background:var(--soft);border-radius:10px;margin-bottom:6px">
+      <i class="ti ti-${ok ? 'circle-check' : 'alert-circle'}" style="color:${ok ? 'var(--gd)' : '#c0341d'};font-size:17px;margin-top:1px"></i>
+      <div style="flex:1;min-width:0"><div style="font-size:13px;font-weight:700">${t}</div><div style="font-size:11.5px;color:var(--t3);margin-top:2px;line-height:1.55">${sub}</div></div></div>`;
+    el('ht-body').innerHTML = `
+      ${j.test ? `<div class="banner warn" style="margin-bottom:10px;font-size:12px"><i class="ti ti-flask"></i><span style="flex:1;min-width:0">지금은 <b>테스트 모드</b>입니다. 실제 홈택스 자료는 운영 모드로 바꾼 뒤에 들어옵니다.</span></div>` : ''}
+      ${line(paid, '홈택스수집 정액제', paid ? '가입되어 있습니다. 수집할 수 있습니다.' : '아직 가입 전입니다. 홈택스수집은 <b>월 정액제</b> 상품이라 먼저 신청해야 자료를 가져옵니다.')}
+      ${line(okDept, '홈택스 부서사용자 계정 등록', okDept ? '등록되어 있습니다.' : '홈택스에서 <b>부서사용자 아이디</b>를 하나 만들어 팝빌에 등록해야 합니다. (무료·반영구)')}
+      ${line(okLogin, '부서사용자 로그인 확인', okLogin ? '정상입니다.' : (okDept ? '아이디는 등록됐는데 로그인이 안 됩니다. 비밀번호가 바뀌었는지 확인하세요.' : '계정 등록 후 확인됩니다.'))}
+      <div style="font-size:11.5px;color:var(--t3);line-height:1.7;background:#fffaf2;border:1px solid #f0dfc0;border-radius:10px;padding:10px 12px;margin:9px 0">
+        <b>처음 한 번만 하면 되는 준비</b><br>
+        1. 홈택스 → 로그인 → 우측 상단 <b>My홈택스 → 부서 사용자 관리</b>에서 아이디 하나 발급<br>
+        2. 아래 <b>팝빌에서 등록하기</b> 버튼 → 팝빌 창에서 그 아이디·비밀번호를 입력<br>
+        3. 팝빌에서 <b>홈택스수집 정액제</b> 신청<br>
+        <span style="color:#c0341d">※ 홈택스 아이디·비밀번호는 팝빌 창에 직접 입력하세요. 이 앱이나 대화창에는 절대 적지 마세요.</span>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-pri btn-sm" onclick="htOpenPop('cert')"><i class="ti ti-external-link"></i>팝빌에서 계정 등록하기</button>
+        <button class="btn btn-sm" onclick="htOpenPop('flatpop')"><i class="ti ti-receipt"></i>정액제 신청</button>
+        <button class="btn btn-sm" onclick="openHtSetup()"><i class="ti ti-refresh"></i>다시 확인</button>
+      </div>
+      <div style="font-size:10.5px;color:var(--t3);margin-top:8px">${esc(JSON.stringify({ 정액제: fr, 계정: j.deptUserError || 'ok', 로그인: j.deptLoginError || 'ok' }).slice(0, 300))}</div>`;
+  } catch (e) {
+    el('ht-body').innerHTML = `<div class="banner err" style="font-size:12.5px"><i class="ti ti-alert-triangle"></i><span style="flex:1;min-width:0">${esc((e && e.message) || e)}<br><span style="color:var(--t3)">서버(Cloud Function)에 홈택스 기능이 아직 안 올라갔거나, 관리자 계정이 아닐 수 있습니다.</span></span></div>`;
+  }
+}
+async function htOpenPop(mode) {
+  try { const j = await _htCall({ mode: mode }); const w = window.open(j.url, '_blank'); if (!w) toast('팝업이 차단되었습니다. 허용 후 다시'); }
+  catch (e) { toast((e && e.message) || '열지 못했습니다'); }
+}
+
+/* ── 수집 ──────────────────────────────────────────────────── */
+function openPurCollect(ym) {
+  if (!isAdmin()) { toast('매입 계산서 불러오기는 관리자만 가능합니다'); return; }
+  const y = ym || (filters.settleMonth || todayStr().slice(0, 7));
+  const first = y + '-01';
+  const last = _ymd(new Date(+y.slice(0, 4), +y.slice(5, 7), 0));
+  const inp = 'font-size:13.5px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px;width:100%';
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-file-download"></i>매입 계산서 불러오기</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0">
+      홈택스에 들어와 있는 <b>매입</b> 세금계산서를 그대로 가져옵니다. 같은 걸 다시 받아도 중복으로 쌓이지 않습니다.</span></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+      <div class="fld" style="flex:1;min-width:130px;margin:0"><label>시작일</label><input type="date" id="ht-sd" value="${first}" style="${inp}"></div>
+      <div class="fld" style="flex:1;min-width:130px;margin:0"><label>종료일</label><input type="date" id="ht-ed" value="${last}" style="${inp}"></div>
+    </div>
+    <div class="fld" style="margin-bottom:10px"><label>가져올 종류</label>
+      <div style="display:flex;gap:6px">
+        <button type="button" id="ht-k-b" style="flex:1;padding:8px;font-size:13.5px;font-weight:700;border-radius:9px;cursor:pointer;background:var(--gd);color:#fff;border:1.5px solid var(--gd)" onclick="htPickKind('BUY')">매입 (우리가 산 것)</button>
+        <button type="button" id="ht-k-s" style="flex:1;padding:8px;font-size:13.5px;font-weight:700;border-radius:9px;cursor:pointer;background:#fff;color:var(--t2);border:1.5px solid var(--bd2)" onclick="htPickKind('SELL')">매출 (우리가 판 것)</button>
+      </div><input type="hidden" id="ht-kind" value="BUY"></div>
+    <div id="ht-status" style="font-size:12.5px;color:var(--t3);min-height:20px;margin-bottom:9px"></div>
+    <div class="frm-foot"><button class="btn" style="flex:1" onclick="openHtSetup()"><i class="ti ti-settings"></i>연동 설정</button>
+      <button class="btn btn-pri" style="flex:2" onclick="purRun()"><i class="ti ti-download"></i>불러오기</button></div>`);
+}
+function htPickKind(k) {
+  const h = el('ht-kind'); if (h) h.value = k;
+  const on = 'background:var(--gd);color:#fff;border:1.5px solid var(--gd)', off = 'background:#fff;color:var(--t2);border:1.5px solid var(--bd2)';
+  const base = 'flex:1;padding:8px;font-size:13.5px;font-weight:700;border-radius:9px;cursor:pointer;';
+  const b = el('ht-k-b'), s = el('ht-k-s');
+  if (b) b.setAttribute('style', base + (k === 'BUY' ? on : off));
+  if (s) s.setAttribute('style', base + (k === 'SELL' ? on : off));
+}
+async function _purFetchOne(kind, sd, ed, setSt, label) {
+  setSt(label + ' 홈택스에 수집 요청 중…');
+  const j1 = await _htCall({ mode: 'job', type: kind, dtype: 'S', sdate: sd.replace(/-/g, ''), edate: ed.replace(/-/g, '') });
+  const jobID = j1.jobID;
+  if (!jobID) throw new Error('작업 ID를 받지 못했습니다');
+  let done = false;
+  for (let n = 0; n < 40 && !done; n++) {                      // 최대 약 80초 기다린다
+    await new Promise(r => setTimeout(r, 2000));
+    const st = (await _htCall({ mode: 'jobstate', jobID: jobID })).state || {};
+    const code = +st.jobState || 0;
+    if (code === 3) done = true;
+    else if (st.errorCode) throw new Error(st.errorCode + ' ' + (st.errorReason || ''));
+    else setSt(label + ' 홈택스에서 모으는 중… (' + ((n + 1) * 2) + '초)');
+  }
+  if (!done) throw new Error('수집이 오래 걸립니다. 잠시 후 다시 시도하세요.');
+  setSt(label + ' 내역 읽는 중…');
+  let page = 1, all = [], total = 0;
+  for (; page <= 20; page++) {
+    const r2 = await _htCall({ mode: 'search', jobID: jobID, page: page, perPage: 500, order: 'D' });
+    const res = r2.result || {};
+    const list = res.list || [];
+    total = +res.total || total;
+    all = all.concat(list);
+    if (list.length < 500 || all.length >= total) break;
+  }
+  if (all.length && !window._htRawSample) window._htRawSample = all[0];   // 필드 확인용 표본 1건
+  const rows = all.map(x => ({ id: _purKey(x), row: _purFrom(x, kind) })).filter(r => r.id && (r.row.total !== 0 || r.row.supply !== 0));
+  let saved = 0;
+  for (let i = 0; i < rows.length; i += 400) {
+    const chunk = rows.slice(i, i + 400);
+    if (CLOUD) {
+      const batch = db.batch();
+      chunk.forEach(r => batch.set(cref('purchases').doc(r.id), r.row, { merge: true }));   // merge = 원가연결·제외표시는 그대로 둠
+      await batch.commit();
+    } else { for (const r of chunk) await Store.setMerge('purchases', r.id, r.row); }
+    saved += chunk.length; setSt(label + ' 저장 중… ' + saved + '건');
+  }
+  return { saved: saved, got: all.length, total: total };
+}
+async function purRun() {
+  if (_ht.busy) return;
+  const kind = (el('ht-kind') && el('ht-kind').value) || 'BUY';
+  const sd = (el('ht-sd') && el('ht-sd').value) || '', ed = (el('ht-ed') && el('ht-ed').value) || '';
+  if (!sd || !ed) { toast('기간을 확인하세요'); return; }
+  if (sd > ed) { toast('시작일이 종료일보다 늦습니다'); return; }
+  const setSt = h => { if (el('ht-status')) el('ht-status').innerHTML = h; };
+  _ht.busy = true;
+  try {
+    const parts = _htSplit(sd, ed);
+    let saved = 0;
+    for (let p = 0; p < parts.length; p++) {
+      const lab = parts.length > 1 ? `(${p + 1}/${parts.length})` : '';
+      const r = await _purFetchOne(kind, parts[p][0], parts[p][1], setSt, lab);
+      saved += r.saved;
+    }
+    setSt(`<b style="color:var(--gd)">${kind === 'BUY' ? '매입' : '매출'} 계산서 ${saved}건 저장됨</b>`);
+    if (!saved) setSt(`<span style="color:var(--amber-t)">해당 기간에 들어온 계산서가 없습니다.</span>`);
+    renderSettle();
+  } catch (e) {
+    setSt(`<span style="color:#c0341d">${esc((e && e.message) || e)}</span>
+      <div style="margin-top:7px"><button class="btn btn-sm" onclick="openHtSetup()"><i class="ti ti-settings"></i>연동 설정 확인</button></div>`);
+  } finally { _ht.busy = false; }
+}
+
+/* ── 정산에서 쓰는 계산들 ─────────────────────────────────── */
+function purAll() { return (state.purchases || []).filter(p => (p.kind || 'BUY') === 'BUY'); }
+function purOfMonth(ym) { return purAll().filter(p => (p.date || '').startsWith(ym)).sort((a, b) => (b.date || '').localeCompare(a.date || '')); }
+function purOfRange(sd, ed) { return purAll().filter(p => (p.date || '') >= sd && (p.date || '') <= ed); }
+function purSum(rows) {
+  const o = { n: rows.length, supply: 0, vat: 0, total: 0 };
+  rows.forEach(p => { o.supply += (+p.supply || 0); o.vat += (+p.vat || 0); o.total += (+p.total || 0); });
+  return o;
+}
+/* 이번 달 매입 중 '회사지출로 세야 하는' 것만 — 제외 표시했거나 이미 견적 원가로 넣은 건 뺀다 */
+function purExpenseRows(ym) { return purOfMonth(ym).filter(p => !p.exclude && !p.costQid); }
+async function purToggleExclude(id) {
+  const p = (state.purchases || []).find(x => x.id === id); if (!p) return;
+  await Store.update('purchases', id, { exclude: !p.exclude });
+  toast(!p.exclude ? '영업이익 계산에서 제외' : '다시 포함');
+  renderSettle();
+}
+
+/* ── 매입 카드 ─────────────────────────────────────────────── */
+let _purView = 'list';                    // list | supplier
+function purSetView(v) { _purView = v; renderSettle(); }
+function purchaseCard(ym) {
+  const rows = purOfMonth(ym);
+  const t = purSum(rows);
+  const tIn = purSum(rows.filter(p => !p.exclude && !p.costQid));
+  const tCost = purSum(rows.filter(p => p.costQid));
+  const admin = isAdmin();
+  const cell = (lab, v, col, sub) => `<div style="text-align:center;padding:9px 6px;background:var(--soft);border-radius:10px">
+    <div style="font-size:10.5px;color:var(--t2);margin-bottom:3px">${lab}</div>
+    <div style="font-size:15px;font-weight:800;color:${col}">${fmtWon(v)}</div>${sub ? `<div style="font-size:10px;color:var(--t3);margin-top:1px">${sub}</div>` : ''}</div>`;
+  // 매입처별
+  const bySup = {};
+  rows.forEach(p => { const k = (p.supplier || '(상호없음)').trim(); if (!bySup[k]) bySup[k] = { n: 0, supply: 0, vat: 0, total: 0, biz: p.supplierBiz || '' }; const o = bySup[k]; o.n++; o.supply += (+p.supply || 0); o.vat += (+p.vat || 0); o.total += (+p.total || 0); });
+  const supKeys = Object.keys(bySup).sort((a, b) => bySup[b].total - bySup[a].total);
+  const supRows = supKeys.length ? supKeys.map(k => `<tr style="border-bottom:1px solid var(--soft)">
+      <td style="padding:6px 8px"><b>${esc(k)}</b>${bySup[k].biz ? `<div style="font-size:10.5px;color:var(--t3)">${esc(bySup[k].biz)}</div>` : ''}</td>
+      <td style="padding:6px 8px;text-align:right;color:var(--t2)">${bySup[k].n}건</td>
+      <td style="padding:6px 8px;text-align:right">${fmtWon(bySup[k].supply)}</td>
+      <td style="padding:6px 8px;text-align:right;color:var(--t3)">${fmtWon(bySup[k].vat)}</td>
+      <td style="padding:6px 8px;text-align:right;font-weight:800;color:#7c3aed">${fmtWon(bySup[k].total)}</td></tr>`).join('')
+    : `<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--t3)">매입 내역이 없습니다</td></tr>`;
+  // 건별
+  const listRows = rows.length ? rows.map(p => {
+    const lq = p.costQid ? (state.quotes || []).find(q => q.id === p.costQid) : null;
+    const off = p.exclude;
+    return `<tr style="border-bottom:1px solid var(--soft);${off ? 'opacity:.45' : ''}">
+      <td style="padding:6px 8px;white-space:nowrap;font-size:11.5px;color:var(--t3)">${esc((p.date || '').slice(5))}</td>
+      <td style="padding:6px 8px"><b>${esc(p.supplier || '-')}</b>${p.item ? `<div style="font-size:10.5px;color:var(--t3)">${esc(p.item)}</div>` : ''}</td>
+      <td style="padding:6px 8px;text-align:center"><span class="pill ${p.taxType === '면세' ? 'p-gray' : p.taxType === '영세' ? 'p-wait' : 'p-prog'}" style="font-size:9.5px;padding:0 5px">${esc(p.taxType || '과세')}</span></td>
+      <td style="padding:6px 8px;text-align:right">${fmtWon(p.supply)}</td>
+      <td style="padding:6px 8px;text-align:right;color:var(--t3)">${fmtWon(p.vat)}</td>
+      <td style="padding:6px 8px;text-align:right;font-weight:700">${fmtWon(p.total)}</td>
+      <td style="padding:6px 8px;text-align:center;white-space:nowrap">
+        ${lq ? `<span style="font-size:10.5px;color:var(--gd);font-weight:700">${esc(lq.docNo || '연결됨')}</span>
+                <button class="btn btn-sm" style="padding:2px 5px;margin-left:3px" onclick="purUnlink('${p.id}')" title="원가 연결 해제"><i class="ti ti-unlink"></i></button>`
+             : `<button class="btn btn-sm" style="padding:2px 7px" onclick="purOpenLink('${p.id}')"><i class="ti ti-link"></i>원가</button>`}
+        <button class="btn btn-sm" style="padding:2px 5px;margin-left:3px" onclick="purToggleExclude('${p.id}')" title="${off ? '다시 포함' : '영업이익에서 제외'}"><i class="ti ti-${off ? 'eye' : 'eye-off'}"></i></button>
+      </td></tr>`;
+  }).join('') : `<tr><td colspan="7" style="padding:16px;text-align:center;color:var(--t3)">${esc(ym)} 매입 계산서가 없습니다. 위 <b>불러오기</b>를 눌러 홈택스에서 가져오세요.</td></tr>`;
+  const tabBtn = (v, l) => `<button class="chip ${_purView === v ? 'active' : ''}" onclick="purSetView('${v}')">${l}</button>`;
+  return `<div class="card" style="margin-bottom:12px;padding:13px 14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:9px">
+      <div style="font-size:11.5px;color:var(--t3);font-weight:700"><i class="ti ti-file-download"></i> 매입 세금계산서 <span style="font-weight:500">(홈택스)</span></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${admin ? `<button class="btn btn-pri btn-sm" onclick="openPurCollect('${ym}')"><i class="ti ti-download"></i>불러오기</button>` : ''}
+        <button class="btn btn-sm" onclick="downloadPurchases('${ym}')"><i class="ti ti-file-spreadsheet"></i>엑셀</button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px;margin-bottom:9px">
+      ${cell('매입 공급가', t.supply, '#7c3aed', t.n + '건')}
+      ${cell('매입 세액', t.vat, '#b45309', '부가세 공제분')}
+      ${cell('실제 나간 돈', t.total, '#c0341d', '공급가+세액')}
+      ${cell('지출로 잡힘', tIn.supply, '#7c3aed', tIn.n + '건')}
+      ${cell('원가로 잡힘', tCost.supply, '#0f766e', tCost.n + '건')}
+    </div>
+    <div style="font-size:11px;color:var(--t3);line-height:1.6;margin-bottom:9px">· <b>원가</b> 버튼으로 특정 견적(현장)에 붙이면 그 건은 회사지출이 아니라 <b>그 현장 원가</b>로 넘어갑니다 (이중 계산 방지).
+      <br>· 눈 아이콘을 누르면 그 건은 영업이익 계산에서 빠집니다 (개인 경비 등).</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${tabBtn('list', '건별')}${tabBtn('supplier', '매입처별 ' + supKeys.length)}</div>
+    <div data-keepscroll id="settle-pur-list" style="max-height:44vh;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">
+      ${_purView === 'supplier'
+        ? `<thead><tr style="border-bottom:1.5px solid var(--bd);color:var(--t2);font-size:11px"><th style="padding:6px 8px;text-align:left">매입처</th><th style="padding:6px 8px;text-align:right">건수</th><th style="padding:6px 8px;text-align:right">공급가</th><th style="padding:6px 8px;text-align:right">세액</th><th style="padding:6px 8px;text-align:right">합계</th></tr></thead><tbody>${supRows}</tbody>`
+        : `<thead><tr style="border-bottom:1.5px solid var(--bd);color:var(--t2);font-size:11px"><th style="padding:6px 8px;text-align:left">일자</th><th style="padding:6px 8px;text-align:left">매입처 · 품목</th><th style="padding:6px 8px;text-align:center">구분</th><th style="padding:6px 8px;text-align:right">공급가</th><th style="padding:6px 8px;text-align:right">세액</th><th style="padding:6px 8px;text-align:right">합계</th><th style="padding:6px 8px;text-align:center">연결</th></tr></thead><tbody>${listRows}</tbody>`}
+    </table></div></div>`;
+}
+
+/* ── 부가세 예상액 ─────────────────────────────────────────── */
+function _vatQuarter(ym) {
+  const y = +ym.slice(0, 4), m = +ym.slice(5, 7);
+  const q = Math.floor((m - 1) / 3);                       // 0..3
+  const sm = q * 3 + 1, em = sm + 2;
+  const sd = y + '-' + String(sm).padStart(2, '0') + '-01';
+  const ed = _ymd(new Date(y, em, 0));
+  return { q: q + 1, sd: sd, ed: ed, label: y + '년 ' + (q + 1) + '분기 (' + sm + '~' + em + '월)' };
+}
+/* 매출세액 — 세금계산서를 실제로 발행한 건만 (발행일 기준) */
+function salesVatRange(sd, ed) {
+  let sup = 0, vat = 0, n = 0;
+  (state.quotes || []).forEach(q => {
+    if (!q.taxInvoice) return;
+    const d = q.taxDate || qDate(q) || '';
+    if (d < sd || d > ed) return;
+    const s = +q.supply || 0;
+    const v = (+q.vat || 0) || Math.round((+q.total || 0) / 11);
+    sup += s; vat += v; n++;
+  });
+  return { n: n, supply: sup, vat: vat };
+}
+function vatCard(ym) {
+  const qt = _vatQuarter(ym);
+  const s = salesVatRange(qt.sd, qt.ed);
+  const p = purSum(purOfRange(qt.sd, qt.ed));
+  const due = s.vat - p.vat;
+  const sM = salesVatRange(ym + '-01', _ymd(new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0)));
+  const pM = purSum(purOfMonth(ym));
+  const dueM = sM.vat - pM.vat;
+  const cell = (lab, v, col, sub) => `<div style="text-align:center;padding:9px 6px;background:var(--soft);border-radius:10px">
+    <div style="font-size:10.5px;color:var(--t2);margin-bottom:3px">${lab}</div>
+    <div style="font-size:15px;font-weight:800;color:${col}">${fmtWon(v)}</div>${sub ? `<div style="font-size:10px;color:var(--t3);margin-top:1px">${sub}</div>` : ''}</div>`;
+  return `<div class="card" style="margin-bottom:12px;padding:13px 14px">
+    <div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:9px"><i class="ti ti-percentage"></i> 부가세 예상액 <span style="font-weight:500">· ${esc(qt.label)}</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px">
+      ${cell('매출세액', s.vat, 'var(--gd)', '발행 ' + s.n + '건')}
+      ${cell('매입세액', p.vat, '#7c3aed', '매입 ' + p.n + '건')}
+      ${cell(due >= 0 ? '낼 부가세' : '돌려받을 금액', Math.abs(due), due >= 0 ? '#c0341d' : '#0f766e', due >= 0 ? '분기 기준' : '환급 예상')}
+      ${cell('이번 달만', Math.abs(dueM), dueM >= 0 ? '#c0341d' : '#0f766e', dueM >= 0 ? '낼 금액' : '환급')}
+    </div>
+    <div style="font-size:11px;color:var(--t3);margin-top:8px;line-height:1.6">
+      · 매출세액은 <b>세금계산서를 실제로 발행한 건</b>만 셉니다. 발행 안 한 매출은 빠져 있으니 신고 전 꼭 확인하세요.<br>
+      · 매입세액은 홈택스에서 가져온 매입 계산서 기준입니다. 카드·현금영수증 매입은 따로 더해야 합니다.<br>
+      · 어림 계산이라 실제 신고액과 다를 수 있습니다.</div>
+  </div>`;
+}
+
+/* ── 매입 → 견적 원가 연결 ────────────────────────────────── */
+function purOpenLink(id) {
+  const p = (state.purchases || []).find(x => x.id === id); if (!p) { toast('내역을 찾을 수 없습니다'); return; }
+  const ym = (p.date || '').slice(0, 7);
+  const cands = (state.quotes || []).filter(q => (q.ordered || q.shipped || q.siteDone || q.basinDone))
+    .sort((a, b) => (qDate(b) || '').localeCompare(qDate(a) || '')).slice(0, 400);
+  const near = cands.filter(q => (qDate(q) || '').slice(0, 7) === ym);
+  const list = (near.length ? near : cands.slice(0, 60));
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-link"></i>원가로 연결할 견적 고르기</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0">
+      <b>${esc(p.supplier || '')}</b> · ${esc(p.date || '')} · 공급가 <b>${fmtWon(p.supply)}원</b><br>
+      고른 견적의 원가에 이 금액이 한 줄로 들어갑니다. 그러면 이 건은 회사지출에서는 빠집니다.</span></div>
+    <input id="pl-q" lang="ko" placeholder="현장·거래처·견적번호로 찾기" oninput="purLinkFilter()" style="width:100%;font-size:13.5px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px;margin-bottom:8px">
+    <div id="pl-list" style="max-height:46vh;overflow:auto">${_purLinkRows(list, id)}</div>
+    <input type="hidden" id="pl-pid" value="${esc(id)}">`);
+}
+function _purLinkRows(list, pid) {
+  if (!list.length) return `<div class="empty"><i class="ti ti-search-off"></i>맞는 견적이 없습니다</div>`;
+  return list.map(q => `<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--soft)">
+    <div style="flex:1;min-width:0"><b style="font-size:13px">${esc(q.siteName || q.client || '-')}</b>
+      <div style="font-size:11px;color:var(--t3)">${esc(qDate(q))} · ${esc(q.docNo || '')} · ${esc(q.client || '')} · 매출 ${fmtWon(q.supply)}</div></div>
+    <button class="btn btn-sm btn-pri" style="flex:none" onclick="purLinkTo('${esc(pid)}','${q.id}')">연결</button></div>`).join('');
+}
+function purLinkFilter() {
+  const kw = ((el('pl-q') || {}).value || '').trim();
+  const pid = (el('pl-pid') || {}).value || '';
+  let list = (state.quotes || []).filter(q => (q.ordered || q.shipped || q.siteDone || q.basinDone));
+  if (kw) { const k = kw.toLowerCase(); list = list.filter(q => ((q.siteName || '') + (q.client || '') + (q.docNo || '') + (q.attn || '')).toLowerCase().indexOf(k) >= 0); }
+  list = list.sort((a, b) => (qDate(b) || '').localeCompare(qDate(a) || '')).slice(0, 80);
+  const box = el('pl-list'); if (box) box.innerHTML = _purLinkRows(list, pid);
+}
+async function purLinkTo(pid, qid) {
+  const p = (state.purchases || []).find(x => x.id === pid);
+  const q = (state.quotes || []).find(x => x.id === qid);
+  if (!p || !q) { toast('대상을 찾을 수 없습니다'); return; }
+  if (p.costQid) { toast('이미 연결된 건입니다'); return; }
+  const lines = (q.costLines || []).slice();
+  lines.push({ gubun: '자재', factory: p.supplier || '', name: '매입 ' + (p.item || p.supplier || '계산서'), spec: (p.date || '') + (p.nts ? (' · ' + p.nts) : ''), hebe: '', qty: '', unitCost: '', cost: Math.round(+p.supply || 0), src: 'purchase', pid: pid });
+  const costTotal = lines.reduce((a, l) => a + (+l.cost || 0), 0) + (+q.processCost || 0);
+  const sup = +q.supply || 0;
+  await Store.update('quotes', qid, { costLines: lines, costTotal: costTotal, margin: sup - costTotal, marginRate: sup > 0 ? +((sup - costTotal) / sup).toFixed(4) : 0 });
+  await Store.update('purchases', pid, { costQid: qid, costDocNo: q.docNo || '' });
+  closeModal(); toast((q.docNo || '견적') + ' 원가로 연결했습니다'); renderSettle();
+}
+async function purUnlink(pid) {
+  const p = (state.purchases || []).find(x => x.id === pid); if (!p || !p.costQid) return;
+  const q = (state.quotes || []).find(x => x.id === p.costQid);
+  if (q) {
+    const lines = (q.costLines || []).filter(l => l.pid !== pid);
+    const costTotal = lines.reduce((a, l) => a + (+l.cost || 0), 0) + (+q.processCost || 0);
+    const sup = +q.supply || 0;
+    await Store.update('quotes', q.id, { costLines: lines, costTotal: costTotal, margin: sup - costTotal, marginRate: sup > 0 ? +((sup - costTotal) / sup).toFixed(4) : 0 });
+  }
+  await Store.update('purchases', pid, { costQid: '', costDocNo: '' });
+  toast('원가 연결을 해제했습니다'); renderSettle();
+}
+function downloadPurchases(ym) {
+  const rows = purOfMonth(ym);
+  if (!rows.length) { toast('내려받을 매입 내역이 없습니다'); return; }
+  const head = ['작성일자', '매입처', '사업자번호', '품목', '과세구분', '영수/청구', '공급가액', '세액', '합계', '연결견적', '제외', '국세청승인번호'];
+  const aoa = [['매입 세금계산서 — ' + ym], ['출력일 ' + todayStr()], [], head];
+  let s = 0, v = 0, t = 0;
+  rows.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).forEach(p => {
+    s += (+p.supply || 0); v += (+p.vat || 0); t += (+p.total || 0);
+    aoa.push([p.date || '', p.supplier || '', p.supplierBiz || '', p.item || '', p.taxType || '', p.purpose || '', +p.supply || 0, +p.vat || 0, +p.total || 0, p.costDocNo || '', p.exclude ? '제외' : '', p.nts || '']);
+  });
+  aoa.push([]); aoa.push(['', '', '', '', '', '합계', s, v, t, '', '', '']);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '매입계산서');
+  XLSX.writeFile(wb, '매입계산서_' + ym + '.xlsx');
+  toast('매입 계산서 엑셀 다운로드');
+}
+
 function renderSettle() {
   keepScrolls();
   const root = el('pg-settle'); if (!root) return;
@@ -6640,7 +7055,13 @@ function renderSettle() {
   const costSum = costed.reduce((a, q) => a + ((+q.costTotal) || (q.costLines || []).reduce((x, l) => x + (+l.cost || 0), 0)), 0);
   const grossProfit = salesCosted - costSum;
   const expMonth = (state.expenses || []).filter(e => (e.date || '').startsWith(ym));
-  const expSum = expMonth.reduce((a, e) => a + (+e.amount || 0), 0);
+  const expManual = expMonth.reduce((a, e) => a + (+e.amount || 0), 0);
+  /* 매입 세금계산서도 회사가 쓴 돈이다. 다만 특정 견적의 원가로 이미 연결한 건은
+     매출총이익에서 한 번 빠졌으므로 여기서 또 빼면 이중 계산이 된다 → purExpenseRows 가 걸러준다.
+     지출 금액은 공급가액 기준(부가세는 나중에 공제받으므로 비용이 아니다). */
+  const purExp = purSum(purExpenseRows(ym));
+  const purMonthAll = purSum(purOfMonth(ym));
+  const expSum = expManual + purExp.supply;
   const opProfit = grossProfit - expSum;
   const noCost = monthQuotes.length - costed.length;
   const grossRate = salesCosted > 0 ? Math.round(grossProfit / salesCosted * 100) : 0;
@@ -6654,14 +7075,17 @@ function renderSettle() {
   const pnlCell = (lab, val, color, sub) => `<div style="padding:10px 8px;background:var(--soft);border-radius:10px;text-align:center"><div style="font-size:10.5px;color:var(--t2);margin-bottom:3px">${lab}</div><div style="font-size:15px;font-weight:800;color:${color}">${fmtWon(val)}</div>${sub ? `<div style="font-size:10px;color:var(--t3);margin-top:1px">${sub}</div>` : ''}</div>`;
   const pnl = `<div class="card" style="margin-bottom:12px;padding:13px 14px">
     <div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:9px"><i class="ti ti-chart-bar"></i> 영업이익 요약 (${esc(ym)})</div>
-    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(102px,1fr));gap:8px">
       ${pnlCell('매출(공급가)', salesAll, 'var(--gd)', monthQuotes.length + '건')}
       ${pnlCell('원가', costSum, '#b45309', '원가입력 ' + costed.length + '건')}
       ${pnlCell('매출총이익', grossProfit, grossProfit >= 0 ? '#0f766e' : '#dc2626', '마진율 ' + grossRate + '%')}
-      ${pnlCell('회사지출', expSum, '#7c3aed', expMonth.length + '건')}
+      ${pnlCell('총지출', expSum, '#7c3aed', '수기 ' + expMonth.length + '건 · 매입 ' + purExp.n + '건')}
+      ${pnlCell('매입 실지출', purMonthAll.total, '#c0341d', '세액 포함 ' + purMonthAll.n + '건')}
       ${pnlCell('영업이익', opProfit, opProfit >= 0 ? '#0f766e' : '#dc2626', '이익률 ' + opRate + '%')}
     </div>
-    <div style="font-size:11px;color:var(--t3);margin-top:8px;line-height:1.5">· 매출총이익 = 원가 입력된 견적의 (매출 − 원가) 기준 · 영업이익 = 매출총이익 − 회사지출${noCost > 0 ? `<br>· <b style="color:#dc2626">원가 미입력 견적 ${noCost}건</b> — 아래 <b>원가 원장</b>의 입력 버튼으로 입력하면 마진에 반영됩니다` : ''}</div>
+    <div style="font-size:11px;color:var(--t3);margin-top:8px;line-height:1.5">· 매출총이익 = 원가 입력된 견적의 (매출 − 원가) 기준 · 영업이익 = 매출총이익 − 총지출
+      <br>· <b>총지출</b> = 수기 회사지출 ${fmtWon(expManual)} + 매입 계산서 공급가 ${fmtWon(purExp.supply)} <span style="color:var(--t3)">(견적 원가로 연결한 매입은 여기서 빠집니다)</span>
+      <br>· <b>매입 실지출</b>은 부가세까지 포함해 실제로 통장에서 나간 금액입니다. 부가세는 나중에 공제받으므로 이익 계산에는 넣지 않습니다.${noCost > 0 ? `<br>· <b style="color:#dc2626">원가 미입력 견적 ${noCost}건</b> — 아래 <b>원가 원장</b>의 입력 버튼으로 입력하면 마진에 반영됩니다` : ''}</div>
   </div>`;
   const expCatBar = `<div class="card" style="margin-bottom:12px;padding:11px 14px"><div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:8px"><i class="ti ti-wallet"></i> 회사지출 분류별</div>
     ${_catKeys.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(92px,1fr));gap:6px">${_catKeys.map(c => `<div style="text-align:center;padding:6px 3px;background:var(--soft);border-radius:8px"><div style="font-size:10px;color:var(--t2);margin-bottom:2px">${esc(c)}</div><div style="font-size:12.5px;font-weight:800;color:#7c3aed">${fmtWon(expByCat[c])}</div></div>`).join('')}</div>` : `<div style="font-size:12px;color:var(--t3);text-align:center;padding:6px">이번 달 지출 내역이 없습니다</div>`}</div>`;
@@ -6729,7 +7153,7 @@ function renderSettle() {
     </div>
     <div style="font-size:10.5px;color:var(--t3);margin-top:7px">분류별 매출(견적) − 분류별 원가(자재·가공비·시공·운송). 가공 원가는 공장 견적 총액.</div>
   </div>` : '';
-  root.innerHTML = `<div class="ph"><div><h2><i class="ti ti-report-money"></i>정산</h2><p>원가 원장 · 시공비 정산 · 회사지출 · 영업이익</p></div></div>${monthBar}${pnl}${marginCard}${expCatBar}${costLedger}${crewSettleCard()}${fxCard}${expForm}`;
+  root.innerHTML = `<div class="ph"><div><h2><i class="ti ti-report-money"></i>정산</h2><p>원가 원장 · 시공비 정산 · 회사지출 · 영업이익</p></div></div>${monthBar}${pnl}${vatCard(ym)}${marginCard}${expCatBar}${purchaseCard(ym)}${costLedger}${crewSettleCard()}${fxCard}${expForm}`;
 }
 
 function renderQuote() {
