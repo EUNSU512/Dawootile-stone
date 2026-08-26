@@ -4282,7 +4282,7 @@ function quoteRegister(id) {
   } else if (hasGagong) {
     go('sites'); setTimeout(() => { try { openSiteForm(null, { name: q.client, address: q.siteAddr, quoteId: id }); } catch (e) { } }, 90);
     toast('가공 포함 · 현장 등록으로 이동');
-  } else { openShipForm({ targetName: q.client, items: items, quoteId: id }); toast('출고 등록으로 불러왔습니다 · 확인 후 등록'); }
+  } else { openShipForm({ targetName: q.client, items: items, quoteId: id, siteAddr: (q.siteAddr || '').trim(), siteName: (q.siteName || q.attn || '').trim() }); toast('출고 등록으로 불러왔습니다 · 확인 후 등록'); }   // 견적의 현장 주소를 출고증까지 그대로 들고 간다
 }
 let _linkQuoteId = '';
 function quoteLinkSite(id) {
@@ -8215,6 +8215,10 @@ function printShipSlip(key) {
   const seq = Math.max(1, dayKeys.indexOf(key) + 1);
   const docNo = (g.date || '').replace(/-/g, '') + '-' + seq;
   const route = (g.dest || '') ? '다우세라믹 상차 →<br>' + e(g.dest) + ' 하차' : '';
+  /* 현장 주소 — 출고 등록 때 적은 값을 먼저 쓰고, 없으면 연결된 견적서의 현장 주소를 그대로 가져온다.
+     견적서에 주소를 적어두면 출고증에 자동으로 찍히게 하려는 것. */
+  const _lq = g.quoteId ? (state.quotes || []).find(x => x.id === g.quoteId) : null;
+  const siteAddr = String((g.siteAddr || '').trim() || ((_lq && _lq.siteAddr) || '')).trim();
   // 출고 확인 도장 (가운데에 출고일자)
   const stamp = `<svg viewBox="0 0 200 200" width="150" height="150" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
     <defs><path id="arcTop" d="M 30,100 A 70,70 0 0 1 170,100"/></defs>
@@ -8255,6 +8259,8 @@ function printShipSlip(key) {
   .recip{text-align:center;vertical-align:middle}
   .recip .rn{font-size:24px;font-weight:800}
   .recip .rt{font-size:15px;font-weight:600;margin-top:22px;word-break:keep-all;line-height:1.55}
+  .recip .rsite{font-size:14px;font-weight:600;margin-top:14px;padding-top:8px;border-top:1px dashed #999;word-break:keep-all;line-height:1.5}
+  .recip .rsk{display:block;font-size:10px;font-weight:700;letter-spacing:2px;color:#555;margin-bottom:3px}
   .ck{text-align:center;font-weight:700;background:#f4f4f4;white-space:nowrap}
   .cv{font-size:13.5px}
   .cv .tel{font-size:12px;color:#333}
@@ -8282,7 +8288,7 @@ function printShipSlip(key) {
       <td class="conm" colspan="2">${companyInfo().name}</td>
     </tr>
     <tr>
-      <td class="recip" rowspan="6"><div class="rn">${e(g.targetName)}</div><div class="rt">${route}</div></td>
+      <td class="recip" rowspan="6"><div class="rn">${e(g.targetName)}</div><div class="rt">${route}</div>${siteAddr ? `<div class="rsite"><span class="rsk">현장 주소</span>${e(siteAddr)}</div>` : ''}</td>
       <td class="ck">주 소</td><td class="cv">${companyInfo().addr}<br><span class="tel">${companyInfo().tel}</span></td>
     </tr>
     <tr><td class="ck">업 태</td><td class="cv">${companyInfo().biztype}</td></tr>
@@ -8832,11 +8838,18 @@ function openShipForm(pre) {
         </select>
       </div>
       <div class="fld full hidden" id="o-dest-manual"><label>출고지 직접 입력</label><input id="o-dest-text" placeholder="현장명/출고지 입력" autocomplete="off"></div>
+      <div class="fld full"><label>현장 주소 <span style="color:var(--t3);font-weight:500">(출고증에 그대로 인쇄됩니다 · 견적서에 적어두면 자동으로 들어옵니다)</span></label><input id="o-siteaddr" lang="ko" placeholder="예: OO시 OO구 OO동 OO현장" value="${esc((pre && pre.siteAddr) || '')}" autocomplete="off"></div>
       <div class="fld full"><label>메모</label><input id="o-note" placeholder="선택"></div>
       <div class="fld full" style="background:#fff2f0;border-radius:9px;padding:10px 12px"><label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:600;color:#b42318"><input type="checkbox" id="o-damaged" style="width:18px;height:18px"> <i class="ti ti-alert-square-rounded"></i>파손 자재 출고 <span style="font-weight:400;color:var(--t3);font-size:12px">(체크 시 파손 재고에서 차감 — 폐기·반품)</span></label></div>
     </div>
     <div class="frm-foot"><button class="btn" style="flex:1" onclick="closeModal()">취소</button><button class="btn btn-pri" style="flex:2" onclick="submitShip()"><i class="ti ti-check"></i>출고 등록</button></div>`);
   if (pre && pre.targetName && el('o-targetName')) el('o-targetName').value = pre.targetName;
+  // 견적에서 불러온 경우: 현장으로 나가는 것이므로 출고지를 '직접 입력'으로 미리 열어둔다
+  const _preDest = ((pre && pre.siteName) || '').trim() || ((pre && pre.siteAddr) || '').trim();
+  if (_preDest && el('o-dest')) {
+    el('o-dest').value = '__manual'; onShipDest();
+    setTimeout(() => { const t = el('o-dest-text'); if (t && !t.value) t.value = _preDest; }, 60);
+  }
   mrowLotRefresh();
 }
 function pickOutItem() {
@@ -8895,6 +8908,8 @@ async function submitShip() {
     await ensureClient(targetName);   // 신규 거래처 자동 등록
     const shipId = 'S' + Date.now();
     const note = el('o-note').value.trim();
+    const siteAddr = ((el('o-siteaddr') && el('o-siteaddr').value) || '').trim();   // 출고증에 찍을 현장 주소
+    const _fromQuote = _shipFromQuote || '';                                        // 나중에 비워지므로 미리 담아둔다
     const damaged = !!(el('o-damaged') && el('o-damaged').checked);   // 파손 자재 출고
     let totalJang = 0; const zeroed = [];
     for (const r of rows) {
@@ -8906,7 +8921,7 @@ async function submitShip() {
       const lot = (r.lot && r.lot.trim()) ? r.lot.trim() : soleLot(material);   // 롯트 미지정인데 남은 롯트가 하나면 자동 연동
       const oDepot = normDepot((r.depot && r.depot.trim()) ? r.depot.trim() : (el('o-depot') && el('o-depot').value || '').trim());   // 행별 창고 우선, 없으면 폼 상단 창고, 그것도 없으면 기본창고(본사)
       if (it) await Store.update('inventory', it.id, { jang: newJang });
-      await Store.add('transactions', { type: 'out', shipId, itemId: it ? it.id : '', itemName: material, spec: it ? it.spec : '', hebe, jang, lot, pattern: r.pattern, depot: oDepot, dest, factory: dest, target: '', targetName, date, note, damaged, createdAt: Date.now(), by: me.name });
+      await Store.add('transactions', { type: 'out', shipId, itemId: it ? it.id : '', itemName: material, spec: it ? it.spec : '', hebe, jang, lot, pattern: r.pattern, depot: oDepot, dest, factory: dest, target: '', targetName, date, note, siteAddr, quoteId: _fromQuote, damaged, createdAt: Date.now(), by: me.name });
       totalJang += jang;
       if (it && oldJang > 0 && newJang <= 0) zeroed.push(material);
     }
@@ -8924,7 +8939,7 @@ async function submitShip() {
     // 출고 대기열(출고관리)에 등록 — 재고는 위에서 이미 차감됨(stockApplied). 소리 알림은 '출고 지시' 낼 때만.
     try {
       const qItems = rows.map(r => ({ name: r.name, qty: r.qty, spec: [r.lot, r.pattern].map(s => (s || '').trim()).filter(Boolean).join(' / '), unit: '장', lot: r.lot || '', pattern: r.pattern || '' }));
-      await Store.add('chulgoReqs', { docNo: chulgoNextDocNo('출고'), reqType: '출고', client: targetName, items: qItems, status: '대기열', stockApplied: true, sourceShipId: shipId, dispatchDest: dest, schedDate: date, memo: note || '', sender: (me && me.name) || '', createdAt: Date.now() });
+      await Store.add('chulgoReqs', { docNo: chulgoNextDocNo('출고'), reqType: '출고', client: targetName, items: qItems, status: '대기열', stockApplied: true, sourceShipId: shipId, dispatchDest: dest, siteAddr: siteAddr, schedDate: date, memo: note || '', sender: (me && me.name) || '', createdAt: Date.now() });
     } catch (e) { }
     if (_shipFromQuote) { try { await Store.update('quotes', _shipFromQuote, { shipped: true, shippedAt: Date.now() }); } catch (e) { } _shipFromQuote = ''; }
     closeModal();
@@ -9484,6 +9499,10 @@ function chulgoPrint(id) {
   const fl = r.flags || {}; const flTxt = [fl.basin ? '세면대' : '', fl.pack ? '포장' : '', fl.pallet ? '파렛트' : ''].filter(Boolean).join(' / ') || '-';
   const items = r.items || [];
   const MIN = Math.max(8, items.length);
+  /* 현장 주소 — 요청에 적힌 값 우선, 없으면 이 요청을 만든 출고 기록(→ 견적서) 을 거슬러 찾는다 */
+  const _cgTx = r.sourceShipId ? (state.transactions || []).find(t => (t.shipId || t.id) === r.sourceShipId) : null;
+  const _cgQ = (_cgTx && _cgTx.quoteId) ? (state.quotes || []).find(x => x.id === _cgTx.quoteId) : null;
+  const _cgSite = String((r.siteAddr || '').trim() || ((_cgTx && _cgTx.siteAddr) || '').trim() || ((_cgQ && _cgQ.siteAddr) || '')).trim();
   let rows = items.map((it, i) => `<tr><td class="c">${i + 1}</td><td class="l">${e(it.name)}</td><td class="l">${e(it.spec)}</td><td class="r">${e(it.qty)}</td><td class="c">${e(it.unit)}</td></tr>`).join('');
   for (let i = items.length; i < MIN; i++) rows += `<tr><td class="c">${i + 1}</td><td></td><td></td><td></td><td></td></tr>`;
   const html = `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>${title} ${e(r.client)} ${e(r.docNo)}</title>
@@ -9503,6 +9522,7 @@ function chulgoPrint(id) {
     <tr><td class="k">거래처</td><td>${e(r.client)}</td><td class="k">${isIn ? '입고' : '출고'}예정일</td><td>${e(r.schedDate) || '-'}</td></tr>
     <tr><td class="k">긴급도</td><td class="${urg !== '보통' ? 'urg' : ''}">${e(urg)}</td><td class="k">요청자</td><td>${e(r.sender)}</td></tr>
     <tr><td class="k">기사 / 배차</td><td>${r.companyDispatch ? '업체 배차' : (e(r.driver) || '-')}${r.loadTime ? ' · 상차 ' + e(r.loadTime) : ''}</td><td class="k">구분표시</td><td>${e(flTxt)}</td></tr>
+    ${(r.dispatchDest || _cgSite) ? `<tr><td class="k">출고지</td><td colspan="3" style="font-weight:700">${e(r.dispatchDest || '')}${_cgSite ? `<div style="font-weight:600;margin-top:3px">현장 주소 : ${e(_cgSite)}</div>` : ''}</td></tr>` : ''}
   </table>
   <table class="items"><colgroup><col style="width:8%"><col style="width:40%"><col style="width:28%"><col style="width:14%"><col style="width:10%"></colgroup>
     <thead><tr><th>No</th><th>품목명</th><th>규격 / 롯트·패턴</th><th>수량</th><th>단위</th></tr></thead><tbody>${rows}</tbody></table>
