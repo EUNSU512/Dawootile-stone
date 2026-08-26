@@ -801,7 +801,7 @@ async function saveClientSalesRep(id, name) { try { await Store.update('clients'
 async function saveClientBizInfo(id) {
   const c = (state.clients || []).find(x => x.id === id); if (!c) return;
   const g = k => { const e = el('cb-' + k); return e ? e.value.trim() : ''; };
-  const taxInfo = { bizNo: g('bizno'), corpName: g('corp') || c.value, ceo: g('ceo'), addr: g('addr'), bizType: g('biztype'), bizClass: g('bizclass'), contact: g('contact'), email: g('email') };
+  const taxInfo = { bizNo: g('bizno'), corpName: g('corp') || c.value, ceo: g('ceo'), addr: g('addr'), bizType: g('biztype'), bizClass: g('bizclass'), contact: g('contact'), email: g('email'), tel: g('tel'), hp: g('hp'), fax: g('fax') };
   const patch = { taxInfo: taxInfo };
   const ct = classifyCtype(taxInfo.bizType, taxInfo.bizClass, taxInfo.corpName);
   if ((c.ctype || '') !== ct && (taxInfo.bizType || taxInfo.bizClass)) patch.ctype = ct;
@@ -1000,7 +1000,10 @@ function renderClientDetail() {
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">${fld('ceo', '대표자', ti.ceo)}${fld('contact', '담당자', ti.contact)}</div>
       <div class="fld full" style="margin-bottom:8px"><label>주소</label><input id="cb-addr" lang="ko" value="${esc(ti.addr || '')}" style="${inp}"></div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">${fld('biztype', '업태', ti.bizType)}${fld('bizclass', '종목', ti.bizClass)}</div>
-      <div class="fld full" style="margin-bottom:11px"><label>담당자 이메일 <span style="color:var(--t3);font-weight:500">(세금계산서 발행 메일)</span></label><input id="cb-email" lang="en" value="${esc(ti.email || '')}" placeholder="name@company.com" style="${inp}"></div>
+      <div class="fld full" style="margin-bottom:8px"><label>담당자 이메일 <span style="color:var(--t3);font-weight:500">(세금계산서 발행 메일)</span></label><input id="cb-email" lang="en" value="${esc(ti.email || '')}" placeholder="name@company.com" style="${inp}"></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:11px">
+        ${fld('tel', '담당자 연락처', ti.tel, '02-000-0000')}${fld('hp', '휴대폰', ti.hp, '010-0000-0000')}${fld('fax', '팩스번호', ti.fax, '02-000-0000')}
+      </div>
       <div class="frm-foot">${isAdmin() ? `<button class="btn" style="color:var(--red-t);flex:none" onclick="delClientC('${c.id}')"><i class="ti ti-trash"></i></button>` : ''}<button class="btn btn-pri" style="flex:1" onclick="saveClientBizInfo('${c.id}')"><i class="ti ti-check"></i>저장</button></div>
       </div>
     </div>
@@ -4363,6 +4366,43 @@ function quoteToOrder(id) {
 /* ── 세금계산서 발행 (팝빌 Popbill · CF action=taxinvoice) ── */
 function clientTaxInfo(name) { const c = (state.clients || []).find(x => _normName(x.value) === _normName(name)); return (c && c.taxInfo) || {}; }
 async function saveClientTaxInfo(name, info) { const c = (state.clients || []).find(x => _normName(x.value) === _normName(name)); if (c) { try { await Store.update('clients', c.id, { taxInfo: info }); } catch (e) { } } }
+/* 계산서 폼에 적힌 공급받는자(거래처) 정보를 한 덩어리로 읽는다.
+   발행할 때와 거래처에 저장할 때 같은 값을 쓰기 위해 한 곳에 모아둔다. */
+function taxBuyerFromForm(fallbackName) {
+  const g = k => { const e = el('tx-' + k); return e ? (e.value || '').trim() : ''; };
+  return {
+    bizNo: g('bizno'), corpName: g('corp') || (fallbackName || ''), ceo: g('ceo'), contact: g('contact'),
+    addr: g('addr'), bizType: g('biztype'), bizClass: g('bizclass'), email: g('email'),
+    tel: g('tel'), hp: g('hp'), fax: g('fax')            // 연락처·휴대폰·팩스는 선택 입력
+  };
+}
+/* 폼을 고치면 거래처 정보에도 그대로 저장한다.
+   글자 하나 칠 때마다 저장하면 낭비라 잠깐(0.8초) 기다렸다 한 번만 쓴다. */
+let _txSaveT = null;
+function taxBuyerTouch() {
+  clearTimeout(_txSaveT);
+  _txSaveT = setTimeout(() => { taxSaveClientNow(true); }, 800);
+}
+async function taxSaveClientNow(quiet) {
+  const q = (state.quotes || []).find(x => x.id === filters.taxEdit); if (!q) return;
+  const buyer = taxBuyerFromForm(q.client);
+  const c = (state.clients || []).find(x => _normName(x.value) === _normName(q.client));
+  if (!c) {
+    const b0 = el('tx-saved');
+    if (b0) b0.innerHTML = '<span style="color:#c0341d">· 거래처 목록에 없어 저장 안 됨</span>';
+    if (!quiet) toast('"' + q.client + '" 이(가) 거래처 목록에 없어 저장하지 못했습니다');
+    return;
+  }
+  try {
+    const patch = { taxInfo: buyer };
+    const ct = classifyCtype(buyer.bizType, buyer.bizClass, buyer.corpName);   // 업태·종목으로 거래처 유형도 같이 정리
+    if ((c.ctype || '') !== ct && (buyer.bizType || buyer.bizClass)) patch.ctype = ct;
+    await Store.update('clients', c.id, patch);
+    const b = el('tx-saved');
+    if (b) { b.textContent = '· 저장됨'; setTimeout(() => { if (el('tx-saved')) el('tx-saved').textContent = ''; }, 2000); }
+    if (!quiet) toast(q.client + ' 거래처 정보에 저장했습니다');
+  } catch (e) { if (!quiet) toast('저장 실패: ' + ((e && e.message) || e)); }
+}
 function openTaxForm(id) {
   if (!isAdmin()) { toast('세금계산서 발행은 관리자만 가능합니다'); return; }
   qListSave();                           // 보던 위치 기억 → 나올 때 그대로 되돌린다
@@ -4411,18 +4451,27 @@ function renderTaxForm() {
   const id = filters.taxEdit; const q = (state.quotes || []).find(x => x.id === id); if (!q) { filters.taxEdit = ''; renderQuote(); return; }
   const co = companyInfo(); const ti = clientTaxInfo(q.client);
   const inp = 'width:100%;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px';
-  const fld = (fid, label, val, ph) => `<div class="fld" style="flex:1;min-width:150px;margin:0"><label>${label}</label><input id="${fid}" lang="ko" value="${esc(val || '')}" placeholder="${ph || ''}" style="${inp}"></div>`;
+  const fld = (fid, label, val, ph) => `<div class="fld" style="flex:1;min-width:150px;margin:0"><label>${label}</label><input id="${fid}" lang="ko" value="${esc(val || '')}" placeholder="${ph || ''}" onchange="taxBuyerTouch()" style="${inp}"></div>`;
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>세금계산서 발행</h2><p>${esc(q.docNo || '')} · ${esc(q.client || '')}</p></div>
       <button class="btn btn-sm" onclick="taxCancel()"><i class="ti ti-arrow-left"></i> 목록</button></div>
     ${taxLedgerHtml(q.client, q.id)}
     <div id="taxform-root" class="card" style="padding:15px 17px">
       <div style="font-weight:800;font-size:13px;color:var(--gd);margin-bottom:9px">공급받는자 (거래처)</div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px"><div class="fld" style="flex:1;min-width:180px;margin:0"><label>사업자등록번호 *</label><div style="display:flex;gap:6px"><input id="tx-bizno" inputmode="numeric" value="${esc(ti.bizNo || '')}" placeholder="000-00-00000" style="${inp}"><button class="btn btn-sm btn-pri" style="flex:none;white-space:nowrap" onclick="lookupBizInfo()"><i class="ti ti-search"></i>조회</button></div></div>${fld('tx-corp', '상호', ti.corpName || q.client)}</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px"><div class="fld" style="flex:1;min-width:180px;margin:0"><label>사업자등록번호 *</label><div style="display:flex;gap:6px"><input id="tx-bizno" onchange="taxBuyerTouch()" inputmode="numeric" value="${esc(ti.bizNo || '')}" placeholder="000-00-00000" style="${inp}"><button class="btn btn-sm btn-pri" style="flex:none;white-space:nowrap" onclick="lookupBizInfo()"><i class="ti ti-search"></i>조회</button></div></div>${fld('tx-corp', '상호', ti.corpName || q.client)}</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">${fld('tx-ceo', '대표자', ti.ceo)}${fld('tx-contact', '담당자', ti.contact)}</div>
-      <div class="fld full" style="margin-bottom:8px"><label>주소</label><input id="tx-addr" lang="ko" value="${esc(ti.addr || '')}" style="${inp}"></div>
+      <div class="fld full" style="margin-bottom:8px"><label>주소</label><input id="tx-addr" onchange="taxBuyerTouch()" lang="ko" value="${esc(ti.addr || '')}" style="${inp}"></div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">${fld('tx-biztype', '업태', ti.bizType)}${fld('tx-bizclass', '종목', ti.bizClass)}</div>
-      <div class="fld full" style="margin-bottom:13px"><label>담당자 이메일 <span class="req">*</span> <span style="color:var(--t3);font-weight:500">(발행 안내메일 수신)</span></label><input id="tx-email" lang="en" value="${esc(ti.email || '')}" placeholder="name@company.com" style="${inp}"></div>
+      <div class="fld full" style="margin-bottom:8px"><label>담당자 이메일 <span class="req">*</span> <span style="color:var(--t3);font-weight:500">(발행 안내메일 수신)</span></label><input id="tx-email" onchange="taxBuyerTouch()" lang="en" value="${esc(ti.email || '')}" placeholder="name@company.com" style="${inp}"></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+        ${fld('tx-tel', '담당자 연락처 <span style="color:var(--t3);font-weight:500">(선택)</span>', ti.tel, '02-000-0000')}
+        ${fld('tx-hp', '휴대폰 <span style="color:var(--t3);font-weight:500">(선택)</span>', ti.hp, '010-0000-0000')}
+        ${fld('tx-fax', '팩스번호 <span style="color:var(--t3);font-weight:500">(선택)</span>', ti.fax, '02-000-0000')}
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;background:var(--soft);border-radius:9px;padding:8px 11px;margin-bottom:13px">
+        <span style="font-size:11.5px;color:var(--t3)"><i class="ti ti-device-floppy"></i> 위 내용을 고치면 <b>거래처 정보에도 자동으로 저장</b>됩니다 <span id="tx-saved" style="color:var(--gd);font-weight:700"></span></span>
+        <button type="button" class="btn btn-sm" onclick="taxSaveClientNow()"><i class="ti ti-check"></i>지금 저장</button>
+      </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
         <div class="fld" style="flex:1;min-width:150px;margin:0"><label>작성일자</label><input type="date" id="tx-date" value="${esc(todayStr())}" style="${inp}"></div>
         <div class="fld" style="flex:1;min-width:150px;margin:0"><label>영수/청구</label>${taxPurposeHtml(TAX_PURPOSE_DEFAULT)}</div>
@@ -4515,7 +4564,7 @@ function buildTaxPayload(id) {
   if (!(co.bizno || '').trim()) { toast('공급자 사업자번호가 없습니다 — 회사 정보에서 설정하세요'); return null; }
   if (!bizNo) { toast('공급받는자 사업자등록번호를 입력하세요'); return null; }
   if (!email) { toast('발행 안내메일 수신 이메일을 입력하세요'); return null; }
-  const buyer = { bizNo, corpName: (el('tx-corp').value || '').trim() || q.client, ceo: (el('tx-ceo').value || '').trim(), contact: (el('tx-contact').value || '').trim(), addr: (el('tx-addr').value || '').trim(), bizType: (el('tx-biztype').value || '').trim(), bizClass: (el('tx-bizclass').value || '').trim(), email };
+  const buyer = taxBuyerFromForm(q.client);
   const writeDate = (el('tx-date').value || todayStr()).replace(/-/g, '');
   const purposeType = (el('tx-purpose') && el('tx-purpose').value) || TAX_PURPOSE_DEFAULT;
   // 공급자 업태/종목: '제조업 | 건축 자재' 처럼 | 로 구분된 경우 우선, 없으면 공백 기준
@@ -4551,7 +4600,11 @@ function buildTaxPayload(id) {
     _quoteId: id, _buyer: buyer, _reN: _reN,
     invoicerCorpNum: co.bizno, mgtKey: _mgtKey, writeDate, purposeType,
     invoicerCorpName: co.name, invoicerCEOName: co.ceo, invoicerAddr: co.addr, invoicerBizType: _btType, invoicerBizClass: _btClass, invoicerContactName: (me && me.name) || '', invoicerTEL: _invTel, invoicerEmail: co.email,
-    invoiceeCorpNum: buyer.bizNo, invoiceeCorpName: buyer.corpName, invoiceeCEOName: buyer.ceo, invoiceeAddr: buyer.addr, invoiceeBizType: buyer.bizType, invoiceeBizClass: buyer.bizClass, invoiceeContactName: buyer.contact, invoiceeEmail: buyer.email,
+    invoiceeCorpNum: buyer.bizNo, invoiceeCorpName: buyer.corpName, invoiceeCEOName: buyer.ceo, invoiceeAddr: buyer.addr, invoiceeBizType: buyer.bizType, invoiceeBizClass: buyer.bizClass,
+    /* 공급받는자 담당자 필드는 팝빌 규격상 뒤에 '1' 이 붙는다(invoiceeTEL1 …).
+       예전부터 쓰던 이름도 같이 넣어 둔다 — 팝빌은 모르는 필드를 무시하므로 안전하다. */
+    invoiceeContactName1: buyer.contact, invoiceeEmail1: buyer.email, invoiceeTEL1: buyer.tel || '', invoiceeHP1: buyer.hp || '',
+    invoiceeContactName: buyer.contact, invoiceeEmail: buyer.email,
     supplyCostTotal: supplyTotal, taxTotal: taxTotal, totalAmount: totalAmount, detailList: detailList,
     remark1: remark1, memo: '견적 ' + (q.docNo || '')
   };
@@ -5573,7 +5626,8 @@ async function lookupBizInfo() {
     // 거래처에 등록(세금정보 + 유형)
     const q = (state.quotes || []).find(x => x.id === filters.taxEdit);
     if (q) {
-      const buyer = { bizNo: corpNum, corpName: j.corpName || '', ceo: j.ceo || '', addr: j.addr || '', bizType: j.bizType || '', bizClass: j.bizClass || '', contact: (el('tx-contact') && el('tx-contact').value) || '', email: (el('tx-email') && el('tx-email').value) || '' };
+      // 폼 전체를 다시 읽어 저장한다 — 연락처·휴대폰·팩스처럼 조회로 안 채워지는 값이 지워지지 않게
+      const buyer = Object.assign(taxBuyerFromForm(q.client), { bizNo: corpNum });
       await saveClientTaxInfo(q.client, buyer);
       const c = (state.clients || []).find(x => _normName(x.value) === _normName(q.client));
       if (c && (c.ctype || '') !== ct) { try { await Store.update('clients', c.id, { ctype: ct }); } catch (e) { } }
