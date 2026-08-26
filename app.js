@@ -6976,7 +6976,8 @@ function _vatQuarter(ym) {
   const ed = _ymd(new Date(y, em, 0));
   return { q: q + 1, sd: sd, ed: ed, label: y + '년 ' + (q + 1) + '분기 (' + sm + '~' + em + '월)' };
 }
-/* 매출세액 — 세금계산서를 실제로 발행한 건만 (발행일 기준) */
+/* (옛 함수 · 지금은 쓰지 않음) 앱 발행분만 세던 매출세액.
+   홈택스 매출을 수집하면서 salesTaxBase() 로 대체됐다. 새로 쓰지 말 것. */
 function salesVatRange(sd, ed) {
   let sup = 0, vat = 0, n = 0;
   (state.quotes || []).forEach(q => {
@@ -6991,10 +6992,12 @@ function salesVatRange(sd, ed) {
 }
 function vatCard(ym) {
   const qt = _vatQuarter(ym);
-  const s = salesVatRange(qt.sd, qt.ed);
+  const sb = salesTaxBase(qt.sd, qt.ed);
+  const s = sb.base;
   const p = purSum(purOfRange(qt.sd, qt.ed));
   const due = s.vat - p.vat;
-  const sM = salesVatRange(ym + '-01', _ymd(new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0)));
+  const _mEd = _ymd(new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0));
+  const sM = salesTaxBase(ym + '-01', _mEd).base;
   const pM = purSum(purOfMonth(ym));
   const dueM = sM.vat - pM.vat;
   const cell = (lab, v, col, sub) => `<div style="text-align:center;padding:9px 6px;background:var(--soft);border-radius:10px">
@@ -7003,13 +7006,18 @@ function vatCard(ym) {
   return `<div class="card" style="margin-bottom:12px;padding:13px 14px">
     <div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:9px"><i class="ti ti-percentage"></i> 부가세 예상액 <span style="font-weight:500">· ${esc(qt.label)}</span></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px">
-      ${cell('매출세액', s.vat, 'var(--gd)', '발행 ' + s.n + '건')}
+      ${cell('매출세액', s.vat, 'var(--gd)', (sb.src === 'hometax' ? '홈택스 ' : '앱 발행 ') + s.n + '건')}
       ${cell('매입세액', p.vat, '#7c3aed', '매입 ' + p.n + '건')}
       ${cell(due >= 0 ? '낼 부가세' : '돌려받을 금액', Math.abs(due), due >= 0 ? '#c0341d' : '#0f766e', due >= 0 ? '분기 기준' : '환급 예상')}
       ${cell('이번 달만', Math.abs(dueM), dueM >= 0 ? '#c0341d' : '#0f766e', dueM >= 0 ? '낼 금액' : '환급')}
     </div>
+    ${sb.extra.n > 0 ? `<div class="banner warn" style="margin-top:9px;font-size:12px"><i class="ti ti-alert-triangle"></i><span style="flex:1;min-width:0">
+      앱에서 <b>발행함</b>으로 표시했는데 홈택스에서 같은 건을 못 찾은 게 <b>${sb.extra.n}건 (세액 ${fmtWon(sb.extra.vat)}원)</b> 있습니다.
+      위 매출세액에는 <b>넣지 않았습니다</b>. 실제로 끊은 건이면 홈택스 수집 기간을 넓혀 다시 불러오고, 표시만 해둔 거라면 그대로 두세요.
+      <button class="btn btn-sm" style="margin-left:6px;padding:2px 8px" onclick="settleSetTab('sale')">매출 탭에서 보기</button></span></div>` : ''}
     <div style="font-size:11px;color:var(--t3);margin-top:8px;line-height:1.6">
-      · 매출세액은 <b>세금계산서를 실제로 발행한 건</b>만 셉니다. 발행 안 한 매출은 빠져 있으니 신고 전 꼭 확인하세요.<br>
+      · 매출세액 기준: <b>${sb.src === 'hometax' ? '홈택스에서 수집한 매출 계산서' : '앱에서 발행 표시한 건'}</b>${sb.src === 'app' ? ' — 홈택스 매출을 불러오면 국세청 기록 기준으로 바뀝니다' : ''}<br>
+      · <b>테스트 모드로 발행한 건은 빠져 있습니다</b>${sb.testN ? ' (이 분기 ' + sb.testN + '건)' : ''}. 국세청에 전송되지 않은 건이라 매출이 아닙니다.<br>
       · 매입세액은 홈택스에서 가져온 매입 계산서 기준입니다. 카드·현금영수증 매입은 따로 더해야 합니다.<br>
       · 어림 계산이라 실제 신고액과 다를 수 있습니다.</div>
   </div>`;
@@ -7126,22 +7134,45 @@ function salesFromHometax(sd, ed) {
       nts: p.nts || '', mgt: '', test: false, src: 'hometax', qid: '', item: p.item || ''
     }));
 }
-/* 두 자료를 승인번호로 맞춰 붙인다 — 같은 건이면 한 줄, 출처는 '양쪽' */
+/* 두 자료를 맞춰 붙인다.
+   ① 국세청 승인번호가 같으면 확실히 같은 건
+   ② 승인번호가 없는 건(앱에서 '발행함'으로 표시만 한 건)은
+      거래처 이름 + 합계금액 + 날짜(±7일) 가 맞으면 같은 건으로 본다
+   합쳐진 건은 출처 '양쪽', 금액은 홈택스(국세청 기록)를 쓴다.
+   홈택스에서 짝을 못 찾은 앱 발행분은 unconfirmed 로 표시해 눈에 띄게 한다. */
 function salesRows(sd, ed) {
   const app = salesFromApp(sd, ed), ht = salesFromHometax(sd, ed);
-  const byNts = {};
-  ht.forEach(r => { const k = _ntsKey(r.nts); if (k) byNts[k] = r; });
+  const usedH = new Set();
   const out = [];
-  const used = {};
+  const _dd = (a, b) => Math.abs((new Date(a + 'T00:00:00') - new Date(b + 'T00:00:00')) / 86400000);
+  const findByNts = a => { const k = _ntsKey(a.nts); if (!k) return -1; return ht.findIndex((h, i) => !usedH.has(i) && _ntsKey(h.nts) === k); };
+  const findByAmt = a => ht.findIndex((h, i) => !usedH.has(i)
+    && _bankKey(h.client) === _bankKey(a.client)
+    && Math.abs((+h.total || 0) - (+a.total || 0)) <= 2
+    && _dd(h.date, a.date) <= 7);
   app.forEach(a => {
-    const k = _ntsKey(a.nts);
-    if (k && byNts[k]) {                       // 홈택스에도 있는 건 → 금액은 홈택스(국세청 기준)를 쓴다
-      const h = byNts[k]; used[k] = true;
-      out.push(Object.assign({}, h, { docNo: a.docNo, qid: a.qid, mgt: a.mgt, src: 'both', test: false }));
-    } else out.push(a);
+    let i = findByNts(a);
+    if (i < 0 && !a.test) i = findByAmt(a);          // 테스트 발행 건은 홈택스에 있을 리 없으니 대조하지 않는다
+    if (i >= 0) {
+      usedH.add(i);
+      out.push(Object.assign({}, ht[i], { docNo: a.docNo, qid: a.qid, mgt: a.mgt, src: 'both', test: false }));
+    } else out.push(Object.assign({}, a, { unconfirmed: ht.length > 0 }));   // 홈택스 자료가 있는데도 짝이 없으면 확인 필요
   });
-  ht.forEach(h => { const k = _ntsKey(h.nts); if (!k || !used[k]) out.push(h); });
+  ht.forEach((h, i) => { if (!usedH.has(i)) out.push(h); });
   return out.sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+}
+/* 부가세 신고에 쓸 매출 — 테스트 발행 건은 국세청에 안 갔으므로 무조건 뺀다.
+   홈택스 자료가 있으면 그걸 기준으로 삼는다(국세청 기록이 진짜다).
+   홈택스에서 확인 안 된 앱 발행분은 합치지 않고 따로 알려준다. */
+function salesTaxBase(sd, ed) {
+  const rows = salesRows(sd, ed).filter(r => !r.test);
+  const real = rows.filter(r => r.src === 'hometax' || r.src === 'both');
+  const only = rows.filter(r => r.src === 'app');
+  const sum = a => a.reduce((o, r) => { o.n++; o.supply += (+r.supply || 0); o.vat += (+r.vat || 0); return o; }, { n: 0, supply: 0, vat: 0 });
+  const hasHt = real.length > 0;
+  const base = hasHt ? sum(real) : sum(only);
+  const extra = hasHt ? sum(only) : { n: 0, supply: 0, vat: 0 };
+  return { base: base, extra: extra, src: hasHt ? 'hometax' : 'app', testN: salesRows(sd, ed).filter(r => r.test).length };
 }
 function salesSum(rows) {
   const o = { n: rows.length, supply: 0, vat: 0, total: 0 };
@@ -7156,18 +7187,20 @@ function salesNoTax(ym) {
 function salesCard(ym) {
   const sd = ym + '-01', ed = _ymd(new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0));
   const rows = salesRows(sd, ed);
-  const t = salesSum(rows);
+  const t = salesSum(rows.filter(r => !r.test));       // 테스트 발행은 실제 매출이 아니라 합계에서 뺀다
   const nApp = rows.filter(r => r.src === 'app').length;
   const nHt = rows.filter(r => r.src === 'hometax').length;
   const nBoth = rows.filter(r => r.src === 'both').length;
   const nTest = rows.filter(r => r.test).length;
+  const nUnc = rows.filter(r => r.unconfirmed && !r.test).length;
+  const uncAmt = rows.filter(r => r.unconfirmed && !r.test).reduce((a, r) => a + (+r.total || 0), 0);
   const noTax = salesNoTax(ym);
   const noTaxAmt = noTax.reduce((a, q) => a + (+q.total || 0), 0);
   const cell = (lab, v, col, sub) => `<div style="text-align:center;padding:9px 6px;background:var(--soft);border-radius:10px">
     <div style="font-size:10.5px;color:var(--t2);margin-bottom:3px">${lab}</div>
     <div style="font-size:15px;font-weight:800;color:${col}">${fmtWon(v)}</div>${sub ? `<div style="font-size:10px;color:var(--t3);margin-top:1px">${sub}</div>` : ''}</div>`;
-  const srcPill = s => s === 'both' ? `<span class="pill p-done" style="font-size:9px;padding:0 5px">양쪽</span>`
-    : s === 'app' ? `<span class="pill p-prog" style="font-size:9px;padding:0 5px">앱 발행</span>`
+  const srcPill = r => r.src === 'both' ? `<span class="pill p-done" style="font-size:9px;padding:0 5px">양쪽</span>`
+    : r.src === 'app' ? (r.unconfirmed && !r.test ? `<span class="pill p-issue" style="font-size:9px;padding:0 5px">확인 필요</span>` : `<span class="pill p-prog" style="font-size:9px;padding:0 5px">앱 발행</span>`)
       : `<span class="pill p-gray" style="font-size:9px;padding:0 5px">홈택스</span>`;
   // 거래처별
   const byC = {};
@@ -7184,7 +7217,7 @@ function salesCard(ym) {
   const lRows = rows.length ? rows.map(r => `<tr style="border-bottom:1px solid var(--soft)">
       <td style="padding:6px 8px;white-space:nowrap;font-size:11.5px;color:var(--t3)">${esc((r.date || '').slice(5))}</td>
       <td style="padding:6px 8px"><b>${esc(r.client || '-')}</b>${r.docNo ? `<div style="font-size:10.5px;color:var(--t3)">${esc(r.docNo)}</div>` : (r.item ? `<div style="font-size:10.5px;color:var(--t3)">${esc(r.item)}</div>` : '')}</td>
-      <td style="padding:6px 8px;text-align:center;white-space:nowrap">${srcPill(r.src)}${r.test ? `<div style="font-size:9px;color:#9a6a12;font-weight:700;margin-top:2px">테스트</div>` : ''}</td>
+      <td style="padding:6px 8px;text-align:center;white-space:nowrap">${srcPill(r)}${r.test ? `<div style="font-size:9px;color:#9a6a12;font-weight:700;margin-top:2px">테스트</div>` : ''}</td>
       <td style="padding:6px 8px;text-align:right">${fmtWon(r.supply)}</td>
       <td style="padding:6px 8px;text-align:right;color:var(--t3)">${fmtWon(r.vat)}</td>
       <td style="padding:6px 8px;text-align:right;font-weight:700">${fmtWon(r.total)}</td>
@@ -7203,7 +7236,7 @@ function salesCard(ym) {
       </div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:8px;margin-bottom:9px">
-      ${cell('매출 공급가', t.supply, 'var(--gd)', t.n + '건')}
+      ${cell('매출 공급가', t.supply, 'var(--gd)', t.n + '건' + (nTest ? ' · 테스트 ' + nTest + '건 제외' : ''))}
       ${cell('매출 세액', t.vat, '#b45309', '부가세 납부분')}
       ${cell('합계', t.total, 'var(--gd)', '공급가+세액')}
       ${cell('거래처', cKeys.length, '#2f6fed', '곳')}
@@ -7212,7 +7245,10 @@ function salesCard(ym) {
     ${noTax.length ? `<div class="banner warn" style="margin-bottom:9px;font-size:12px"><i class="ti ti-alert-triangle"></i><span style="flex:1;min-width:0">
       확정된 주문인데 <b>계산서를 아직 안 끊은 건이 ${noTax.length}건 (${fmtWon(noTaxAmt)}원)</b> 있습니다. 부가세 신고 전에 확인하세요.
       <div style="margin-top:6px;display:flex;gap:5px;flex-wrap:wrap">${noTax.slice(0, 6).map(q => `<button class="btn btn-sm" style="padding:2px 7px;font-size:11px" onclick="openTaxForm('${q.id}')">${esc(q.client || '')} ${fmtWon(q.total)}</button>`).join('')}${noTax.length > 6 ? `<span style="font-size:11px;color:var(--t3);align-self:center">외 ${noTax.length - 6}건</span>` : ''}</div></span></div>` : ''}
-    ${nTest ? `<div class="banner warn" style="margin-bottom:9px;font-size:12px"><i class="ti ti-flask"></i><span style="flex:1;min-width:0"><b>테스트 모드로 발행된 건이 ${nTest}건</b> 섞여 있습니다. 국세청에는 전송되지 않은 건이라 실제 매출이 아닙니다.</span></div>` : ''}
+    ${nTest ? `<div class="banner warn" style="margin-bottom:9px;font-size:12px"><i class="ti ti-flask"></i><span style="flex:1;min-width:0"><b>테스트 모드로 발행된 건이 ${nTest}건</b> 있습니다. 국세청에 전송되지 않은 건이라 <b>위 합계와 부가세에서 빼두었습니다</b>. 목록에는 그대로 보입니다.</span></div>` : ''}
+    ${nUnc ? `<div class="banner warn" style="margin-bottom:9px;font-size:12px"><i class="ti ti-help-circle"></i><span style="flex:1;min-width:0">
+      앱에서 <b>발행함</b>으로 표시했는데 홈택스에는 같은 건이 없는 게 <b>${nUnc}건 (${fmtWon(uncAmt)}원)</b> 있습니다 — 목록에 <b>확인 필요</b>로 표시했습니다.<br>
+      실제로 끊은 건이라면 홈택스 수집 기간을 넓혀 다시 불러오세요. 계산서 없이 표시만 해둔 거라면 그대로 두시면 됩니다.</span></div>` : ''}
     <div style="font-size:11px;color:var(--t3);line-height:1.6;margin-bottom:9px">
       · 출처 — <b>앱 발행</b> ${nApp}건 · <b>홈택스</b> ${nHt}건 · <b>양쪽</b> ${nBoth}건 (승인번호가 같으면 한 줄로 합치고 금액은 홈택스 기준을 씁니다)
       ${nHt + nBoth === 0 ? '<br>· 홈택스에서 아직 안 가져왔습니다. <b>홈택스에서 불러오기</b>를 누르면 앱 밖에서 발행한 건까지 다 들어옵니다.' : ''}</div>
