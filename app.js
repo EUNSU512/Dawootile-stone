@@ -7220,10 +7220,11 @@ function _allMonthGroups(rows) {
   rows.forEach(r => { const m = (r.date || '').slice(0, 7) || '기타'; (g[m] = g[m] || []).push(r); });
   return Object.keys(g).sort((a, b) => b.localeCompare(a)).map(m => ({ ym: m, rows: g[m].sort((a, b) => (b.date || '').localeCompare(a.date || '')) }));
 }
-function _allSumBox(n, sup, vat, tot, col) {
-  const c = (k, v) => `<div style="text-align:center"><div style="font-size:10.5px;color:var(--t2)">${k}</div><div style="font-size:14.5px;font-weight:800;color:${col}">${fmtWon(v)}</div></div>`;
+function _allSumBox(nLabel, sup, vat, tot, col) {
+  /* nLabel 은 '6건' 같은 글자라 그대로 쓰고, 금액만 fmtWon 을 통과시킨다 */
+  const box = (k, txt) => `<div style="text-align:center"><div style="font-size:10.5px;color:var(--t2)">${k}</div><div style="font-size:14.5px;font-weight:800;color:${col}">${txt}</div></div>`;
   return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(84px,1fr));gap:8px;background:var(--soft);border-radius:10px;padding:10px 12px;margin-bottom:10px">
-    ${c('건수', n)}${c('공급가', sup)}${c('세액', vat)}${c('합계', tot)}</div>`;
+    ${box('건수', esc(nLabel))}${box('공급가', fmtWon(sup))}${box('세액', fmtWon(vat))}${box('합계', fmtWon(tot))}</div>`;
 }
 function openSaleClientAll(enc) {
   const k = _uq(enc);
