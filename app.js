@@ -5397,6 +5397,8 @@ function openTaxList() {
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
       <button class="btn btn-sm" onclick="taxOpenBox()"><i class="ti ti-external-link"></i>팝빌 매출문서함 열기</button>
       <button class="btn btn-sm" onclick="taxPing2()"><i class="ti ti-plug-connected"></i>연동 상태</button>
+      <button class="btn btn-sm" onclick="popbillUrl('charge')"><i class="ti ti-coin"></i>포인트 충전</button>
+      <button class="btn btn-sm" onclick="popbillUrl('usehistory')"><i class="ti ti-receipt-2"></i>사용 내역</button>
       <div id="taxlist-ping" style="font-size:11.5px;color:var(--t3);align-self:center"></div>
     </div>
     <div id="taxlist-body">${taxListInner()}</div>
@@ -5413,8 +5415,25 @@ async function taxPing2() {
     if (!box) return;
     if (!(r.ok && j.ok)) { box.innerHTML = '<span style="color:#c0341d">' + esc((j && j.error) || ('HTTP ' + r.status)) + '</span>'; return; }
     const c = j.config || {};
-    box.innerHTML = '<b style="color:' + (c.test ? '#9a6a12' : 'var(--gd)') + '">' + (c.test ? '테스트 모드' : '운영 모드') + '</b> · 포인트 ' + Number(j.balance || 0).toLocaleString();
+    const bal = Number(j.balance || 0), pbal = Number(j.partnerBalance || 0);
+    // 포인트 주머니가 둘이라 둘 다 보여준다. 발행에 쓰이는 건 '연동회원 포인트'.
+    box.innerHTML = '<b style="color:' + (c.test ? '#9a6a12' : 'var(--gd)') + '">' + (c.test ? '테스트 모드' : '운영 모드') + '</b>'
+      + ' · 발행용 포인트 <b style="color:' + (bal > 0 ? 'var(--gd)' : '#c0341d') + '">' + bal.toLocaleString() + '</b>'
+      + (j.partnerBalance != null ? ' · 파트너 포인트 ' + pbal.toLocaleString() : '')
+      + (bal <= 0 && pbal > 0 ? ' <span style="color:#c0341d">← 파트너 쪽에 충전되어 있습니다</span>' : '');
   } catch (e) { if (box) box.textContent = '확인 실패'; }
+}
+/* 팝빌 포인트 충전·사용내역 창 열기 */
+async function popbillUrl(mode) {
+  if (!isAdmin()) { toast('관리자만 가능합니다'); return; }
+  const w = window.open('', '_blank');
+  try {
+    const token = await auth.currentUser.getIdToken();
+    const r = await fetch(PUSH_FN + '?action=popbillurl', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ mode: mode }) });
+    const j = await r.json().catch(() => ({}));
+    if (!(r.ok && j.ok && j.url)) throw new Error((j && j.error) || ('HTTP ' + r.status));
+    if (w) w.location = j.url; else toast('팝업이 차단되었습니다. 허용 후 다시');
+  } catch (e) { if (w) w.close(); toast('열기 실패: ' + ((e && e.message) || e) + ' — 서버가 아직 v7이 아닐 수 있습니다'); }
 }
 /* 발행 직전 확인·수정 창 — 여기서 [발행]을 눌러야 실제로 국세청으로 나갑니다 */
 let _taxDraft = null;
