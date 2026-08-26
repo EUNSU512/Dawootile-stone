@@ -5391,7 +5391,7 @@ function openTaxResult(qid) {
   const mk = q.taxMgtKey || '';
   const row = (k, v, col) => `<div style="display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--soft)">
     <span style="font-size:12px;color:var(--t3)">${k}</span><b style="font-size:13px;text-align:right;color:${col || 'var(--tx)'}">${v}</b></div>`;
-  openModal(`<div class="sheet-h"><h3><i class="ti ti-circle-check" style="color:var(--gd)"></i>세금계산서 발행 완료</h3><button class="x" onclick="closeModal()">×</button></div>
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-file-search" style="color:var(--gd)"></i>세금계산서 조회</h3><button class="x" onclick="closeModal()">×</button></div>
     ${q.taxTestMode ? `<div class="banner warn" style="margin-bottom:10px;font-size:12px"><i class="ti ti-flask"></i><span style="flex:1;min-width:0"><b>테스트 모드</b>로 발행됐습니다. 국세청에는 전송되지 않았습니다.</span></div>`
       : `<div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-send"></i><span style="flex:1;min-width:0">국세청으로 전송됐습니다. 공급받는자 이메일로 발행 안내가 나갑니다.</span></div>`}
     <div style="background:var(--soft);border-radius:11px;padding:11px 13px;margin-bottom:11px">
@@ -5407,11 +5407,12 @@ function openTaxResult(qid) {
       <button class="btn btn-pri btn-sm" style="flex:1;min-width:130px" onclick="taxViewDoc('${esc(mk)}','print')"><i class="ti ti-file-search"></i>발행 내용 보기</button>
       <button class="btn btn-sm" style="flex:1;min-width:130px" onclick="taxViewDoc('${esc(mk)}','eprint')"><i class="ti ti-printer"></i>공급받는자 보관용</button>
     </div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px">
       <button class="btn btn-sm" style="flex:1;min-width:110px" onclick="taxRefreshInfo('${q.id}');"><i class="ti ti-refresh"></i>전송 상태 새로고침</button>
       <button class="btn btn-sm" style="flex:1;min-width:110px" onclick="closeModal();openTaxList()"><i class="ti ti-list"></i>발행 내역 전체</button>
     </div>
-    <div style="font-size:11px;color:var(--t3);margin-top:9px;line-height:1.6">· 잘못 발행했다면 <b>팝빌 매출문서함</b>에서 수정·취소해야 합니다 (앱에서는 취소가 안 됩니다).<br>· 승인번호는 국세청 전송이 끝나야 붙습니다. 안 보이면 잠시 뒤 <b>전송 상태 새로고침</b>을 눌러보세요.</div>
+    <button class="btn btn-sm btn-block" style="color:#a2560f;border-color:#e6bf93" onclick="closeModal();openTaxForm('${q.id}')"><i class="ti ti-edit"></i>내용 고쳐서 다시 발행 (수정 발행)</button>
+    <div style="font-size:11px;color:var(--t3);margin-top:9px;line-height:1.6">· <b>수정 발행</b>은 새 문서번호(-R1, -R2 …)로 다시 나갑니다. <b>먼저 발행한 건은 팝빌 매출문서함에서 취소</b>해야 중복되지 않습니다.<br>· 승인번호는 국세청 전송이 끝나야 붙습니다. 안 보이면 잠시 뒤 <b>전송 상태 새로고침</b>을 눌러보세요.</div>
     <div class="frm-foot"><button class="btn btn-block" onclick="closeModal()">닫기</button></div>`);
 }
 /* 국세청 전송 상태 새로고침 */
@@ -6431,8 +6432,10 @@ function quoteCardHtml(q) {
           <button class="btn btn-sm btn-ghost" title="PNG 저장" onclick="downloadQuotePng('${q.id}')"><i class="ti ti-photo"></i></button>
           <button class="btn btn-sm btn-ghost" title="이미지 복사" onclick="copyQuoteImage('${q.id}')"><i class="ti ti-clipboard"></i></button>
         </span>
-        ${(isAdmin() && q.ordered) ? `<button class="btn btn-sm" style="color:var(--gd)" onclick="openTaxForm('${q.id}')" title="세금계산서 발행"><i class="ti ti-file-invoice"></i>계산서</button>` : ''}
-        ${(isAdmin() && q.taxMgtKey) ? `<button class="btn btn-sm" style="color:var(--gd)" onclick="taxViewDoc('${esc(q.taxMgtKey)}','print')" title="발행된 계산서 보기"><i class="ti ti-file-search"></i>계산서 보기</button>` : ''}
+        ${(isAdmin() && q.ordered) ? (q.taxMgtKey
+          /* 이미 발행한 건은 '조회'만 보여준다. 수정발행은 조회 창 안에서 넘어간다. */
+          ? `<button class="btn btn-sm" style="color:var(--gd)" onclick="openTaxResult('${q.id}')" title="발행한 계산서 조회"><i class="ti ti-file-search"></i>계산서 조회</button>`
+          : `<button class="btn btn-sm" style="color:var(--gd)" onclick="openTaxForm('${q.id}')" title="세금계산서 발행"><i class="ti ti-file-invoice"></i>계산서</button>`) : ''}
         <span style="display:inline-flex;gap:4px;margin-left:auto">
           <button class="btn btn-sm btn-ghost" onclick="openQuoteInline('${q.id}',true)" title="복사해 새 견적"><i class="ti ti-copy"></i></button>
           <button class="btn btn-sm btn-ghost" style="color:var(--red-t)" onclick="delQuote('${q.id}')" title="견적 삭제"><i class="ti ti-trash"></i></button>
