@@ -6901,6 +6901,14 @@ async function purToggleExclude(id) {
 }
 
 /* ── 매입 카드 ─────────────────────────────────────────────── */
+/* 이름을 onclick 안에 안전하게 넣기 — 따옴표가 들어간 상호명 때문에 화면이 깨지지 않게 */
+function _q(v) { return encodeURIComponent(String(v == null ? '' : v)).replace(/'/g, '%27'); }
+function _uq(v) { try { return decodeURIComponent(String(v || '')); } catch (e) { return String(v || ''); } }
+/* 거래처별 표에서 펼쳐놓은 줄들 — 이름을 담아둔다 */
+const _openSup = new Set();      // 매입처
+const _openCli = new Set();      // 매출 거래처
+function purToggleSup(enc) { const k = _uq(enc); if (_openSup.has(k)) _openSup.delete(k); else _openSup.add(k); renderSettle(); }
+function saleToggleCli(enc) { const k = _uq(enc); if (_openCli.has(k)) _openCli.delete(k); else _openCli.add(k); renderSettle(); }
 let _purView = 'list';                    // list | supplier
 function purSetView(v) { _purView = v; renderSettle(); }
 function purchaseCard(ym) {
@@ -6916,12 +6924,32 @@ function purchaseCard(ym) {
   const bySup = {};
   rows.forEach(p => { const k = (p.supplier || '(상호없음)').trim(); if (!bySup[k]) bySup[k] = { n: 0, supply: 0, vat: 0, total: 0, biz: p.supplierBiz || '' }; const o = bySup[k]; o.n++; o.supply += (+p.supply || 0); o.vat += (+p.vat || 0); o.total += (+p.total || 0); });
   const supKeys = Object.keys(bySup).sort((a, b) => bySup[b].total - bySup[a].total);
-  const supRows = supKeys.length ? supKeys.map(k => `<tr style="border-bottom:1px solid var(--soft)">
-      <td style="padding:6px 8px"><b>${esc(k)}</b>${bySup[k].biz ? `<div style="font-size:10.5px;color:var(--t3)">${esc(bySup[k].biz)}</div>` : ''}</td>
+  const supRows = supKeys.length ? supKeys.map(k => {
+    const open = _openSup.has(k);
+    const mine = rows.filter(p => ((p.supplier || '(상호없음)').trim()) === k);
+    const detail = open ? `<tr><td colspan="5" style="padding:0;background:#faf8f4">
+        <div style="padding:8px 10px 10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+            <span style="font-size:11px;color:var(--t3)">${esc(ym)} 매입 내역 ${mine.length}건</span>
+            <button class="btn btn-sm" style="padding:2px 8px" onclick="event.stopPropagation();openPurSupplierAll('${_q(k)}')"><i class="ti ti-history"></i>전체 기간 보기</button>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr style="color:var(--t3);font-size:10.5px"><th style="text-align:left;padding:3px 6px">일자</th><th style="text-align:left;padding:3px 6px">품목</th><th style="text-align:right;padding:3px 6px">공급가</th><th style="text-align:right;padding:3px 6px">세액</th><th style="text-align:right;padding:3px 6px">합계</th><th style="text-align:center;padding:3px 6px">연결</th></tr></thead>
+            <tbody>${mine.map(p => `<tr style="border-top:1px solid #efe9df${p.exclude ? ';opacity:.45' : ''}">
+              <td style="padding:4px 6px;white-space:nowrap;color:var(--t3)">${esc((p.date || '').slice(5))}</td>
+              <td style="padding:4px 6px">${esc(p.item || '-')}${p.nts ? `<div style="font-size:9.5px;color:var(--t3)">${esc(p.nts)}</div>` : ''}</td>
+              <td style="padding:4px 6px;text-align:right">${fmtWon(p.supply)}</td>
+              <td style="padding:4px 6px;text-align:right;color:var(--t3)">${fmtWon(p.vat)}</td>
+              <td style="padding:4px 6px;text-align:right;font-weight:700">${fmtWon(p.total)}</td>
+              <td style="padding:4px 6px;text-align:center;white-space:nowrap">${p.costDocNo ? `<span style="font-size:10px;color:var(--gd);font-weight:700">${esc(p.costDocNo)}</span>` : `<button class="btn btn-sm" style="padding:1px 6px;font-size:10.5px" onclick="event.stopPropagation();purOpenLink('${esc(p.id)}')">원가</button>`}</td></tr>`).join('')}</tbody>
+          </table></div></td></tr>` : '';
+    return `<tr style="border-bottom:1px solid var(--soft);cursor:pointer${open ? ';background:var(--soft)' : ''}" onclick="purToggleSup('${_q(k)}')">
+      <td style="padding:6px 8px"><i class="ti ti-chevron-${open ? 'down' : 'right'}" style="color:var(--t3);font-size:13px"></i> <b>${esc(k)}</b>${bySup[k].biz ? `<div style="font-size:10.5px;color:var(--t3);padding-left:17px">${esc(bySup[k].biz)}</div>` : ''}</td>
       <td style="padding:6px 8px;text-align:right;color:var(--t2)">${bySup[k].n}건</td>
       <td style="padding:6px 8px;text-align:right">${fmtWon(bySup[k].supply)}</td>
       <td style="padding:6px 8px;text-align:right;color:var(--t3)">${fmtWon(bySup[k].vat)}</td>
-      <td style="padding:6px 8px;text-align:right;font-weight:800;color:#7c3aed">${fmtWon(bySup[k].total)}</td></tr>`).join('')
+      <td style="padding:6px 8px;text-align:right;font-weight:800;color:#7c3aed">${fmtWon(bySup[k].total)}</td></tr>${detail}`;
+  }).join('')
     : `<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--t3)">매입 내역이 없습니다</td></tr>`;
   // 건별
   const listRows = rows.length ? rows.map(p => {
@@ -7184,6 +7212,72 @@ function salesNoTax(ym) {
   return (state.quotes || []).filter(q => !q.taxInvoice && !!q.ordered && (qDate(q) || '').startsWith(ym))
     .sort((a, b) => (+b.total || 0) - (+a.total || 0));
 }
+function openLedgerEnc(enc) { openLedgerFor(_uq(enc)); }
+/* ── 한 거래처의 계산서를 기간 제한 없이 쭉 본다 (월별로 묶어서) ── */
+const _ALL_SD = '2000-01-01', _ALL_ED = '2999-12-31';
+function _allMonthGroups(rows) {
+  const g = {};
+  rows.forEach(r => { const m = (r.date || '').slice(0, 7) || '기타'; (g[m] = g[m] || []).push(r); });
+  return Object.keys(g).sort((a, b) => b.localeCompare(a)).map(m => ({ ym: m, rows: g[m].sort((a, b) => (b.date || '').localeCompare(a.date || '')) }));
+}
+function _allSumBox(n, sup, vat, tot, col) {
+  const c = (k, v) => `<div style="text-align:center"><div style="font-size:10.5px;color:var(--t2)">${k}</div><div style="font-size:14.5px;font-weight:800;color:${col}">${fmtWon(v)}</div></div>`;
+  return `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(84px,1fr));gap:8px;background:var(--soft);border-radius:10px;padding:10px 12px;margin-bottom:10px">
+    ${c('건수', n)}${c('공급가', sup)}${c('세액', vat)}${c('합계', tot)}</div>`;
+}
+function openSaleClientAll(enc) {
+  const k = _uq(enc);
+  const all = salesRows(_ALL_SD, _ALL_ED).filter(r => (r.client || '(상호없음)') === k);
+  const real = all.filter(r => !r.test);
+  let sup = 0, vat = 0, tot = 0; real.forEach(r => { sup += (+r.supply || 0); vat += (+r.vat || 0); tot += (+r.total || 0); });
+  const groups = _allMonthGroups(all);
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-file-invoice"></i>${esc(k)} — 매출 계산서 전체</h3><button class="x" onclick="closeModal()">×</button></div>
+    ${_allSumBox(real.length + '건', sup, vat, tot, 'var(--gd)')}
+    ${all.length > real.length ? `<div style="font-size:11px;color:var(--t3);margin:-4px 0 8px">· 테스트 발행 ${all.length - real.length}건은 합계에서 뺐습니다 (목록에는 보입니다)</div>` : ''}
+    <div style="max-height:56vh;overflow:auto">${groups.length ? groups.map(g => {
+    let gs = 0, gt = 0; g.rows.forEach(r => { if (!r.test) { gs += (+r.supply || 0); gt += (+r.total || 0); } });
+    return `<div style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:5px 2px;border-bottom:1.5px solid var(--bd)">
+          <b style="font-size:12.5px">${esc(g.ym.replace('-', '. '))}</b>
+          <span style="font-size:11.5px;color:var(--t3)">${g.rows.length}건 · 공급가 <b style="color:var(--tx)">${fmtWon(gs)}</b> · 합계 <b style="color:var(--gd)">${fmtWon(gt)}</b></span></div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>
+        ${g.rows.map(r => `<tr style="border-bottom:1px solid var(--soft)${r.test ? ';opacity:.5' : ''}">
+          <td style="padding:5px 6px;white-space:nowrap;color:var(--t3)">${esc(r.date || '')}</td>
+          <td style="padding:5px 6px">${esc(r.docNo || r.item || '-')}${r.test ? ' <span style="font-size:9.5px;color:#9a6a12;font-weight:700">테스트</span>' : ''}</td>
+          <td style="padding:5px 6px;text-align:right">${fmtWon(r.supply)}</td>
+          <td style="padding:5px 6px;text-align:right;color:var(--t3)">${fmtWon(r.vat)}</td>
+          <td style="padding:5px 6px;text-align:right;font-weight:700">${fmtWon(r.total)}</td>
+          <td style="padding:5px 6px;text-align:center">${r.mgt ? `<button class="btn btn-sm" style="padding:1px 6px;font-size:10.5px" onclick="taxViewDoc('${esc(r.mgt)}','print')">보기</button>` : '-'}</td></tr>`).join('')}
+        </tbody></table></div>`;
+  }).join('') : `<div class="empty"><i class="ti ti-file-off"></i>계산서가 없습니다</div>`}</div>
+    <div class="frm-foot"><button class="btn" style="flex:1" onclick="openLedgerEnc('${_q(k)}')"><i class="ti ti-book"></i>거래처 원장</button><button class="btn btn-block" style="flex:1" onclick="closeModal()">닫기</button></div>`);
+}
+function openPurSupplierAll(enc) {
+  const k = _uq(enc);
+  const all = purAll().filter(p => ((p.supplier || '(상호없음)').trim()) === k).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  let sup = 0, vat = 0, tot = 0; all.forEach(p => { sup += (+p.supply || 0); vat += (+p.vat || 0); tot += (+p.total || 0); });
+  const groups = _allMonthGroups(all);
+  const biz = (all[0] && all[0].supplierBiz) || '';
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-file-download"></i>${esc(k)} — 매입 계산서 전체</h3><button class="x" onclick="closeModal()">×</button></div>
+    ${biz ? `<div style="font-size:11.5px;color:var(--t3);margin-bottom:8px">사업자등록번호 ${esc(biz)}</div>` : ''}
+    ${_allSumBox(all.length + '건', sup, vat, tot, '#7c3aed')}
+    <div style="max-height:56vh;overflow:auto">${groups.length ? groups.map(g => {
+    let gs = 0, gt = 0; g.rows.forEach(p => { gs += (+p.supply || 0); gt += (+p.total || 0); });
+    return `<div style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;padding:5px 2px;border-bottom:1.5px solid var(--bd)">
+          <b style="font-size:12.5px">${esc(g.ym.replace('-', '. '))}</b>
+          <span style="font-size:11.5px;color:var(--t3)">${g.rows.length}건 · 공급가 <b style="color:var(--tx)">${fmtWon(gs)}</b> · 합계 <b style="color:#7c3aed">${fmtWon(gt)}</b></span></div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px"><tbody>
+        ${g.rows.map(p => `<tr style="border-bottom:1px solid var(--soft)${p.exclude ? ';opacity:.45' : ''}">
+          <td style="padding:5px 6px;white-space:nowrap;color:var(--t3)">${esc(p.date || '')}</td>
+          <td style="padding:5px 6px">${esc(p.item || '-')}${p.costDocNo ? ` <span style="font-size:9.5px;color:var(--gd);font-weight:700">${esc(p.costDocNo)}</span>` : ''}</td>
+          <td style="padding:5px 6px;text-align:right">${fmtWon(p.supply)}</td>
+          <td style="padding:5px 6px;text-align:right;color:var(--t3)">${fmtWon(p.vat)}</td>
+          <td style="padding:5px 6px;text-align:right;font-weight:700">${fmtWon(p.total)}</td></tr>`).join('')}
+        </tbody></table></div>`;
+  }).join('') : `<div class="empty"><i class="ti ti-file-off"></i>매입 내역이 없습니다</div>`}</div>
+    <div class="frm-foot"><button class="btn btn-block" onclick="closeModal()">닫기</button></div>`);
+}
 function salesCard(ym) {
   const sd = ym + '-01', ed = _ymd(new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0));
   const rows = salesRows(sd, ed);
@@ -7206,12 +7300,36 @@ function salesCard(ym) {
   const byC = {};
   rows.forEach(r => { const k = r.client || '(상호없음)'; if (!byC[k]) byC[k] = { n: 0, supply: 0, vat: 0, total: 0 }; const o = byC[k]; o.n++; o.supply += (+r.supply || 0); o.vat += (+r.vat || 0); o.total += (+r.total || 0); });
   const cKeys = Object.keys(byC).sort((a, b) => byC[b].total - byC[a].total);
-  const cRows = cKeys.length ? cKeys.map(k => `<tr style="border-bottom:1px solid var(--soft)">
-      <td style="padding:6px 8px"><b>${esc(k)}</b></td>
+  const cRows = cKeys.length ? cKeys.map(k => {
+    const open = _openCli.has(k);
+    const mine = rows.filter(r => (r.client || '(상호없음)') === k);
+    const detail = open ? `<tr><td colspan="5" style="padding:0;background:#f6faf7">
+        <div style="padding:8px 10px 10px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+            <span style="font-size:11px;color:var(--t3)">${esc(ym)} 발행 내역 ${mine.length}건</span>
+            <div style="display:flex;gap:5px;flex-wrap:wrap">
+              <button class="btn btn-sm" style="padding:2px 8px" onclick="event.stopPropagation();openSaleClientAll('${_q(k)}')"><i class="ti ti-history"></i>전체 기간 보기</button>
+              <button class="btn btn-sm" style="padding:2px 8px" onclick="event.stopPropagation();openLedgerEnc('${_q(k)}')"><i class="ti ti-book"></i>거래처 원장</button>
+            </div>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead><tr style="color:var(--t3);font-size:10.5px"><th style="text-align:left;padding:3px 6px">일자</th><th style="text-align:left;padding:3px 6px">전표 · 품목</th><th style="text-align:center;padding:3px 6px">출처</th><th style="text-align:right;padding:3px 6px">공급가</th><th style="text-align:right;padding:3px 6px">세액</th><th style="text-align:right;padding:3px 6px">합계</th><th style="text-align:center;padding:3px 6px">문서</th></tr></thead>
+            <tbody>${mine.map(r => `<tr style="border-top:1px solid #e6efe9${r.test ? ';opacity:.5' : ''}">
+              <td style="padding:4px 6px;white-space:nowrap;color:var(--t3)">${esc((r.date || '').slice(5))}</td>
+              <td style="padding:4px 6px">${esc(r.docNo || r.item || '-')}${r.nts ? `<div style="font-size:9.5px;color:var(--t3)">${esc(r.nts)}</div>` : ''}</td>
+              <td style="padding:4px 6px;text-align:center">${srcPill(r)}</td>
+              <td style="padding:4px 6px;text-align:right">${fmtWon(r.supply)}</td>
+              <td style="padding:4px 6px;text-align:right;color:var(--t3)">${fmtWon(r.vat)}</td>
+              <td style="padding:4px 6px;text-align:right;font-weight:700">${fmtWon(r.total)}</td>
+              <td style="padding:4px 6px;text-align:center">${r.mgt ? `<button class="btn btn-sm" style="padding:1px 6px;font-size:10.5px" onclick="event.stopPropagation();taxViewDoc('${esc(r.mgt)}','print')">보기</button>` : '-'}</td></tr>`).join('')}</tbody>
+          </table></div></td></tr>` : '';
+    return `<tr style="border-bottom:1px solid var(--soft);cursor:pointer${open ? ';background:var(--soft)' : ''}" onclick="saleToggleCli('${_q(k)}')">
+      <td style="padding:6px 8px"><i class="ti ti-chevron-${open ? 'down' : 'right'}" style="color:var(--t3);font-size:13px"></i> <b>${esc(k)}</b></td>
       <td style="padding:6px 8px;text-align:right;color:var(--t2)">${byC[k].n}건</td>
       <td style="padding:6px 8px;text-align:right">${fmtWon(byC[k].supply)}</td>
       <td style="padding:6px 8px;text-align:right;color:var(--t3)">${fmtWon(byC[k].vat)}</td>
-      <td style="padding:6px 8px;text-align:right;font-weight:800;color:var(--gd)">${fmtWon(byC[k].total)}</td></tr>`).join('')
+      <td style="padding:6px 8px;text-align:right;font-weight:800;color:var(--gd)">${fmtWon(byC[k].total)}</td></tr>${detail}`;
+  }).join('')
     : `<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--t3)">매출 계산서가 없습니다</td></tr>`;
   // 건별
   const lRows = rows.length ? rows.map(r => `<tr style="border-bottom:1px solid var(--soft)">
