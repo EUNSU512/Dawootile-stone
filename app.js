@@ -4285,7 +4285,10 @@ function quoteRegister(id) {
   } else if (hasGagong) {
     go('sites'); setTimeout(() => { try { openSiteForm(null, { name: q.client, address: q.siteAddr, quoteId: id }); } catch (e) { } }, 90);
     toast('가공 포함 · 현장 등록으로 이동');
-  } else { openShipForm({ targetName: q.client, items: items, quoteId: id, siteAddr: (q.siteAddr || '').trim(), siteName: (q.siteName || q.attn || '').trim() }); toast('출고 등록으로 불러왔습니다 · 확인 후 등록'); }   // 견적의 현장 주소를 출고증까지 그대로 들고 간다
+  } else { openShipForm({ targetName: q.client, items: items, quoteId: id, siteAddr: (q.siteAddr || '').trim() }); toast('출고 등록으로 불러왔습니다 · 확인 후 등록'); }
+  /* ★ 현장 주소만 넘긴다.
+     견적서의 수신·참조(q.attn)는 '견적서를 받는 사람'이라 출고 서류에는 나오면 안 된다.
+     출고지는 자재가 실제로 들어가는 '공장'이므로 견적에서 자동으로 채우지 않는다. */
 }
 let _linkQuoteId = '';
 function quoteLinkSite(id) {
@@ -9229,7 +9232,7 @@ function openShipForm(pre) {
       <div class="fld full"><label>출고 자재 / 장수 / 롯트 / 패턴<span class="req">*</span> <span style="color:var(--t3);font-weight:500">(여러 자재는 '자재 추가')</span></label>${matRowsHtml(pre && pre.items && pre.items.length ? pre.items : (pre && pre.material ? [{ name: pre.material, qty: pre.jang, lot: pre.lot, pattern: pre.pattern }] : [{}]), '장수')}</div>
       <div class="fld"><label>출고일<span class="req">*</span></label><input type="date" id="o-date" value="${todayStr()}"></div>
       <div class="fld"><label>출고 창고 <span style="color:var(--t3);font-weight:500">(비우면 기본 · 거봉석재 등 다른 창고에서 나갈 때만 지정)</span></label><input id="o-depot" list="o-depot-list" placeholder="${HOME_DEPOT_LABEL} (기본)"><datalist id="o-depot-list">${depotDatalistHtml()}</datalist></div>
-      <div class="fld full"><label>출고지(공장/현장)<span class="req">*</span></label>
+      <div class="fld full"><label>출고지<span class="req">*</span> <span style="color:var(--t3);font-weight:500">(자재가 실제로 들어가는 곳 — 받는 공장)</span></label>
         <select id="o-dest" onchange="onShipDest()">
           <option value="">선택…</option>
           <option value="업체 배차">🚚 업체 배차 (업체가 직접 수령·배차 — 출고지 입력 불필요)</option>
@@ -9238,18 +9241,13 @@ function openShipForm(pre) {
         </select>
       </div>
       <div class="fld full hidden" id="o-dest-manual"><label>출고지 직접 입력</label><input id="o-dest-text" placeholder="현장명/출고지 입력" autocomplete="off"></div>
-      <div class="fld full"><label>현장 주소 <span style="color:var(--t3);font-weight:500">(출고증에 그대로 인쇄됩니다 · 견적서에 적어두면 자동으로 들어옵니다)</span></label><input id="o-siteaddr" lang="ko" placeholder="예: OO시 OO구 OO동 OO현장" value="${esc((pre && pre.siteAddr) || '')}" autocomplete="off"></div>
-      <div class="fld full"><label>메모</label><input id="o-note" placeholder="선택"></div>
+      <div class="fld full"><label>현장 주소 <span style="color:var(--t3);font-weight:500">(어느 현장 자재인지 공장에 알려주는 칸 · 견적서에 적어두면 자동으로 들어옵니다)</span></label><input id="o-siteaddr" lang="ko" placeholder="예: OO시 OO구 OO동 OO현장" value="${esc((pre && pre.siteAddr) || '')}" autocomplete="off"></div>
+      <div class="fld full"><label>메모 <span style="color:var(--t3);font-weight:500">(출고 전 특이사항 — 출고증 아래에 인쇄)</span></label><input id="o-note" placeholder="선택"></div>
       <div class="fld full" style="background:#fff2f0;border-radius:9px;padding:10px 12px"><label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:600;color:#b42318"><input type="checkbox" id="o-damaged" style="width:18px;height:18px"> <i class="ti ti-alert-square-rounded"></i>파손 자재 출고 <span style="font-weight:400;color:var(--t3);font-size:12px">(체크 시 파손 재고에서 차감 — 폐기·반품)</span></label></div>
     </div>
     <div class="frm-foot"><button class="btn" style="flex:1" onclick="closeModal()">취소</button><button class="btn btn-pri" style="flex:2" onclick="submitShip()"><i class="ti ti-check"></i>출고 등록</button></div>`);
   if (pre && pre.targetName && el('o-targetName')) el('o-targetName').value = pre.targetName;
-  // 견적에서 불러온 경우: 현장으로 나가는 것이므로 출고지를 '직접 입력'으로 미리 열어둔다
-  const _preDest = ((pre && pre.siteName) || '').trim() || ((pre && pre.siteAddr) || '').trim();
-  if (_preDest && el('o-dest')) {
-    el('o-dest').value = '__manual'; onShipDest();
-    setTimeout(() => { const t = el('o-dest-text'); if (t && !t.value) t.value = _preDest; }, 60);
-  }
+  /* 출고지는 자재를 받는 공장이라 견적서만 보고는 알 수 없다 → 자동으로 채우지 않고 직접 고르게 둔다. */
   mrowLotRefresh();
 }
 function pickOutItem() {
