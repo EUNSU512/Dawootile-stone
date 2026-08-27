@@ -4518,6 +4518,24 @@ function renderTaxForm() {
       <div class="frm-foot">${q.taxInvoice ? '<div style="flex:1;min-width:0;color:var(--gd);font-weight:700;font-size:12.5px;display:flex;align-items:center;gap:6px;flex-wrap:wrap"><span><i class="ti ti-file-check"></i> 이미 발행됨' + (q.ntsConfirmNum ? ' · 승인 ' + esc(q.ntsConfirmNum) : '') + '</span>' + (q.taxMgtKey ? '<button type="button" class="btn btn-sm" style="flex:none" onclick="taxViewDoc(\'' + esc(q.taxMgtKey) + '\',\'print\')"><i class="ti ti-file-search"></i>발행 내용 보기</button><button type="button" class="btn btn-sm" style="flex:none" onclick="openTaxResult(\'' + q.id + '\')"><i class="ti ti-info-circle"></i>요약</button>' : '') + '</div>' : ''}<button class="btn" style="flex:1" onclick="taxCancel()">취소</button><button class="btn btn-pri" style="flex:2" onclick="openTaxPreview('${q.id}')"><i class="ti ti-file-search"></i>${q.taxInvoice ? '다시 발행 (내용 확인)' : '발행 내용 확인'}</button></div>
     </div>`;
 }
+/* ── 팝빌 포인트 지갑이 두 개인 이유 ─────────────────────────
+   ① 연동회원 포인트 = 우리 회사가 직접 충전해서 쓰는 지갑
+   ② 파트너 포인트   = 프로그램 공급사(파트너)가 소속 회원들 사용료를 한꺼번에 내주는 지갑
+   둘 중 어느 쪽에서 빠지는지는 계약 방식에 따라 다르다.
+   ★ 우리 계정은 '파트너 과금' 이다 — 2026-08-27 실측:
+     연동회원 0원인 상태에서 사업자조회가 정상 성공했고 파트너 포인트만 50원 줄었다.
+     그러므로 연동회원이 0원이어도 파트너에 잔액이 있으면 발행에 문제가 없다. */
+function taxUsablePoint(j) {
+  const bal = Number((j && j.balance) || 0), pbal = Number((j && j.partnerBalance) || 0);
+  const usable = bal > 0 ? bal : pbal;
+  return { bal: bal, pbal: pbal, usable: usable, where: bal > 0 ? '연동회원' : '파트너' };
+}
+function taxPointHtml(j) {
+  const p = taxUsablePoint(j);
+  return ' · 남은 포인트 <b style="color:' + (p.usable > 0 ? 'var(--gd)' : '#c0341d') + '">' + p.usable.toLocaleString() + '</b>'
+    + '<span style="color:var(--t3)"> (' + p.where + ' 지갑에서 차감)</span>'
+    + (p.usable <= 0 ? ' <span style="color:#c0341d">← 충전이 필요합니다</span>' : '');
+}
 /* 팝빌 연동 상태 점검 — 실제 발행 없이 설정·모드·잔여포인트만 확인 */
 async function taxPing() {
   if (!isAdmin()) { toast('관리자만 가능합니다'); return; }
@@ -4531,7 +4549,7 @@ async function taxPing() {
     if (!r.ok) { box.innerHTML = '<span style="color:#c0341d"><i class="ti ti-alert-triangle"></i> ' + esc((j && j.error) || ('HTTP ' + r.status)) + '</span>'; return; }
     const c = j.config || {};
     if (!j.ok) { box.innerHTML = '<span style="color:#c0341d"><i class="ti ti-alert-triangle"></i> ' + esc(j.error || '연동 안 됨') + '</span> <span style="color:var(--t3)">(LinkID ' + (c.linkId ? 'O' : 'X') + ' · SecretKey ' + (c.secretKey ? 'O' : 'X') + ' · 연동회원번호 ' + esc(c.memberCorpNum || '없음') + ')</span>'; return; }
-    box.innerHTML = '<span style="color:var(--gd);font-weight:700"><i class="ti ti-plug-connected"></i> 팝빌 연동 정상</span> · <b style="color:' + (c.test ? '#9a6a12' : 'var(--gd)') + '">' + (c.test ? '테스트 모드 (국세청 전송 안 됨)' : '운영 모드 (실제 발행)') + '</b> · 잔여포인트 <b>' + Number(j.balance || 0).toLocaleString() + '</b>';
+    box.innerHTML = '<span style="color:var(--gd);font-weight:700"><i class="ti ti-plug-connected"></i> 팝빌 연동 정상</span> · <b style="color:' + (c.test ? '#9a6a12' : 'var(--gd)') + '">' + (c.test ? '테스트 모드 (국세청 전송 안 됨)' : '운영 모드 (실제 발행)') + '</b>' + taxPointHtml(j);
   } catch (e) { if (box) box.innerHTML = '<span style="color:#c0341d">확인 실패: ' + esc((e && e.message) || e) + '</span>'; }
 }
 /* 발행 화면에 붙는 거래처 원장 — 이 거래처의 견적·입금·미수·계산서 상태를 한눈에 */
@@ -5616,12 +5634,10 @@ async function taxPing2() {
     if (!box) return;
     if (!(r.ok && j.ok)) { box.innerHTML = '<span style="color:#c0341d">' + esc((j && j.error) || ('HTTP ' + r.status)) + '</span>'; return; }
     const c = j.config || {};
-    const bal = Number(j.balance || 0), pbal = Number(j.partnerBalance || 0);
-    // 포인트 주머니가 둘이라 둘 다 보여준다. 발행에 쓰이는 건 '연동회원 포인트'.
+    const p = taxUsablePoint(j);
     box.innerHTML = '<b style="color:' + (c.test ? '#9a6a12' : 'var(--gd)') + '">' + (c.test ? '테스트 모드' : '운영 모드') + '</b>'
-      + ' · 발행용 포인트 <b style="color:' + (bal > 0 ? 'var(--gd)' : '#c0341d') + '">' + bal.toLocaleString() + '</b>'
-      + (j.partnerBalance != null ? ' · 파트너 포인트 ' + pbal.toLocaleString() : '')
-      + (bal <= 0 && pbal > 0 ? ' <span style="color:#c0341d">← 파트너 쪽에 충전되어 있습니다</span>' : '');
+      + taxPointHtml(j)
+      + '<span style="color:var(--t3);font-size:11px"> · 연동회원 ' + p.bal.toLocaleString() + ' / 파트너 ' + p.pbal.toLocaleString() + '</span>';
   } catch (e) { if (box) box.textContent = '확인 실패'; }
 }
 /* 팝빌 포인트 충전·사용내역 창 열기 */
