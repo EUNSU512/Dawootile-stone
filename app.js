@@ -6582,6 +6582,37 @@ function customsDocHtml(q) {
 </body></html>`;
 }
 function qDate(q) { return q.date || (q.createdAt ? _ymd(new Date(+q.createdAt)) : ''); }
+/* ── 견적의 실제 출고일 ─────────────────────────────────────
+   ① quotes.shipDate — 출고 등록할 때 고른 '출고일' (2026-08-27부터 저장)
+   ② 그게 없으면 출고 기록(transactions)에서 이 견적으로 나간 마지막 날짜
+      — 예전 견적과, 여러 번 나눠 출고한 건을 위해서다
+   ③ 그것도 없으면 저장된 시각(shippedAt)을 날짜로 바꿔서 쓴다
+   출고 기록을 매번 전부 훑으면 느리므로 잠깐(4초) 캐시한다. */
+let _shipDateMap = null, _shipDateAt = 0;
+function quoteShipDateMap() {
+  if (_shipDateMap && Date.now() - _shipDateAt < 4000) return _shipDateMap;
+  const m = {};
+  (state.transactions || []).forEach(t => {
+    if (!t || t.type !== 'out') return;
+    const qid = String(t.quoteId || '').trim(); if (!qid) return;
+    const d = String(t.date || '').trim(); if (!d) return;
+    if (!m[qid] || d > m[qid]) m[qid] = d;        // 나눠 출고했으면 마지막 출고일
+  });
+  _shipDateAt = Date.now(); _shipDateMap = m;
+  return m;
+}
+function quoteShipDate(q) {
+  if (!q) return '';
+  const d1 = String(q.shipDate || '').trim(); if (d1) return d1;
+  const d2 = quoteShipDateMap()[q.id]; if (d2) return d2;
+  if (+q.shippedAt) { try { return _ymd(new Date(+q.shippedAt)); } catch (e) { } }
+  return '';
+}
+/* 올해면 08-27, 지난해면 2025-11-04 처럼 보여준다 */
+function _shortDate(d) {
+  const t = String(d == null ? '' : d).trim(); if (t.length < 10) return t;
+  return t.slice(0, 4) === todayStr().slice(0, 4) ? t.slice(5) : t;
+}
 function quoteMonthNav(delta) { const cur = filters.quoteMonth || todayStr().slice(0, 7); const p = cur.split('-').map(Number); const d = new Date(p[0], p[1] - 1 + delta, 1); filters.quoteMonth = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); renderQuote(); }
 function quoteDayNav(delta) { const cur = filters.quoteDay || todayStr(); const d = new Date(cur + 'T00:00'); d.setDate(d.getDate() + delta); filters.quoteDay = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); renderQuote(); }
 function quoteCardHtml(q) {
@@ -6596,7 +6627,8 @@ function quoteCardHtml(q) {
   const _cRem = clientRemOf(q.client);        // 이 거래처가 우리한테 갚아야 할 총액 (원장 기준)
   const paidPill = (_tt > 0 && _pa >= _tt) ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 수정"><i class="ti ti-cash"></i> 결제완료</button>` : (_pa > 0 ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 수정"><i class="ti ti-cash"></i> 입금 ${fmtWon(_pa)} · 미수 ${fmtWon(_rem)}</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 입력"><i class="ti ti-cash"></i> 미결제</button>`);
   const taxPill = q.taxInvoice ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="클릭 시 해제"><i class="ti ti-file-check"></i> 계산서 발행${q.taxDate ? ' ' + esc(q.taxDate.slice(5)) : ''}</button>` : `<button class="pill p-gray" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="발행으로 표시"><i class="ti ti-file-off"></i> 계산서 미발행</button>`;
-  const shipBadge = q.shipped ? `<span class="pill p-done"><i class="ti ti-truck-delivery"></i> 출고 완료</span>` : '';
+  const _shipD = q.shipped ? quoteShipDate(q) : '';
+  const shipBadge = q.shipped ? `<span class="pill p-done"><i class="ti ti-truck-delivery"></i> 출고 완료${_shipD ? ' ' + esc(_shortDate(_shipD)) : ''}</span>` : '';
   const siteBadge = q.siteDone ? `<span class="pill p-done"><i class="ti ti-building-community"></i> 현장 등록 완료</span>` : '';
   const basinBadge = q.basinDone ? `<span class="pill p-done"><i class="ti ti-bath"></i> 세면대 발주 완료</span>` : '';
   const doneBadge = q.manualDone ? `<span class="pill p-done"><i class="ti ti-checks"></i> 완료</span>` : '';
@@ -6639,7 +6671,7 @@ function openQuoteView(id) {
   const badges = [
     (_tt > 0 && _pa >= _tt) ? badge(1, 'p-done', 'ti-cash', '결제완료') : (_pa > 0 ? badge(1, 'p-prog', 'ti-cash', '입금 ' + fmtWon(_pa)) : badge(1, 'p-wait', 'ti-cash', '미결제')),
     q.taxInvoice ? badge(1, 'p-prog', 'ti-file-check', '계산서 발행') : badge(1, 'p-gray', 'ti-file-off', '계산서 미발행'),
-    badge(q.shipped, 'p-done', 'ti-truck-delivery', '출고 완료'),
+    badge(q.shipped, 'p-done', 'ti-truck-delivery', '출고 완료' + (quoteShipDate(q) ? (' ' + _shortDate(quoteShipDate(q))) : '')),
     badge(q.siteDone, 'p-done', 'ti-building-community', '현장 등록'),
     badge(q.basinDone, 'p-done', 'ti-bath', '세면대 발주'),
     badge(q.manualDone, 'p-done', 'ti-checks', '완료')
@@ -9665,7 +9697,9 @@ async function submitShip() {
       const qItems = rows.map(r => ({ name: r.name, qty: r.qty, spec: [r.lot, r.pattern].map(s => (s || '').trim()).filter(Boolean).join(' / '), unit: '장', lot: r.lot || '', pattern: r.pattern || '' }));
       await Store.add('chulgoReqs', { docNo: chulgoNextDocNo('출고'), reqType: '출고', client: targetName, items: qItems, status: '대기열', stockApplied: true, sourceShipId: shipId, dispatchDest: dest, destOrig: dest, siteAddr: siteAddr, schedDate: date, memo: note || '', sender: (me && me.name) || '', createdAt: Date.now() });
     } catch (e) { }
-    if (_shipFromQuote) { try { await Store.update('quotes', _shipFromQuote, { shipped: true, shippedAt: Date.now() }); } catch (e) { } _shipFromQuote = ''; }
+    // ★ shippedAt(저장 시각) 말고 화면에서 고른 '출고일(date)'도 같이 남긴다 — 견적 카드에 이 날짜를 보여준다
+    if (_shipFromQuote) { try { await Store.update('quotes', _shipFromQuote, { shipped: true, shippedAt: Date.now(), shipDate: date }); } catch (e) { } _shipFromQuote = ''; }
+    _shipDateMap = null;   // 캐시 비우기 — 방금 출고분이 바로 보이게
     closeModal();
     toast(`출고 등록 · 대기열 등록 · 출고증 인쇄`);
     filters.shipTab = 'slip'; go('ship');   // 출고증 인쇄 페이지로 이동
