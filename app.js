@@ -8874,7 +8874,7 @@ async function basinShipOut(id) {
   try {
     const its = basinItems(b);
     const qItems = its.map(it => ({ name: it.stone || '세면대', qty: (parseInt(it.qty, 10) || 0), spec: it.spec || '', unit: '개' }));
-    if (qItems.length) await Store.add('chulgoReqs', { docNo: chulgoNextDocNo('출고'), reqType: '출고', client: b.vendor || '', items: qItems, status: '대기열', stockApplied: true, sourceBasinId: b.id, dispatchDest: b.address || '', memo: b.note || '', sender: (me && me.name) || '', createdAt: Date.now() });
+    if (qItems.length) await Store.add('chulgoReqs', { docNo: chulgoNextDocNo('출고'), reqType: '출고', client: b.vendor || '', items: qItems, status: '대기열', stockApplied: true, sourceBasinId: b.id, dispatchDest: b.address || '', destOrig: b.address || '', memo: b.note || '', sender: (me && me.name) || '', createdAt: Date.now() });
   } catch (e) { }
   toast('출고 완료 · 대기열 등록 · 출고증 인쇄');
   setTimeout(() => printBasinSlip(id), 250);
@@ -9365,7 +9365,7 @@ async function submitShip() {
     // 출고 대기열(출고관리)에 등록 — 재고는 위에서 이미 차감됨(stockApplied). 소리 알림은 '출고 지시' 낼 때만.
     try {
       const qItems = rows.map(r => ({ name: r.name, qty: r.qty, spec: [r.lot, r.pattern].map(s => (s || '').trim()).filter(Boolean).join(' / '), unit: '장', lot: r.lot || '', pattern: r.pattern || '' }));
-      await Store.add('chulgoReqs', { docNo: chulgoNextDocNo('출고'), reqType: '출고', client: targetName, items: qItems, status: '대기열', stockApplied: true, sourceShipId: shipId, dispatchDest: dest, siteAddr: siteAddr, schedDate: date, memo: note || '', sender: (me && me.name) || '', createdAt: Date.now() });
+      await Store.add('chulgoReqs', { docNo: chulgoNextDocNo('출고'), reqType: '출고', client: targetName, items: qItems, status: '대기열', stockApplied: true, sourceShipId: shipId, dispatchDest: dest, destOrig: dest, siteAddr: siteAddr, schedDate: date, memo: note || '', sender: (me && me.name) || '', createdAt: Date.now() });
     } catch (e) { }
     if (_shipFromQuote) { try { await Store.update('quotes', _shipFromQuote, { shipped: true, shippedAt: Date.now() }); } catch (e) { } _shipFromQuote = ''; }
     closeModal();
@@ -10414,7 +10414,11 @@ async function issueDispatch() {
       const r = selReqs.find(x => x.id === id) || {};
       const itemDest = company ? '' : (overrideDest || (r.dispatchDest || '').trim());   // 업체별 하차지 유지(공통 입력 시 덮어씀)
       if (itemDest) dests.add(itemDest);
-      await Store.update('chulgoReqs', id, { status: '지시', dispatchId, vehicle: '', driver, companyDispatch: company, loadTime, packing, dispatchNote, dispatchDest: itemDest, dispatchedAt: Date.now(), dispatchedBy: (me && me.name) || '' });
+      /* destOrig = 출고 등록 때 정한 원래 하차지. 배차/취소로는 절대 지우지 않는다.
+         (업체 배차나 공통 출고지로 지시하면 dispatchDest 가 덮어써지기 때문) */
+      const _patch = { status: '지시', dispatchId, vehicle: '', driver, companyDispatch: company, loadTime, packing, dispatchNote, dispatchDest: itemDest, dispatchedAt: Date.now(), dispatchedBy: (me && me.name) || '' };
+      if (!(r.destOrig || '').trim()) _patch.destOrig = (r.dispatchDest || '').trim();
+      await Store.update('chulgoReqs', id, _patch);
     }
     const destTxt = company ? '' : [...dests].join(' / ');
     const summary = (clients.join(', ') || '출고') + (ids.length > 1 ? ` 외 ${ids.length}건` : '') + (packing ? ' · 📦포장' : '') + (destTxt ? ' → ' + destTxt : '');
@@ -10510,7 +10514,12 @@ async function cancelDispatch(dispatchId) {
   const reqs = (state.chulgoReqs || []).filter(r => r.dispatchId === dispatchId && (r.status || '') !== '완료');
   if (!reqs.length) { toast('취소할 지시가 없습니다'); return; }
   if (!confirm(`이 출고 지시(${reqs.length}건)를 취소하고 대기열로 되돌릴까요?\n· 재고는 그대로 유지됩니다\n· 대기열에서 다시 배차해 지시할 수 있습니다`)) return;
-  for (const r of reqs) { await Store.update('chulgoReqs', r.id, { status: '대기열', dispatchId: '', dispatchedAt: 0, dispatchedBy: '', driver: '', companyDispatch: false, loadTime: '', packing: false, dispatchDest: '' }); }
+  /* ★ 하차지(dispatchDest)는 지우지 않는다 — 자재가 어느 공장으로 가는지는 배차와 상관없는 정보라
+     지워버리면 다시 배차할 때 매번 새로 입력해야 한다. 원래 값(destOrig)이 있으면 그걸로 되돌린다. */
+  for (const r of reqs) {
+    const keepDest = (r.destOrig || '').trim() || (r.dispatchDest || '').trim();
+    await Store.update('chulgoReqs', r.id, { status: '대기열', dispatchId: '', dispatchedAt: 0, dispatchedBy: '', driver: '', companyDispatch: false, loadTime: '', packing: false, dispatchDest: keepDest });
+  }
   toast('출고 지시 취소 · 대기열로 이동'); renderChulgo();
 }
 /* ── 요청별 채팅 (사무실 ↔ 창고) ── */
