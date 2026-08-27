@@ -133,6 +133,15 @@ function isAdmin() { return me && me.role === 'admin'; }
 /* 세금계산서(발행·조회) 권한 — 관리자는 항상, 직원은 설정에서 끄지 않는 한 허용.
    시공팀·거래처 계정은 어떤 경우에도 안 된다.
    `canTax` 가 없으면(예전 직원 자료) 허용으로 본다 — 직원은 기본 켜짐. */
+/* 거래처 원장 · 입금 내역 보기 권한 — 관리자는 항상, 직원은 끄지 않는 한 허용.
+   ※ 통장 잔액과 출금 내역은 애초에 가져오지도, 보여주지도 않는다.
+      입금(accIn)만 tradeType:['I'] 로 수집하고, 잔액은 저장조차 하지 않는다. */
+function canLedger() {
+  if (isAdmin()) return true;
+  const lm = (typeof liveMe === 'function' ? liveMe() : me) || {};
+  if ((lm.role || '') !== 'staff') return false;
+  return lm.canLedger !== false;
+}
 function canTax() {
   if (isAdmin()) return true;
   const lm = (typeof liveMe === 'function' ? liveMe() : me) || {};
@@ -4717,7 +4726,7 @@ function _txFromPopbill(x, acc) {
   return {
     date: _bankDate(x.trdate || x.trdt), dt: _bankDT(x.trdt || x.trdate),
     payer: payer, pkey: _bankKey(payer),
-    amount: Math.round(+x.accIn || 0), balance: Math.round(+x.balance || 0),
+    amount: Math.round(+x.accIn || 0),   // ★ 통장 잔액(x.balance)은 저장하지 않는다 — 직원에게 보일 일이 없게
     bankNm: (x.remark2 || '').trim(), way: (x.remark3 || '').trim(),
     accNo: acc || '', syncedAt: Date.now()
   };
@@ -4966,12 +4975,12 @@ function clientRemMap() {
 function clientRemOf(c) { return clientRemMap()[(c || '').trim()] || 0; }
 /* 견적 카드/팝업에서 그 거래처 원장으로 바로 가기 */
 function openLedgerFor(c) {
-  if (!isAdmin()) { toast('원장은 관리자만 볼 수 있습니다'); return; }
+  if (!canLedger()) { toast('거래처 원장 권한이 없습니다 — 관리자에게 문의하세요'); return; }
   closeModal(); qListSave();
   filters.ledger = true; filters.ledgerClient = (c || '').trim(); filters.ledgerRange = 'all'; filters.ledgerFix = false;
   go('quote');
 }
-function openLedger() { if (!isAdmin()) { toast('원장은 관리자만 볼 수 있습니다'); return; } qListSave(); filters.ledger = true; filters.ledgerClient = ''; go('quote'); }
+function openLedger() { if (!canLedger()) { toast('거래처 원장 권한이 없습니다 — 관리자에게 문의하세요'); return; } qListSave(); filters.ledger = true; filters.ledgerClient = ''; go('quote'); }
 function ledgerClose() { filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; renderQuote(); qListRestore(); }
 function ledgerSetRange(v) { filters.ledgerRange = v; renderLedger(); }
 function ledgerSetSort(v) { filters.ledgerSort = v; renderLedger(); }
@@ -4991,8 +5000,8 @@ function renderLedger() {
   root.innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-book"></i>거래처 원장</h2><p>매출 · 결제 · 미수를 자동으로 계산합니다</p></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="btn btn-sm" onclick="openBankSync()"><i class="ti ti-download"></i>입금 가져오기</button>
-        <button class="btn btn-sm" onclick="openPayMatch()"><i class="ti ti-link"></i>결제 반영${pmN ? ` <b style="color:var(--gd)">${pmN}</b>` : ''}</button>
+        ${isAdmin() ? `<button class="btn btn-sm" onclick="openBankSync()"><i class="ti ti-download"></i>입금 가져오기</button>
+        <button class="btn btn-sm" onclick="openPayMatch()"><i class="ti ti-link"></i>결제 반영${pmN ? ` <b style="color:var(--gd)">${pmN}</b>` : ''}</button>` : ''}
         <button class="btn btn-sm" onclick="ledgerClose()"><i class="ti ti-arrow-left"></i>견적 목록</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
       <div class="stat"><div class="ic g"><i class="ti ti-file-text"></i></div><div class="v" style="font-size:18px">${fmtWon(totSale)}</div><div class="l">확정 매출</div><div class="s">${A.rows.reduce((s, r) => s + r.qn, 0)}건</div></div>
@@ -6449,7 +6458,7 @@ function quoteCardHtml(q) {
           <div style="font-size:12px;color:var(--t2);margin-top:3px">${esc(names)}</div></div>
         <div style="text-align:right;flex:none"><div style="font-size:17px;font-weight:800;color:var(--gd)">${fmtWon(q.total)}<span style="font-size:12px;font-weight:600">원</span></div><div style="font-size:10.5px;color:var(--t3)">VAT 포함</div>${_rem > 0 ? `<div style="font-size:11px;color:var(--gd);margin-top:5px">입금 ${fmtWon(_pa)}</div><div style="font-size:13.5px;font-weight:800;color:var(--red-t)">미수 ${fmtWon(_rem)}</div>` : (_pa > 0 ? `<div style="font-size:12px;font-weight:700;color:var(--gd);margin-top:5px"><i class="ti ti-check"></i> 결제완료</div>` : '')}${_cRem > 0 ? `<div style="font-size:10.5px;color:var(--t3);margin-top:4px;white-space:nowrap;border-top:1px dashed var(--bd);padding-top:4px">거래처 총 미수</div><div style="font-size:12.5px;font-weight:800;color:${_cRem > _rem ? 'var(--red-t)' : 'var(--t2)'};white-space:nowrap">${fmtWon(_cRem)}</div>` : ''}</div>
       </div>
-      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${shipBadge}${siteBadge}${basinBadge}${doneBadge}${isAdmin() && _cRem > 0 ? `<button class="pill p-issue" style="border:none;cursor:pointer" onclick="openLedgerFor(${JSON.stringify(q.client || '').replace(/"/g, '&quot;')})" title="이 거래처 원장 보기"><i class="ti ti-book"></i> 거래처 미수 ${fmtWon(_cRem)}</button>` : ''}</div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${shipBadge}${siteBadge}${basinBadge}${doneBadge}${canLedger() && _cRem > 0 ? `<button class="pill p-issue" style="border:none;cursor:pointer" onclick="openLedgerFor(${JSON.stringify(q.client || '').replace(/"/g, '&quot;')})" title="이 거래처 원장 보기"><i class="ti ti-book"></i> 거래처 미수 ${fmtWon(_cRem)}</button>` : ''}</div>
       <div class="frm-foot" style="margin-top:9px;display:flex;align-items:center;gap:5px;flex-wrap:wrap">
         ${(q.shipped || q.siteDone || q.basinDone) ? '' : (q.manualDone ? (isAdmin() ? `<button class="btn btn-sm" style="color:var(--t3)" onclick="quoteUnmarkDone('${q.id}')" title="완료 취소"><i class="ti ti-arrow-back-up"></i>완료 취소</button>` : '') : (q.ordered ? `<button class="btn btn-sm btn-pri" onclick="quoteRegister('${q.id}')"><i class="ti ${_regIcon}"></i>${_regLabel}</button><button class="btn btn-sm" onclick="quoteLinkSite('${q.id}')" title="이미 등록된 현장에 연결"><i class="ti ti-link"></i>현장 연결</button>${isAdmin() ? `<button class="btn btn-sm" style="color:#0f766e;border-color:#0f766e" onclick="quoteMarkDone('${q.id}')" title="바로 완료 처리 (관리자)"><i class="ti ti-checks"></i>완료 처리</button>` : ''}<button class="btn btn-sm" style="color:var(--t3)" onclick="quoteCancelOrder('${q.id}')" title="확정 주문 취소"><i class="ti ti-arrow-back-up"></i>확정취소</button>` : `<button class="btn btn-sm btn-pri" onclick="quoteConfirmOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>`))}
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}')"><i class="ti ti-edit"></i>수정</button>
@@ -6517,7 +6526,7 @@ function openQuoteView(id) {
       ${sumRow('합계', fmtWon(_tt) + '원', true)}
       ${_pa > 0 ? sumRow('입금', fmtWon(_pa) + '원') : ''}
       ${_rem > 0 ? `<div style="display:flex;justify-content:space-between;padding:3px 0"><span style="font-size:12px;color:var(--t2);font-weight:500">미수</span><span style="font-size:14px;font-weight:800;color:var(--red-t)">${fmtWon(_rem)}원</span></div>` : ''}
-      ${_cRem > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0 0;margin-top:5px;border-top:1px dashed var(--bd2)"><span style="font-size:11.5px;color:var(--t3)">이 거래처 총 미수 <span style="color:var(--t2)">(원장 기준)</span></span><span style="display:flex;gap:6px;align-items:center"><span style="font-size:14px;font-weight:800;color:var(--red-t)">${fmtWon(_cRem)}원</span>${isAdmin() ? `<button class="btn btn-sm" style="padding:2px 7px;font-size:11px" onclick="openLedgerFor(${JSON.stringify(q.client || '').replace(/"/g, '&quot;')})"><i class="ti ti-book"></i>원장</button>` : ''}</span></div>` : ''}
+      ${_cRem > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0 0;margin-top:5px;border-top:1px dashed var(--bd2)"><span style="font-size:11.5px;color:var(--t3)">이 거래처 총 미수 <span style="color:var(--t2)">(원장 기준)</span></span><span style="display:flex;gap:6px;align-items:center"><span style="font-size:14px;font-weight:800;color:var(--red-t)">${fmtWon(_cRem)}원</span>${canLedger() ? `<button class="btn btn-sm" style="padding:2px 7px;font-size:11px" onclick="openLedgerFor(${JSON.stringify(q.client || '').replace(/"/g, '&quot;')})"><i class="ti ti-book"></i>원장</button>` : ''}</span></div>` : ''}
     </div>
     ${(q.memo || '').trim() ? `<div class="sec-label"><i class="ti ti-notes"></i>비고</div><div style="font-size:12.5px;color:var(--t2);white-space:pre-wrap;background:var(--soft);border-radius:10px;padding:10px 12px;margin-bottom:12px">${esc(q.memo)}</div>` : ''}
     <div class="frm-foot" style="display:flex;gap:6px;flex-wrap:wrap">
@@ -7671,7 +7680,7 @@ function renderQuote() {
     <button class="btn btn-sm ${filters.quoteBundle ? 'btn-pri' : ''}" style="margin-left:auto" onclick="quoteToggleBundle()"><i class="ti ti-stack-2"></i> 묶음청구</button></div>`;
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${isAdmin() ? `<button class="btn btn-sm" onclick="openLedger()"><i class="ti ti-book"></i>거래처 원장</button>` : ''}${canTax() ? `<button class="btn btn-sm" onclick="openTaxList()"><i class="ti ti-file-invoice"></i>계산서 내역</button>` : ''}<button class="btn btn-sm" onclick="openCutSim()"><i class="ti ti-layout-grid"></i>재단도</button><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${canLedger() ? `<button class="btn btn-sm" onclick="openLedger()"><i class="ti ti-book"></i>거래처 원장</button>` : ''}${canTax() ? `<button class="btn btn-sm" onclick="openTaxList()"><i class="ti ti-file-invoice"></i>계산서 내역</button>` : ''}<button class="btn btn-sm" onclick="openCutSim()"><i class="ti ti-layout-grid"></i>재단도</button><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
       <button class="stat tap" onclick="quoteShowConfUnpaid()" title="확정 주문 중 미결제만 보기"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(unpaidConf)}</div><div class="l">확정 미수금 <i class="ti ti-chevron-right tap-arrow"></i></div><div class="s">${_confUnpaidList.length}건 · 확정 전 포함 ${fmtWon(unpaid)}</div></button>
       <button class="stat tap" onclick="quoteSetConf('all');quoteSetStat('notax')" title="계산서 미발행만 보기"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행 <i class="ti ti-chevron-right tap-arrow"></i></div></button>
@@ -10820,7 +10829,8 @@ function openMemberForm(id) {
         <div class="perm-grid">${ALL_TABS.filter(t => !ALWAYS_TABS.includes(t)).map(t => { const sens = RESTRICTED_TABS.includes(t); return `<div class="perm-row${sens ? ' sens' : ''}"><span class="perm-lab"><i class="ti ${TAB_ICONS[t] || 'ti-square'}"></i>${TAB_LABELS[t]}${sens ? '<span class="pbadge">민감</span>' : ''}</span><label class="swt"><input type="checkbox" class="m-menu" value="${t}" ${curMenus.includes(t) ? 'checked' : ''}><span class="track"></span></label></div>`; }).join('')}</div>
         <div style="font-size:11px;color:var(--t3);margin-top:7px;line-height:1.5">· 홈 · 설정은 항상 접근 가능 · 관리자는 전체 접근 · <b>정산</b>은 민감 정보라 기본 꺼짐</div>
         <div class="perm-row" style="margin-top:9px"><span class="perm-lab"><i class="ti ti-file-invoice"></i>세금계산서 발행·조회<span class="pbadge" style="background:#eaf1fe;color:#1b4fb0">과금</span></span><label class="swt"><input type="checkbox" id="m-cantax" ${v.canTax === false ? '' : 'checked'}><span class="track"></span></label></div>
-        <div style="font-size:11px;color:var(--t3);margin-top:5px;line-height:1.5">· 켜면 그 직원도 계산서를 <b>발행하고 조회</b>할 수 있습니다. 발행하면 국세청으로 실제 전송되고 팝빌 포인트가 빠집니다.<br>· 거래처 원장과 입금 조회는 관리자만 볼 수 있습니다.</div></div>
+        <div class="perm-row"><span class="perm-lab"><i class="ti ti-book"></i>거래처 원장 · 입금 내역</span><label class="swt"><input type="checkbox" id="m-canledger" ${v.canLedger === false ? '' : 'checked'}><span class="track"></span></label></div>
+        <div style="font-size:11px;color:var(--t3);margin-top:5px;line-height:1.5">· <b>세금계산서</b> — 켜면 발행·조회 모두 가능. 발행하면 국세청으로 실제 전송되고 팝빌 포인트가 빠집니다.<br>· <b>거래처 원장</b> — 매출·입금·미수를 봅니다. <b>통장 잔액과 출금 내역은 애초에 앱에 안 들어옵니다.</b> 통장에서 입금 가져오기와 결제 일괄 반영은 관리자만 할 수 있습니다.<br>· <b>정산</b>(원가·마진·매입)은 위 메뉴 권한에서 따로 켜야 보입니다.</div></div>
 
     </div>
     ${m && v.email ? `<div class="fld full" style="margin-bottom:12px"><label><i class="ti ti-key" style="font-size:13px;color:var(--blue)"></i> 비밀번호 변경 <span style="color:var(--t3);font-weight:500">— 메일 없이 바로 적용(가메일 계정 가능)</span></label>
@@ -10865,7 +10875,7 @@ async function submitMember(id) {
   if (state.members.some(m => m.id !== id && (m.email || '').toLowerCase() === email)) { toast('이미 등록된 이메일입니다'); return; }
   const _menus = Array.from(document.querySelectorAll('.m-menu')).filter(c => c.checked).map(c => c.value);
   const obj = { name, role: el('m-role').value, email, phone: (el('m-phone') && el('m-phone').value || '').trim() };
-  if (obj.role === 'staff') { obj.menus = _menus; obj.canTax = !!(el('m-cantax') && el('m-cantax').checked); }
+  if (obj.role === 'staff') { obj.menus = _menus; obj.canTax = !!(el('m-cantax') && el('m-cantax').checked); obj.canLedger = !!(el('m-canledger') && el('m-canledger').checked); }
   const prevEmail = id ? ((state.members.find(m => m.id === id) || {}).email || '').toLowerCase() : '';
   if (id) await Store.update('members', id, obj); else await Store.add('members', obj);
   await setRoleDoc(email, obj.role, name, prevEmail);
