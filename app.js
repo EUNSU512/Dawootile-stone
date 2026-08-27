@@ -134,8 +134,9 @@ function isAdmin() { return me && me.role === 'admin'; }
    시공팀·거래처 계정은 어떤 경우에도 안 된다.
    `canTax` 가 없으면(예전 직원 자료) 허용으로 본다 — 직원은 기본 켜짐. */
 /* 거래처 원장 · 입금 내역 보기 권한 — 관리자는 항상, 직원은 끄지 않는 한 허용.
-   ※ 통장 잔액과 출금 내역은 애초에 가져오지도, 보여주지도 않는다.
-      입금(accIn)만 tradeType:['I'] 로 수집하고, 잔액은 저장조차 하지 않는다. */
+   ※ 앱에 저장하는 것은 입금(accIn)뿐이다. 통장 잔액·출금은 저장하지 않는다.
+      잔액은 '입금 가져오기' 창에서 관리자가 눌렀을 때만 은행에서 그때그때 읽어 화면에 보여주고,
+      화면을 닫으면 사라진다 — 직원 화면에는 어떤 경로로도 남지 않는다. */
 function canLedger() {
   if (isAdmin()) return true;
   const lm = (typeof liveMe === 'function' ? liveMe() : me) || {};
@@ -4731,19 +4732,125 @@ function _txFromPopbill(x, acc) {
     accNo: acc || '', syncedAt: Date.now()
   };
 }
+/* ══════════════════════════════════════════════════════════
+   통장 잔액 — 관리자 전용, 저장하지 않고 볼 때마다 은행에서 읽는다
+   ──────────────────────────────────────────────────────────
+   팝빌 계좌조회에는 '잔액만 알려주는' 기능이 따로 없다.
+   대신 거래 한 줄마다 '그 거래가 끝난 뒤의 통장 잔액'(balance)이 붙어 온다.
+   그래서 가장 최근 거래 한 줄을 찾아 그 줄의 잔액을 보여주면 그게 현재 잔액이다.
+   ※ 입금만 보면 그 뒤에 나간 돈이 빠져 틀리므로, 잔액을 구할 때만 입금·출금(['I','O'])을 함께 읽는다.
+     읽기만 할 뿐 출금 내역은 저장하지도, 목록으로 보여주지도 않는다.                        */
+async function _bankBalOf(jobID) {
+  if (!jobID) return null;
+  const balOf = x => {
+    // 팝빌 응답의 잔액 항목 이름이 계좌 종류에 따라 다를 수 있어 후보를 순서대로 본다
+    const cand = [x.balance, x.accBalance, x.remainAmount, x.trBalance];
+    for (const v of cand) { if (v !== '' && v != null) return v; }
+    return null;
+  };
+  const pick = list => {
+    let best = null, bestK = '';
+    (list || []).forEach(x => {
+      const raw = x == null ? null : balOf(x);
+      if (raw == null) return;
+      const b = Number(String(raw).replace(/[^0-9.-]/g, ''));
+      if (!isFinite(b)) return;
+      const k = String(x.trdt || x.trdate || '').replace(/[^0-9]/g, '').padEnd(14, '0')
+             + String(x.trserial == null ? 0 : x.trserial).replace(/[^0-9]/g, '').padStart(8, '0');
+      if (!best || k > bestK) { best = { balance: Math.round(b), at: _bankDT(x.trdt || x.trdate) }; bestK = k; }
+    });
+    return best;
+  };
+  try {
+    // 정렬 방향에 기대지 않는다 — 첫 장을 읽고, 500건이 넘으면 마지막 장도 읽어서 둘 중 최신을 고른다
+    const r1 = await _bankCall({ mode: 'search', jobID: jobID, tradeType: ['I', 'O'], page: 1, perPage: 500, order: 'D' });
+    let list = ((r1.result && r1.result.list) || []).slice();
+    const total = +((r1.result && r1.result.total) || 0);
+    if (total > 500) {
+      const last = Math.ceil(total / 500);
+      const r2 = await _bankCall({ mode: 'search', jobID: jobID, tradeType: ['I', 'O'], page: last, perPage: 500, order: 'D' });
+      list = list.concat(((r2.result && r2.result.list) || []));
+    }
+    const got = pick(list);
+    if (got) return got;
+    // 거래는 읽혔는데 잔액 항목이 없는 경우 — 원인을 바로 알 수 있게 항목 이름을 남긴다
+    if (list.length) return { noField: true, keys: Object.keys(list[0] || {}).join(', ') };
+    return null;
+  } catch (e) { return { error: (e && e.message) || String(e) }; }
+}
+/* 잔액을 화면에 그린다 (저장 안 함 — 창을 닫으면 사라진다) */
+function bankBalShow(bal, a) {
+  const box = el('bk-bal'); if (!box) return;
+  const acc = a ? esc((a.bankCode || '') + ' ' + (a.accountNumber || '')) : '';
+  if (!bal) {
+    box.innerHTML = `<div class="banner warn" style="font-size:12.5px"><i class="ti ti-alert-triangle"></i><span style="flex:1;min-width:0">조회한 기간에 거래가 한 건도 없어 잔액을 알 수 없습니다. 기간을 넓혀서 다시 조회해 주세요.</span></div>`;
+    return;
+  }
+  if (bal.error) {
+    box.innerHTML = `<div class="banner warn" style="font-size:12.5px"><i class="ti ti-alert-triangle"></i><span style="flex:1;min-width:0">잔액을 읽지 못했습니다 — ${esc(bal.error)}</span></div>`;
+    return;
+  }
+  if (bal.noField) {
+    box.innerHTML = `<div class="banner warn" style="font-size:12.5px"><i class="ti ti-alert-triangle"></i><span style="flex:1;min-width:0">거래는 읽었지만 은행이 잔액 항목을 보내주지 않았습니다.<br><span style="font-size:11px;color:var(--t3)">받은 항목: ${esc(bal.keys)}</span></span></div>`;
+    return;
+  }
+  box.innerHTML = `<div class="card" style="padding:12px 14px;margin:0;background:linear-gradient(180deg,#fffdf6,#fff)">
+    <div style="font-size:11.5px;color:var(--t3);margin-bottom:2px">${acc} 통장 잔액</div>
+    <div style="font-size:24px;font-weight:800;color:var(--gd);letter-spacing:-.5px">${fmtWon(bal.balance)}<span style="font-size:14px;font-weight:700;margin-left:2px">원</span></div>
+    <div style="font-size:11.5px;color:var(--t3);margin-top:3px">${esc(bal.at)} 마지막 거래 기준 · 관리자만 보입니다 (앱에 저장하지 않음)</div>
+  </div>`;
+}
+/* [잔액 조회] 버튼 — 최근 28일치를 수집해서 마지막 거래의 잔액을 읽는다 */
+async function bankBalanceRun() {
+  if (!isAdmin()) { toast('잔액 조회는 관리자만 가능합니다'); return; }
+  if (_bank.loading) return;
+  const sel = el('bk-acc'); const i = +(sel && sel.value); const a = _bank.accounts[i];
+  if (!a) { toast('계좌를 선택하세요'); return; }
+  const setSt = h => { if (el('bk-status')) el('bk-status').innerHTML = h; };
+  const ed = todayStr(), sd = _ymd(new Date(Date.now() - 27 * 86400000));
+  const f = v => String(v).replace(/-/g, '');
+  _bank.loading = true;
+  try {
+    if (el('bk-bal')) el('bk-bal').innerHTML = '';
+    setSt('은행에 잔액 조회 요청 중…');
+    const j = await _bankCall({ mode: 'job', bankCode: a.bankCode, accountNumber: a.accountNumber, sdate: f(sd), edate: f(ed) });
+    const jobID = j.jobID; if (!jobID) throw new Error('조회 요청 실패');
+    let done = false;
+    for (let n = 0; n < 30 && !done; n++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const s2 = await _bankCall({ mode: 'state', jobID: jobID });
+      const stt = s2.state || {};
+      if (String(stt.jobState) === '3') {
+        if (stt.errorCode && String(stt.errorCode) !== '1') throw new Error('조회 실패: ' + stt.errorCode + ' ' + (stt.errorReason || ''));
+        done = true;
+      } else setSt('은행에서 읽는 중… (' + ((n + 1) * 2) + '초)');
+    }
+    if (!done) throw new Error('조회가 오래 걸립니다. 잠시 후 다시 시도하세요.');
+    const bal = await _bankBalOf(jobID);
+    bankBalShow(bal, a);
+    setSt('');
+  } catch (e) { setSt('<span style="color:#c0341d">' + esc((e && e.message) || e) + '</span>'); }
+  finally { _bank.loading = false; }
+}
+
 /* ── 입금 가져오기 화면 ── */
 function openBankSync() {
   if (!isAdmin()) { toast('입금 조회는 관리자만 가능합니다'); return; }
   const ed = todayStr();
   const sd = _ymd(new Date(Date.now() - 29 * 86400000));
   openModal(`<div class="sheet-h"><h3><i class="ti ti-building-bank"></i>입금 내역 가져오기</h3><button class="x" onclick="closeModal()">×</button></div>
-    <div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i> 팝빌에 연결된 계좌에서 <b>입금</b> 내역을 가져와 앱에 저장합니다. 저장된 내역은 <b>거래처 원장</b>에서 계속 볼 수 있습니다.<br><b>은행 규정상 한 번에 1개월까지만</b> 조회됩니다 — 기간을 길게 잡으면 자동으로 달마다 나눠서 가져옵니다.</div>
+    <div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i> 팝빌에 연결된 계좌에서 <b>입금</b> 내역을 가져와 앱에 저장합니다. 저장된 내역은 <b>거래처 원장</b>에서 계속 볼 수 있습니다.<br><b>은행 규정상 한 번에 1개월까지만</b> 조회됩니다 — 기간을 길게 잡으면 자동으로 달마다 나눠서 가져옵니다.
+      <br><b>[잔액 조회]</b>는 최근 28일 거래를 읽어 <b>마지막 거래 직후의 통장 잔액</b>을 보여줍니다. 관리자에게만 보이고 앱에 저장하지 않습니다.</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">
       <div class="fld" style="flex:2;min-width:180px;margin:0"><label>계좌</label><select id="bk-acc" style="width:100%;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px"><option>불러오는 중…</option></select></div>
       <div class="fld" style="flex:1;min-width:130px;margin:0"><label>시작일</label><input type="date" id="bk-sd" value="${sd}" style="width:100%;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px"></div>
       <div class="fld" style="flex:1;min-width:130px;margin:0"><label>종료일</label><input type="date" id="bk-ed" value="${ed}" style="width:100%;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px"></div>
     </div>
-    <button class="btn btn-pri btn-block" style="margin-bottom:10px" onclick="bankRun()"><i class="ti ti-download"></i>입금 내역 가져오기</button>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <button class="btn btn-pri" style="flex:2" onclick="bankRun()"><i class="ti ti-download"></i>입금 내역 가져오기</button>
+      <button class="btn" style="flex:1" onclick="bankBalanceRun()"><i class="ti ti-wallet"></i>잔액 조회</button>
+    </div>
+    <div id="bk-bal" style="margin-bottom:8px"></div>
     <div id="bk-status" style="font-size:12px;color:var(--t3);margin-bottom:8px"></div>
     <div id="bk-body"></div>
     <div class="frm-foot"><button class="btn btn-block" onclick="closeModal()">닫기</button></div>`);
@@ -4808,7 +4915,7 @@ async function _bankFetchOne(a, sd, ed, setSt, label) {
   } else {
     for (const r of rows) { await Store.setMerge('banktx', r.id, r.row); saved++; }
   }
-  return { saved: saved, total: total, got: list.length };
+  return { saved: saved, total: total, got: list.length, jobID: jobID };
 }
 async function bankRun() {
   if (_bank.loading) return;
@@ -4821,12 +4928,15 @@ async function bankRun() {
   _bank.loading = true;
   try {
     const parts = _bankSplitRange(sdV, edV);
-    let saved = 0, cut = false;
+    let saved = 0, cut = false, lastJob = '';
     for (let p = 0; p < parts.length; p++) {
       const lab = parts.length > 1 ? `(${p + 1}/${parts.length})` : '';
       const r = await _bankFetchOne(a, parts[p][0], parts[p][1], setSt, lab);
       saved += r.saved; if (r.total > r.got) cut = true;
+      lastJob = r.jobID || lastJob;
     }
+    // 방금 끝낸 수집을 그대로 다시 읽는 것이라 추가 비용이 없다 → 잔액도 같이 보여준다
+    if (lastJob) { const bal = await _bankBalOf(lastJob); bankBalShow(bal, a); }
     setSt(`<b style="color:var(--gd)">입금 ${saved}건 저장됨</b>${cut ? ' <span style="color:var(--amber-t)">· 한 구간에 500건이 넘어 일부만 가져왔습니다. 기간을 좁혀 다시 받아주세요.</span>' : ''}`);
     const box = el('bk-body');
     if (box) box.innerHTML = `<div class="banner info" style="font-size:12.5px"><i class="ti ti-check"></i> 저장했습니다. <b>거래처 원장</b>에서 확인하세요.
@@ -5486,14 +5596,14 @@ function openTaxList() {
   if (!canTax()) { toast('세금계산서 조회 권한이 없습니다 — 관리자에게 문의하세요'); return; }
   openModal(`<div class="sheet-h"><h3><i class="ti ti-file-invoice"></i>세금계산서 발행 내역</h3><button class="x" onclick="closeModal()">×</button></div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
-      <button class="btn btn-sm" onclick="taxOpenBox()"><i class="ti ti-external-link"></i>팝빌 매출문서함 열기</button>
+      ${isAdmin() ? `<button class="btn btn-sm" onclick="taxOpenBox()"><i class="ti ti-external-link"></i>팝빌 매출문서함 열기</button>` : ''}
       <button class="btn btn-sm" onclick="taxPing2()"><i class="ti ti-plug-connected"></i>연동 상태</button>
-      <button class="btn btn-sm" onclick="popbillUrl('charge')"><i class="ti ti-coin"></i>포인트 충전</button>
-      <button class="btn btn-sm" onclick="popbillUrl('usehistory')"><i class="ti ti-receipt-2"></i>사용 내역</button>
+      ${isAdmin() ? `<button class="btn btn-sm" onclick="popbillUrl('charge')"><i class="ti ti-coin"></i>포인트 충전</button>
+      <button class="btn btn-sm" onclick="popbillUrl('usehistory')"><i class="ti ti-receipt-2"></i>사용 내역</button>` : ''}
       <div id="taxlist-ping" style="font-size:11.5px;color:var(--t3);align-self:center"></div>
     </div>
     <div id="taxlist-body">${taxListInner()}</div>
-    <div style="font-size:11px;color:var(--t3);margin-top:9px;line-height:1.6">· <b>팝빌 매출문서함</b>에서 수정·취소·재전송·이메일 재발송을 할 수 있습니다.<br>· 앱 목록의 <i class="ti ti-refresh" style="font-size:12px"></i> 는 국세청 전송 상태를 다시 읽어옵니다.</div>
+    <div style="font-size:11px;color:var(--t3);margin-top:9px;line-height:1.6">${isAdmin() ? '· <b>팝빌 매출문서함</b>에서 수정·취소·재전송·이메일 재발송을 할 수 있습니다.<br>' : ''}· 앱 목록의 <i class="ti ti-refresh" style="font-size:12px"></i> 는 국세청 전송 상태를 다시 읽어옵니다.</div>
     <div class="frm-foot"><button class="btn btn-block" onclick="closeModal()">닫기</button></div>`);
 }
 /* 발행 내역 창에서 쓰는 연동 상태 확인 */
