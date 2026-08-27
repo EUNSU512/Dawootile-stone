@@ -9240,7 +9240,13 @@ function openShipForm(pre) {
           <option value="__manual">직접 입력 (현장·기타)</option>
         </select>
       </div>
-      <div class="fld full hidden" id="o-dest-manual"><label>출고지 직접 입력</label><input id="o-dest-text" placeholder="현장명/출고지 입력" autocomplete="off"></div>
+      <div class="fld full hidden" id="o-dest-manual"><label>출고지 직접 입력</label><input id="o-dest-text" placeholder="공장명/출고지 입력" autocomplete="off" oninput="shipDestTyped()"></div>
+      <div class="fld full" style="margin-top:-4px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600;font-size:12.5px;color:var(--t2)">
+          <input type="checkbox" id="o-dest-same" style="width:17px;height:17px" onchange="shipDestSame()">
+          받는 공장이 <b style="color:var(--tx)">업체명과 같음</b> <span style="font-weight:400;color:var(--t3);font-size:11.5px">(체크하면 위 업체명이 출고지로 들어갑니다)</span>
+        </label>
+      </div>
       <div class="fld full"><label>현장 주소 <span style="color:var(--t3);font-weight:500">(어느 현장 자재인지 공장에 알려주는 칸 · 견적서에 적어두면 자동으로 들어옵니다)</span></label><input id="o-siteaddr" lang="ko" placeholder="예: OO시 OO구 OO동 OO현장" value="${esc((pre && pre.siteAddr) || '')}" autocomplete="off"></div>
       <div class="fld full"><label>메모 <span style="color:var(--t3);font-weight:500">(출고 전 특이사항 — 출고증 아래에 인쇄)</span></label><input id="o-note" placeholder="선택"></div>
       <div class="fld full" style="background:#fff2f0;border-radius:9px;padding:10px 12px"><label style="display:flex;align-items:center;gap:9px;cursor:pointer;font-weight:600;color:#b42318"><input type="checkbox" id="o-damaged" style="width:18px;height:18px"> <i class="ti ti-alert-square-rounded"></i>파손 자재 출고 <span style="font-weight:400;color:var(--t3);font-size:12px">(체크 시 파손 재고에서 차감 — 폐기·반품)</span></label></div>
@@ -9248,6 +9254,8 @@ function openShipForm(pre) {
     <div class="frm-foot"><button class="btn" style="flex:1" onclick="closeModal()">취소</button><button class="btn btn-pri" style="flex:2" onclick="submitShip()"><i class="ti ti-check"></i>출고 등록</button></div>`);
   if (pre && pre.targetName && el('o-targetName')) el('o-targetName').value = pre.targetName;
   /* 출고지는 자재를 받는 공장이라 견적서만 보고는 알 수 없다 → 자동으로 채우지 않고 직접 고르게 둔다. */
+  const _tn = el('o-targetName');
+  if (_tn) _tn.addEventListener('input', () => { const ck = el('o-dest-same'); if (ck && ck.checked) { const t = el('o-dest-text'); if (t) t.value = (_tn.value || '').trim(); } });
   mrowLotRefresh();
 }
 function pickOutItem() {
@@ -9255,9 +9263,29 @@ function pickOutItem() {
   const it = state.inventory.find(i => i.id === id); if (!it) return;
   el('o-material').value = it.name; computeOutHebe();
 }
+/* '받는 공장이 업체명과 같음' 체크 — 위에 적은 업체명을 출고지로 그대로 넣는다.
+   체크해 둔 동안은 업체명을 고칠 때마다 출고지도 같이 따라간다. */
+function shipDestSame() {
+  const ck = el('o-dest-same'); if (!ck) return;
+  const sel = el('o-dest'), txt = el('o-dest-text');
+  if (ck.checked) {
+    const nm = ((el('o-targetName') && el('o-targetName').value) || '').trim();
+    if (!nm) { ck.checked = false; toast('업체명을 먼저 입력하세요'); return; }
+    if (sel) { sel.value = '__manual'; onShipDest(); }
+    if (txt) txt.value = nm;
+  } else if (txt) { txt.value = ''; }
+}
+/* 출고지를 손으로 고치면 '업체명과 같음' 은 자동으로 풀린다 (실제와 다른데 체크만 남는 걸 막는다) */
+function shipDestTyped() {
+  const ck = el('o-dest-same'); if (!ck || !ck.checked) return;
+  const nm = ((el('o-targetName') && el('o-targetName').value) || '').trim();
+  const v = ((el('o-dest-text') && el('o-dest-text').value) || '').trim();
+  if (v !== nm) ck.checked = false;
+}
 function onShipDest() {
   const sel = el('o-dest'), box = el('o-dest-manual');
   if (!sel || !box) return;
+  if (sel.value !== '__manual') { const ck = el('o-dest-same'); if (ck) ck.checked = false; }   // 공장을 직접 고르면 체크는 푼다
   if (sel.value === '__manual') { box.classList.remove('hidden'); setTimeout(() => el('o-dest-text') && el('o-dest-text').focus(), 50); }
   else box.classList.add('hidden');
 }
