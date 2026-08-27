@@ -3796,7 +3796,38 @@ function quoteGetPrice(client, name, typeOverride) {
   if (pl) { const v = +pl[ctypeKey(type)] || 0; if (v) return v; }
   const it = (state.inventory || []).find(i => _normName(i.name) === nm); return it ? (+it.price || 0) : 0;
 }
-function quoteNextDocNo() { const d = todayStr().replace(/-/g, ''); const n = (state.quotes || []).filter(q => (q.docNo || '').startsWith('Q' + d)).length; return 'Q' + d + '-' + (n + 1); }
+/* 오늘의 다음 견적번호.
+   ★ 예전에는 '오늘 견적 개수 + 1' 이었다 → 중간에 한 건 지우면 번호가 하나 줄어
+     이미 있는 번호를 다시 내주고, 같은 번호를 가진 견적이 두 개가 됐다.
+     세금계산서 문서번호를 견적번호로 쓰기 때문에 두 번째 건은 '동일한 문서번호 사용중' 오류가 났다.
+   그래서 '이미 쓴 번호 중 가장 큰 것 + 1' 로 바꾸고, 그래도 겹치면 한 칸씩 밀어준다. */
+function quoteNextDocNo() {
+  const d = todayStr().replace(/-/g, '');
+  const pre = 'Q' + d + '-';
+  const used = new Set(); let max = 0;
+  (state.quotes || []).forEach(q => {
+    const t = String((q && q.docNo) || '');
+    if (t.indexOf(pre) !== 0) return;
+    used.add(t);
+    const v = parseInt(t.slice(pre.length), 10);
+    if (isFinite(v) && v > max) max = v;
+  });
+  let v = max + 1;
+  while (used.has(pre + v) && v < max + 500) v++;
+  return pre + v;
+}
+/* ── 세금계산서 문서번호(팝빌 관리번호) 겹침 막기 ──────────────
+   팝빌은 한 번 쓴 문서번호를 영원히 다시 못 쓴다.
+   견적번호가 중복된 예전 자료가 있으므로, 이미 쓰인 번호면 -2, -3 … 을 붙여 피한다. */
+function taxKeyInUse(key, myId) {
+  const k = String(key || '').trim(); if (!k) return false;
+  return (state.quotes || []).some(x => x && x.id !== myId && String(x.taxMgtKey || '').trim() === k);
+}
+function taxFreeMgtKey(base, myId) {
+  if (!taxKeyInUse(base, myId)) return base;
+  for (let i = 2; i <= 30; i++) { const k = base + '-' + i; if (!taxKeyInUse(k, myId)) return k; }
+  return base + '-' + Date.now().toString(36).slice(-4).toUpperCase();
+}
 let _qN = 0;
 /* ===== 세면대 단가 자동계산 (dawoo-basin-price 이식 · 직원용) ===== */
 const BC_SIZES = [["800*550*180",380000,50000,80000,800],["900*550*180",400000,50000,80000,900],["1000*550*180",420000,50000,80000,1000],["1100*550*180",440000,60000,100000,1100],["1200*550*180",470000,60000,100000,1200],["1300*550*180",500000,60000,100000,1300],["1400*550*180",540000,70000,110000,1400],["1500*550*180",580000,70000,110000,1500],["1600*550*180",620000,90000,130000,1600],["1700*550*180",670000,90000,130000,1700],["1800*550*180",720000,90000,130000,1800],["1900*550*180",770000,100000,140000,1900],["2000 이상 (별도 견적)",null,null,null,2000]];
@@ -4621,8 +4652,10 @@ function buildTaxPayload(id) {
   const _telM = String(co.tel || '').match(/0\d{1,2}[-\s]?\d{3,4}[-\s]?\d{4}/);
   const _invTel = _telM ? _telM[0].replace(/\s/g, '') : '';
   // 문서관리번호: 재발행이면 -R1, -R2 … 로 새 번호(같은 번호로 다시 발행하면 팝빌에서 중복 오류)
-  const _mgtBase = String(q.docNo || ('Q' + Date.now())).replace(/[^0-9A-Za-z\-_]/g, '').slice(0, 20) || ('Q' + Date.now());
+  const _rawBase = String(q.docNo || ('Q' + Date.now())).replace(/[^0-9A-Za-z\-_]/g, '').slice(0, 20) || ('Q' + Date.now());
   const _reN = q.taxMgtKey ? ((+q.taxReissue || 0) + 1) : 0;
+  // 재발행이면 이 견적이 쓰던 번호를 그대로 이어서 -R2, -R3 … / 첫 발행이면 안 겹치는 번호를 고른다
+  const _mgtBase = _reN ? String(q.taxMgtKey).replace(/-R\d+$/, '') : taxFreeMgtKey(_rawBase, q.id);
   const _mgtKey = _reN ? (_mgtBase + '-R' + _reN) : _mgtBase;
   const items = (q.items || []).filter(it => (+it.amt || 0) !== 0 || (+it.qty || 0) !== 0);   // 환불(마이너스) 행도 그대로 넣는다
   const _gag = items.filter(isGagongItem), _rest = items.filter(it => !isGagongItem(it));
@@ -5755,9 +5788,25 @@ async function submitTaxInvoice(id) {
     await saveClientTaxInfo(q.client, buyer);
     try { const _ct = classifyCtype(buyer.bizType, buyer.bizClass, buyer.corpName); const _c = (state.clients || []).find(x => _normName(x.value) === _normName(q.client)); if (_c && (_c.ctype || '') !== _ct) await Store.update('clients', _c.id, { ctype: _ct }); } catch (e) { }
     const token = await auth.currentUser.getIdToken();
-    const r = await fetch(PUSH_FN + '?action=taxinvoice', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify(payload) });
-    const j = await r.json().catch(() => ({}));
+    const send = async pl => {
+      const rr = await fetch(PUSH_FN + '?action=taxinvoice', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify(pl) });
+      return { r: rr, j: await rr.json().catch(() => ({})) };
+    };
+    let { r, j } = await send(payload);
+    /* 팝빌은 한 번 쓴 문서번호를 다시 못 쓴다.
+       앱이 모르는 사이 그 번호가 팝빌에서 이미 쓰였을 수 있으므로(예전 발행분·다른 경로),
+       '동일한 문서번호' 오류면 번호 뒤에 -2, -3 … 을 붙여 최대 5번까지 자동으로 다시 시도한다. */
+    const _dupErr = x => /동일한\s*문서번호|이미\s*등록된\s*문서번호|11000009/.test(String((x && x.error) || ''));
+    if (!(r.ok && j.ok) && _dupErr(j)) {
+      const _base = String(payload.mgtKey || '').replace(/-\d+$/, '');
+      for (let i = 2; i <= 6 && !(r.ok && j.ok) && _dupErr(j); i++) {
+        payload.mgtKey = _base + '-' + i;
+        toast('문서번호가 이미 쓰였습니다 — ' + payload.mgtKey + ' 로 다시 시도 중…');
+        ({ r, j } = await send(payload));
+      }
+    }
     if (r.ok && j.ok) { await Store.update('quotes', id, { taxInvoice: true, taxDate: todayStr(), ntsConfirmNum: j.ntsConfirmNum || '', taxMgtKey: j.mgtKey || payload.mgtKey, taxReissue: _reN, taxTestMode: !!j.test, taxSupply: payload.supplyCostTotal, taxVat: payload.taxTotal, taxTotal: payload.totalAmount, taxIssuedAt: Date.now() }); _taxDraft = null; closeModal(); toast('세금계산서 발행 완료' + (j.ntsConfirmNum ? (' · 승인 ' + j.ntsConfirmNum) : '')); filters.taxEdit = ''; renderQuote(); qListRestore(); setTimeout(() => openTaxResult(id), 350); }   // 발행된 내용을 바로 확인할 수 있게
+    else if (_dupErr(j)) { toast('문서번호가 모두 사용중입니다 — 견적번호를 바꾸고 다시 시도해 주세요'); }
     else { toast('발행 실패: ' + ((j && j.error) || ('HTTP ' + r.status))); }
   } catch (e) { toast('발행 오류: ' + ((e && e.message) || e)); }
   finally { setTimeout(() => { _busy = false; }, 700); }
