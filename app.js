@@ -8098,9 +8098,77 @@ function renderBillEdit() {
         <button class="btn btn-sm" onclick="billClearDc()"><i class="ti ti-x"></i>해제</button>
       </div>
       <div style="font-size:10.5px;color:var(--t3);margin-top:5px">합계에서 이 금액만큼 그대로 빼고 청구서에 <b>할인 (D/C)</b> 한 줄로 찍힙니다. 견적서 원본은 바뀌지 않습니다.</div>
-      <button class="btn btn-pri btn-block" style="margin-top:10px" onclick="billEditPrint()"><i class="ti ti-printer"></i>이 내용으로 청구서 출력</button>
+      <div style="display:flex;gap:6px;margin-top:10px">
+        <button class="btn btn-pri" style="flex:1.5" onclick="billEditCopy()"><i class="ti ti-clipboard"></i>이미지 복사</button>
+        <button class="btn btn-pri" style="flex:1.5" onclick="billEditPng()"><i class="ti ti-photo-down"></i>PNG 저장</button>
+        <button class="btn" style="flex:1" onclick="billEditPrint()"><i class="ti ti-printer"></i>출력</button>
+      </div>
+      <div style="font-size:10.5px;color:var(--t3);margin-top:5px;text-align:center">복사하면 카톡·문자에 바로 붙여넣을 수 있습니다</div>
     </div>
     ${groups}`;
+}
+/* ══════════════════════════════════════════════════════════
+   문서(견적서·청구서) 를 이미지로 — 인쇄 대신 바로 보내려고
+   화면 밖 iframe 에 그린 뒤 캔버스로 뜬다.
+   ★ 묶음 청구서는 품목이 많으면 A4 한 장보다 길어지므로
+     높이를 고정하지 않고 실제 내용 높이만큼 잰다. (단품 견적서는 항상 한 장)
+   ══════════════════════════════════════════════════════════ */
+function _docCanvas(html) {
+  return new Promise((resolve, reject) => {
+    const render = () => {
+      const ifr = document.createElement('iframe');
+      ifr.setAttribute('aria-hidden', 'true');
+      ifr.style.cssText = 'position:fixed;left:-10000px;top:0;width:760px;height:1200px;border:0;background:#fff';
+      document.body.appendChild(ifr);
+      const d = ifr.contentDocument; d.open(); d.write(html); d.close();
+      setTimeout(async () => {
+        try {
+          const page = d.getElementById('page');
+          if (!page) throw new Error('page 없음');
+          const h = Math.max(1047, page.scrollHeight);      // 내용이 길면 그만큼
+          ifr.style.height = (h + 80) + 'px';               // 잘리지 않게 창도 키운다
+          await new Promise(r => setTimeout(r, 180));
+          const canvas = await html2canvas(page, { scale: 2, backgroundColor: '#ffffff', width: 718, height: h, windowWidth: 760, windowHeight: h + 80 });
+          ifr.remove(); resolve(canvas);
+        } catch (e) { ifr.remove(); reject(e); }
+      }, 800);
+    };
+    if (window.html2canvas) render();
+    else { const sc = document.createElement('script'); sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js'; sc.onload = render; sc.onerror = () => reject(new Error('load')); document.head.appendChild(sc); }
+  });
+}
+/* 지금 편집 화면의 내용으로 청구서 HTML 과 파일명을 만든다 */
+function _billDocNow() {
+  const t = billEditTotals();
+  if (!t.n) { toast('청구할 품목을 하나 이상 선택하세요'); return null; }
+  const qs = _billQs().filter(q => _billEdit.items.some(x => x.qid === q.id && x.on));
+  if (!qs.length) { toast('청구할 품목이 없습니다'); return null; }
+  const html = combinedBillDocHtml(qs, _billEdit.items.filter(x => x.on), t.dc);
+  const client = (qs[0] && qs[0].client || '').replace(/\s/g, '');
+  return { html: html, name: '청구서_' + client + '_' + todayStr() + '.png' };
+}
+async function billEditPng() {
+  const doc = _billDocNow(); if (!doc) return;
+  toast('이미지 만드는 중…');
+  try {
+    const canvas = await _docCanvas(doc.html);
+    const a = document.createElement('a'); a.download = doc.name; a.href = canvas.toDataURL('image/png');
+    document.body.appendChild(a); a.click(); a.remove();
+    toast('PNG 저장됨');
+  } catch (e) { toast('이미지 생성 실패 — 출력으로 저장해 주세요'); }
+}
+function billEditCopy() {
+  const doc = _billDocNow(); if (!doc) return;
+  if (!(navigator.clipboard && window.ClipboardItem)) { toast('이 브라우저는 이미지 복사가 안 됩니다 — PNG로 저장해 주세요'); return; }
+  toast('이미지 복사 중…');
+  /* ClipboardItem 에 Promise 를 그대로 넘겨야 한다 —
+     await 로 먼저 풀면 사용자 동작과 끊겨 브라우저가 복사를 막는다 */
+  const blobP = _docCanvas(doc.html).then(c => new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('blob')), 'image/png')));
+  try {
+    navigator.clipboard.write([new ClipboardItem({ 'image/png': blobP })])
+      .then(() => toast('이미지가 복사되었습니다 · 붙여넣기(Ctrl+V) 하세요'))
+      .catch(() => toast('복사 실패 — PNG로 저장해 주세요'));
+  } catch (e) { toast('복사 실패 — PNG로 저장해 주세요'); }
 }
 function billEditPrint() {
   const t = billEditTotals();
