@@ -7705,11 +7705,25 @@ function _quoteListInner() {
   const cBasin = baseForStat.filter(_isBasinPend).length;
   if (_confFn[fConf]) list = list.filter(_confFn[fConf]);
   if (_statFn[fStat]) list = list.filter(_statFn[fStat]);
+  /* ── 분류 축 (세라믹+세면대 / 석재 / 통관비용) ──
+     걸러내는 기준은 견적서에 고른 '분류'칸(q.category).
+     금액은 품목마다 따로 재는데(itemCategory), 한 견적에 석재와 세라믹이 섞여 있어도
+     각각 제 몫만큼 잡히게 하기 위해서다. */
+  const fCat = filters.qCat || 'all';
+  const _catOf = q => { const c = (q.category || '').trim(); return QCATS.indexOf(c) >= 0 ? c : '세라믹+세면대'; };
+  const cCat = {}; QCATS.forEach(c => cCat[c] = 0);
+  baseForStat.forEach(q => { cCat[_catOf(q)]++; });
+  if (fCat !== 'all') list = list.filter(q => _catOf(q) === fCat);
+  const chipK = (v, label, cnt) => `<button class="chip ${fCat === v ? 'active' : ''}" onclick="quoteSetCat('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? 'var(--gd)' : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
   const chipC = (v, label, cnt, col) => `<button class="chip ${fConf === v ? 'active' : ''}" onclick="quoteSetConf('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? (col || 'var(--t2)') : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
   const chipS = (v, label, cnt, col) => `<button class="chip ${fStat === v ? 'active' : ''}" onclick="quoteSetStat('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? (col || 'var(--red-t)') : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
   const _lbl = { all: '', conf: '확정', pending: '미확정' }[fConf] + (fConf !== 'all' && fStat !== 'all' ? ' · ' : '') +
     ({ all: '', notax: '계산서 미발행', tax: '계산서 발행', paid: '결제 완료', unpaid: '미결제', basin: '세면대 미발주' }[fStat] || '');
   const statChips = `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+      <span style="font-size:11px;color:var(--t3);width:38px;flex:none">분류</span>
+      ${chipK('all', '전체')}${QCATS.map(c => chipK(c, c, cCat[c])).join('')}
+    </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
       <span style="font-size:11px;color:var(--t3);width:38px;flex:none">주문</span>
       ${chipC('all', '전체')}${chipC('pending', '미확정', cPending, 'var(--amber-t)')}${chipC('conf', '확정', cConf, 'var(--gd)')}
@@ -7721,8 +7735,39 @@ function _quoteListInner() {
       ${chipS('notax', '계산서 미발행', cNoTax)}${chipS('tax', '계산서 발행', cTax, 'var(--gd)')}
       <span style="width:1px;background:var(--bd);margin:2px 3px"></span>
       ${chipS('basin', '세면대 미발주', cBasin, 'var(--amber-t)')}
-      ${(fConf !== 'all' || fStat !== 'all') ? `<button class="chip" style="margin-left:auto" onclick="quoteClearFilter()"><i class="ti ti-x"></i>필터 해제</button>` : ''}
+      ${(fConf !== 'all' || fStat !== 'all' || fCat !== 'all') ? `<button class="chip" style="margin-left:auto" onclick="quoteClearFilter()"><i class="ti ti-x"></i>필터 해제</button>` : ''}
     </div>`;
+  /* ── 분류별 금액 카드 — 금액은 품목 하나하나를 보고 나눈다 ──
+     견적서의 분류칸은 한 건에 하나뿐이라, 석재와 세라믹이 같이 든 견적은
+     분류칸만 보면 한쪽으로 몰린다. 그래서 금액만은 품목 기준으로 쪼갠다. */
+  const catAmt = {}; QCATS.forEach(c => catAmt[c] = { sup: 0, tot: 0, n: 0 });
+  list.forEach(q => {
+    const its = (q.items || []).filter(it => (it.name || '').trim());
+    if (!its.length) { const c = _catOf(q); catAmt[c].sup += (+q.supply || 0); catAmt[c].tot += (+q.total || 0); catAmt[c].n++; return; }
+    const seen = {};
+    let sumAll = 0; its.forEach(it => sumAll += Math.round(+it.amt || 0));
+    its.forEach(it => {
+      const c = itemCategory(it.name); if (!catAmt[c]) return;
+      const amt = Math.round(+it.amt || 0);
+      catAmt[c].sup += amt;
+      // 합계(부가세·할인 반영)는 품목 금액 비율만큼 나눠 준다
+      catAmt[c].tot += sumAll ? Math.round((+q.total || 0) * (amt / sumAll)) : 0;
+      seen[c] = 1;
+    });
+    Object.keys(seen).forEach(c => catAmt[c].n++);
+  });
+  const _catIcon = { '세라믹+세면대': 'grid-dots', '석재': 'diamond', '통관비용': 'ship' };
+  const _catCol = { '세라믹+세면대': 'var(--gd)', '석재': '#7c3aed', '통관비용': '#b45309' };
+  const catBar = `<div class="card" style="margin-bottom:10px;padding:11px 13px">
+    <div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:8px"><i class="ti ti-chart-pie"></i> 분류별 금액 <span style="font-weight:500">· 품목 기준 (한 견적에 섞여 있으면 나눠서 셉니다)</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px">
+      ${QCATS.map(c => `<div style="padding:9px 8px;background:var(--soft);border-radius:10px;text-align:center">
+        <div style="font-size:11px;color:var(--t2);margin-bottom:3px"><i class="ti ti-${_catIcon[c] || 'tag'}"></i> ${esc(c)}</div>
+        <div style="font-size:16px;font-weight:800;color:${_catCol[c]}">${fmtWon(catAmt[c].tot)}</div>
+        <div style="font-size:10.5px;color:var(--t3);margin-top:2px">공급가 ${fmtWon(catAmt[c].sup)} · ${catAmt[c].n}건</div>
+      </div>`).join('')}
+    </div>
+  </div>`;
   // 필터별 요약 바
   let unpaidBar = '';
   if (fConf !== 'all' || fStat !== 'all') {
@@ -7775,13 +7820,14 @@ function _quoteListInner() {
   } else {
     body = list.length ? list.map(quoteCardHtml).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${qy ? '검색 결과가 없습니다' : '작성한 견적이 없습니다. 견적 작성으로 시작하세요.'}</div>`;
   }
-  return `${statChips}${unpaidBar}${navBar}<div id="q-list" data-keepscroll style="max-height:calc(100vh - 300px);min-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${body}</div>`;
+  return `${statChips}${catBar}${unpaidBar}${navBar}<div id="q-list" data-keepscroll style="max-height:calc(100vh - 300px);min-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${body}</div>`;
 }
 function quotesFilter() { const w = el('q-listwrap'); if (!w) { renderQuote(); return; } w.innerHTML = _quoteListInner(); }
 /* 견적 필터는 두 축을 겹쳐서 쓴다: (확정/미확정) × (결제·계산서·세면대) */
+function quoteSetCat(v) { filters.qCat = v; quotesFilter(); }
 function quoteSetConf(v) { filters.qConf = v; quotesFilter(); }
 function quoteSetStat(v) { filters.qStat = v; quotesFilter(); }
-function quoteClearFilter() { filters.qConf = 'all'; filters.qStat = 'all'; quotesFilter(); }
+function quoteClearFilter() { filters.qConf = 'all'; filters.qStat = 'all'; filters.qCat = 'all'; quotesFilter(); }
 /* 상단 '확정 미수금' 카드 → 확정 주문 중 미결제만 보기 */
 function quoteShowConfUnpaid() {
   filters.qConf = 'conf'; filters.qStat = 'unpaid'; quotesFilter();
