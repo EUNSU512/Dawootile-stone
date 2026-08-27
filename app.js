@@ -4585,17 +4585,30 @@ function buildTaxPayload(id) {
   const _mgtKey = _reN ? (_mgtBase + '-R' + _reN) : _mgtBase;
   const items = (q.items || []).filter(it => (+it.amt || 0) !== 0 || (+it.qty || 0) !== 0);   // 환불(마이너스) 행도 그대로 넣는다
   const _gag = items.filter(isGagongItem), _rest = items.filter(it => !isGagongItem(it));
-  const detailList = _rest.map(it => { const sc = Math.round(+it.amt || 0); return { itemName: it.name, spec: it.spec || '', qty: it.qty || '', unitCost: it.price || '', supplyCost: sc, tax: Math.round(sc * 0.1), remark: '' }; });
+  /* ★ 품목 금액(amt)은 보통 '공급가액'인데, 단가를 부가세 포함으로 넣은 견적이 간혹 있다.
+     그런 건을 그대로 보내면 계산서가 견적보다 10% 크게 나간다 → 그런 건만 공급가액을 역산한다.
+     판별은 견적 전체 기준: 품목합이 supply 와 다르고 total 과 같으면 VAT 포함으로 넣은 것. */
+  const _sumAmt = (q.items || []).reduce((a, it) => a + Math.round(+it.amt || 0), 0);
+  const _vatIncl = Math.abs(_sumAmt - (+q.supply || 0)) >= 2 && Math.abs(_sumAmt - (+q.total || 0)) < 2;
+  const _supOf = it => { const raw = Math.round(+it.amt || 0); return _vatIncl ? Math.round(raw / 1.1) : raw; };
+  const _priceOf = it => { const p = +it.price || 0; if (!p) return it.price || ''; return _vatIncl ? Math.round(p / 1.1) : p; };
+  const detailList = _rest.map(it => { const sc = _supOf(it); return { itemName: it.name, spec: it.spec || '', qty: it.qty || '', unitCost: _priceOf(it), supplyCost: sc, tax: Math.round(sc * 0.1), remark: '' }; });
   if (_gag.length) {   // 가공비는 '세라믹 가공' 한 줄로 합침 — 세무서에서 가공 내용 구분 요청
-    const sc = _gag.reduce((a, it) => a + Math.round(+it.amt || 0), 0);
+    const sc = _gag.reduce((a, it) => a + _supOf(it), 0);
     const nm = _gag.map(it => it.name);
     const spec = nm.length <= 3 ? nm.join(', ') : (nm.slice(0, 2).join(', ') + ' 외 ' + (nm.length - 2));
     detailList.push({ itemName: TAX_GAGONG_NAME, spec: spec, qty: 1, unitCost: sc, supplyCost: sc, tax: Math.round(sc * 0.1), remark: '' });
   }
-  // 할인(D/C) — 견적에 적은 할인 금액을 그대로 마이너스 한 줄로 넣는다 (사용자 지정 방식).
-  // 팝빌 규격상 supplyCost / tax 는 마이너스 입력이 허용된다.
+  /* 할인(D/C) — '할인 (D/C)' 한 줄로 따로 빼는 건 그대로 두되,
+     그 줄의 금액을 공급가액분과 세액분으로 나눠 넣는다.
+       공급가액분 = round(할인 / 1.1) · 세액분 = 나머지
+     이렇게 해야 계산서의 세액이 공급가액의 10% 로 맞는다. 합계는 견적 합계 그대로다.
+     (공급가액에서만 통째로 빼면 세액이 10% 를 넘어 국세청 서식과 어긋난다) */
   const _dc = Math.round(+q.discount || 0);
-  if (_dc > 0) detailList.push({ itemName: TAX_DC_NAME, spec: '', qty: '', unitCost: -_dc, supplyCost: -_dc, tax: 0, remark: '' });
+  if (_dc > 0) {
+    const _dcSup = Math.round(_dc / 1.1);
+    detailList.push({ itemName: TAX_DC_NAME, spec: '', qty: '', unitCost: -_dcSup, supplyCost: -_dcSup, tax: -(_dc - _dcSup), remark: '' });
+  }
   const supplyTotal = detailList.reduce((a, b) => a + (+b.supplyCost || 0), 0);
   const taxTotal = detailList.reduce((a, b) => a + (+b.tax || 0), 0); const totalAmount = supplyTotal + taxTotal;
   const remark1 = taxRemarkOf(q);   // 계산서 비고 = 현장명(없으면 견적번호)
