@@ -4484,6 +4484,7 @@ function renderTaxForm() {
     <div id="taxform-root" class="card" style="padding:15px 17px">
       <div style="font-weight:800;font-size:13px;color:var(--gd);margin-bottom:9px">공급받는자 (거래처)</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px"><div class="fld" style="flex:1;min-width:180px;margin:0"><label>사업자등록번호 *</label><div style="display:flex;gap:6px"><input id="tx-bizno" onchange="taxBuyerTouch()" inputmode="numeric" value="${esc(ti.bizNo || '')}" placeholder="000-00-00000" style="${inp}"><button class="btn btn-sm btn-pri" style="flex:none;white-space:nowrap" onclick="lookupBizInfo()"><i class="ti ti-search"></i>조회</button></div></div>${fld('tx-corp', '상호', ti.corpName || q.client)}</div>
+      <div id="tx-bizmsg" style="font-size:11.5px;margin:-3px 0 8px"></div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">${fld('tx-ceo', '대표자', ti.ceo)}${fld('tx-contact', '담당자', ti.contact)}</div>
       <div class="fld full" style="margin-bottom:8px"><label>주소</label><input id="tx-addr" onchange="taxBuyerTouch()" lang="ko" value="${esc(ti.addr || '')}" style="${inp}"></div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">${fld('tx-biztype', '업태', ti.bizType)}${fld('tx-bizclass', '종목', ti.bizClass)}</div>
@@ -5779,12 +5780,30 @@ async function lookupBizInfo() {
     const token = await auth.currentUser.getIdToken();
     const r = await fetch(PUSH_FN + '?action=bizinfo', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify({ corpNum: corpNum, memberCorpNum: co.bizno }) });
     const j = await r.json().catch(() => ({}));
-    if (!(r.ok && j.ok)) { toast('조회 실패: ' + ((j && j.error) || ('HTTP ' + r.status))); return; }
+    const msg = el('tx-bizmsg');
+    if (!(r.ok && j.ok)) {
+      toast('조회 실패: ' + ((j && j.error) || ('HTTP ' + r.status)));
+      if (msg) msg.innerHTML = '<span style="color:#c0341d"><i class="ti ti-alert-triangle"></i> 조회 실패 — ' + esc((j && j.error) || ('HTTP ' + r.status)) + '</span>';
+      return;
+    }
+    /* ★ 국세청에 기업정보가 없는 사업자가 꽤 있다 (특히 개인사업자).
+         그럴 때 팝빌은 오류가 아니라 '전부 빈 값'으로 응답한다.
+         예전에는 그 빈 값을 그대로 분류에 넣어 '소비자'로 판정하고
+         거래처 유형까지 소비자로 덮어써 버렸다 — 유형은 단가에 영향을 주므로 위험했다.
+         이제는 자료가 없으면 아무것도 건드리지 않고 직접 입력하라고 안내만 한다. */
+    const got = !!(j.corpName || j.addr || j.bizType || j.bizClass);
+    if (!got) {
+      if (msg) msg.innerHTML = '<span style="color:#a2560f"><i class="ti ti-info-circle"></i> 국세청에 등록된 기업정보가 없는 사업자번호입니다. <b>상호·주소·업태·종목을 직접 입력</b>해 주세요.'
+        + (j.resultMessage ? ' <span style="color:var(--t3)">(' + esc(j.resultMessage) + ')</span>' : '') + '</span>';
+      toast('기업정보가 조회되지 않습니다 — 직접 입력해 주세요');
+      return;                                   // 거래처 유형도 그대로 둔다
+    }
     if (j.corpName && el('tx-corp')) el('tx-corp').value = j.corpName;
     if (j.ceo && el('tx-ceo')) el('tx-ceo').value = j.ceo;
     if (j.addr && el('tx-addr')) el('tx-addr').value = j.addr;
     if (j.bizType && el('tx-biztype')) el('tx-biztype').value = j.bizType;
     if (j.bizClass && el('tx-bizclass')) el('tx-bizclass').value = j.bizClass;
+    const hasCat = !!(j.bizType || j.bizClass);
     const ct = classifyCtype(j.bizType, j.bizClass, j.corpName);
     const warn = (+j.closeDownState === 2) ? ' · ⚠폐업' : ((+j.closeDownState === 3) ? ' · ⚠휴업' : '');
     // 거래처에 등록(세금정보 + 유형)
@@ -5794,9 +5813,14 @@ async function lookupBizInfo() {
       const buyer = Object.assign(taxBuyerFromForm(q.client), { bizNo: corpNum });
       await saveClientTaxInfo(q.client, buyer);
       const c = (state.clients || []).find(x => _normName(x.value) === _normName(q.client));
-      if (c && (c.ctype || '') !== ct) { try { await Store.update('clients', c.id, { ctype: ct }); } catch (e) { } }
+      // 업태·종목이 실제로 있을 때만 유형을 고친다 (빈 값으로 '소비자' 덮어쓰기 방지)
+      if (hasCat && c && (c.ctype || '') !== ct) { try { await Store.update('clients', c.id, { ctype: ct }); } catch (e) { } }
     }
-    toast('조회완료 · 유형: ' + ct + warn);
+    if (msg) msg.innerHTML = '<span style="color:var(--gd)"><i class="ti ti-check"></i> 조회완료'
+      + (hasCat ? (' · 유형 <b>' + esc(ct) + '</b>') : ' <span style="color:var(--t3)">(업태·종목이 없어 유형은 그대로 둡니다)</span>')
+      + (j.ceo ? '' : ' <span style="color:var(--t3)">· 대표자는 국세청 자료에 없어 비어 있을 수 있습니다</span>')
+      + (warn ? ('<span style="color:#c0341d">' + esc(warn) + '</span>') : '') + '</span>';
+    toast('조회완료' + (hasCat ? (' · 유형: ' + ct) : '') + warn);
   } catch (e) { toast('조회 오류: ' + ((e && e.message) || e)); }
 }
 /* ── 견적 기본설정: 비고 양식 · 거래처 유형 · 자재별 유형단가 ── */
