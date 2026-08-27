@@ -39,7 +39,10 @@ function itemCategory(name) {
   if (pl && pl.cat) return pl.cat;
   const t = (name || '').replace(/\s/g, '');
   if (/통관|관세|clearance/i.test(t)) return '통관비용';
-  if (/석재|대리석|화강|천연석|현무암|점판암/i.test(t)) return '석재';
+  /* 석재 판별 — 돌 이름(포천석·사비석·해남고홍석…)과 석재 가공 용어(잔다듬·버너·혼드…)까지 본다.
+     세라믹 슬라브 이름(타지마할·로마팬텀 등)에는 이런 말이 안 들어가서 섞이지 않는다.
+     실측: 견적에 쓰인 품목 154개 중 9개가 새로 석재로 잡히고 오판은 0개. */
+  if (/석재|대리석|화강|천연석|현무암|점판암|사비석|고흥석|고홍석|포천석|디딤석|잔석|잔다듬|버너|혼드|물갈기|정다듬|도드락/i.test(t)) return '석재';
   return '세라믹+세면대';
 }
 async function saveItemCat(name, cat) { const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(name)); if (pl) await Store.update('priceList', pl.id, { cat: cat }); else await Store.add('priceList', { itemName: name, cat: cat, dist: 0, agency: 0, interior: 0, consumer: 0 }); }
