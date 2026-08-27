@@ -130,6 +130,15 @@ function daysFromNow(d) { if (!d) return null; return Math.ceil((new Date(d + 'T
 function initial(n) { return (n || '?').trim().slice(-2); }
 function toast(msg) { const t = el('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(t._t); t._t = setTimeout(() => t.classList.remove('show'), 2200); }
 function isAdmin() { return me && me.role === 'admin'; }
+/* 세금계산서(발행·조회) 권한 — 관리자는 항상, 직원은 설정에서 끄지 않는 한 허용.
+   시공팀·거래처 계정은 어떤 경우에도 안 된다.
+   `canTax` 가 없으면(예전 직원 자료) 허용으로 본다 — 직원은 기본 켜짐. */
+function canTax() {
+  if (isAdmin()) return true;
+  const lm = (typeof liveMe === 'function' ? liveMe() : me) || {};
+  if ((lm.role || '') !== 'staff') return false;
+  return lm.canTax !== false;
+}
 function isCustomerRole() { return me && me.role === 'customer'; }  // 고객(거래처) — 재고 조회 전용
 function isCrewRole() { return me && me.role === 'crew'; }  // 시공팀 — 자기 시공 스케줄만
 function isRestrictedRole() { return isCustomerRole() || isCrewRole(); }
@@ -4410,7 +4419,7 @@ async function taxSaveClientNow(quiet) {
   } catch (e) { if (!quiet) toast('저장 실패: ' + ((e && e.message) || e)); }
 }
 function openTaxForm(id) {
-  if (!isAdmin()) { toast('세금계산서 발행은 관리자만 가능합니다'); return; }
+  if (!canTax()) { toast('세금계산서 발행 권한이 없습니다 — 관리자에게 문의하세요'); return; }
   qListSave();                           // 보던 위치 기억 → 나올 때 그대로 되돌린다
   filters.taxEdit = id; renderQuote(); _pageScrollTo(0);
 }
@@ -5465,7 +5474,7 @@ function taxListInner() {
     </tbody></table></div>`;
 }
 function openTaxList() {
-  if (!isAdmin()) { toast('세금계산서 조회는 관리자만 가능합니다'); return; }
+  if (!canTax()) { toast('세금계산서 조회 권한이 없습니다 — 관리자에게 문의하세요'); return; }
   openModal(`<div class="sheet-h"><h3><i class="ti ti-file-invoice"></i>세금계산서 발행 내역</h3><button class="x" onclick="closeModal()">×</button></div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
       <button class="btn btn-sm" onclick="taxOpenBox()"><i class="ti ti-external-link"></i>팝빌 매출문서함 열기</button>
@@ -6451,7 +6460,7 @@ function quoteCardHtml(q) {
           <button class="btn btn-sm btn-ghost" title="PNG 저장" onclick="downloadQuotePng('${q.id}')"><i class="ti ti-photo"></i></button>
           <button class="btn btn-sm btn-ghost" title="이미지 복사" onclick="copyQuoteImage('${q.id}')"><i class="ti ti-clipboard"></i></button>
         </span>
-        ${(isAdmin() && q.ordered) ? (q.taxMgtKey
+        ${(canTax() && q.ordered) ? (q.taxMgtKey
           /* 이미 발행한 건은 '조회'만 보여준다. 수정발행은 조회 창 안에서 넘어간다. */
           ? `<button class="btn btn-sm" style="color:var(--gd)" onclick="openTaxResult('${q.id}')" title="발행한 계산서 조회"><i class="ti ti-file-search"></i>계산서 조회</button>`
           : `<button class="btn btn-sm" style="color:var(--gd)" onclick="openTaxForm('${q.id}')" title="세금계산서 발행"><i class="ti ti-file-invoice"></i>계산서</button>`) : ''}
@@ -7662,7 +7671,7 @@ function renderQuote() {
     <button class="btn btn-sm ${filters.quoteBundle ? 'btn-pri' : ''}" style="margin-left:auto" onclick="quoteToggleBundle()"><i class="ti ti-stack-2"></i> 묶음청구</button></div>`;
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${isAdmin() ? `<button class="btn btn-sm" onclick="openLedger()"><i class="ti ti-book"></i>거래처 원장</button><button class="btn btn-sm" onclick="openTaxList()"><i class="ti ti-file-invoice"></i>계산서 내역</button>` : ''}<button class="btn btn-sm" onclick="openCutSim()"><i class="ti ti-layout-grid"></i>재단도</button><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${isAdmin() ? `<button class="btn btn-sm" onclick="openLedger()"><i class="ti ti-book"></i>거래처 원장</button>` : ''}${canTax() ? `<button class="btn btn-sm" onclick="openTaxList()"><i class="ti ti-file-invoice"></i>계산서 내역</button>` : ''}<button class="btn btn-sm" onclick="openCutSim()"><i class="ti ti-layout-grid"></i>재단도</button><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
       <button class="stat tap" onclick="quoteShowConfUnpaid()" title="확정 주문 중 미결제만 보기"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(unpaidConf)}</div><div class="l">확정 미수금 <i class="ti ti-chevron-right tap-arrow"></i></div><div class="s">${_confUnpaidList.length}건 · 확정 전 포함 ${fmtWon(unpaid)}</div></button>
       <button class="stat tap" onclick="quoteSetConf('all');quoteSetStat('notax')" title="계산서 미발행만 보기"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행 <i class="ti ti-chevron-right tap-arrow"></i></div></button>
@@ -10809,7 +10818,9 @@ function openMemberForm(id) {
       <div class="fld full"><div class="perm-head"><label style="margin:0"><i class="ti ti-lock-access"></i> 메뉴 접근 권한 <span style="color:var(--t3);font-weight:500">— 직원 권한일 때 적용</span></label>
         <div class="perm-quick"><button type="button" onclick="menuPermAll(true)">전체 허용</button><button type="button" onclick="menuPermAll(false)">전체 해제</button></div></div>
         <div class="perm-grid">${ALL_TABS.filter(t => !ALWAYS_TABS.includes(t)).map(t => { const sens = RESTRICTED_TABS.includes(t); return `<div class="perm-row${sens ? ' sens' : ''}"><span class="perm-lab"><i class="ti ${TAB_ICONS[t] || 'ti-square'}"></i>${TAB_LABELS[t]}${sens ? '<span class="pbadge">민감</span>' : ''}</span><label class="swt"><input type="checkbox" class="m-menu" value="${t}" ${curMenus.includes(t) ? 'checked' : ''}><span class="track"></span></label></div>`; }).join('')}</div>
-        <div style="font-size:11px;color:var(--t3);margin-top:7px;line-height:1.5">· 홈 · 설정은 항상 접근 가능 · 관리자는 전체 접근 · <b>정산</b>은 민감 정보라 기본 꺼짐</div></div>
+        <div style="font-size:11px;color:var(--t3);margin-top:7px;line-height:1.5">· 홈 · 설정은 항상 접근 가능 · 관리자는 전체 접근 · <b>정산</b>은 민감 정보라 기본 꺼짐</div>
+        <div class="perm-row" style="margin-top:9px"><span class="perm-lab"><i class="ti ti-file-invoice"></i>세금계산서 발행·조회<span class="pbadge" style="background:#eaf1fe;color:#1b4fb0">과금</span></span><label class="swt"><input type="checkbox" id="m-cantax" ${v.canTax === false ? '' : 'checked'}><span class="track"></span></label></div>
+        <div style="font-size:11px;color:var(--t3);margin-top:5px;line-height:1.5">· 켜면 그 직원도 계산서를 <b>발행하고 조회</b>할 수 있습니다. 발행하면 국세청으로 실제 전송되고 팝빌 포인트가 빠집니다.<br>· 거래처 원장과 입금 조회는 관리자만 볼 수 있습니다.</div></div>
 
     </div>
     ${m && v.email ? `<div class="fld full" style="margin-bottom:12px"><label><i class="ti ti-key" style="font-size:13px;color:var(--blue)"></i> 비밀번호 변경 <span style="color:var(--t3);font-weight:500">— 메일 없이 바로 적용(가메일 계정 가능)</span></label>
@@ -10854,7 +10865,7 @@ async function submitMember(id) {
   if (state.members.some(m => m.id !== id && (m.email || '').toLowerCase() === email)) { toast('이미 등록된 이메일입니다'); return; }
   const _menus = Array.from(document.querySelectorAll('.m-menu')).filter(c => c.checked).map(c => c.value);
   const obj = { name, role: el('m-role').value, email, phone: (el('m-phone') && el('m-phone').value || '').trim() };
-  if (obj.role === 'staff') obj.menus = _menus;
+  if (obj.role === 'staff') { obj.menus = _menus; obj.canTax = !!(el('m-cantax') && el('m-cantax').checked); }
   const prevEmail = id ? ((state.members.find(m => m.id === id) || {}).email || '').toLowerCase() : '';
   if (id) await Store.update('members', id, obj); else await Store.add('members', obj);
   await setRoleDoc(email, obj.role, name, prevEmail);
