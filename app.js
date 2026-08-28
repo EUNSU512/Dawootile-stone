@@ -3836,14 +3836,45 @@ const BC_NATL = [[300000,400000,600000],[500000,600000,660000],[800000,900000,11
 const BC_STD = [[420000,540000,680000],[420000,540000,680000],[360000,460000,580000]];
 const BC_ROUND = [[400000,450000,550000],[480000,550000,650000]];
 const BC_BIZ = { dist: 0, interior: 1, consumer: 2 };
+/* 견적서 '단가 유형' → 세면대 계산기 '업체 구분'
+   세면대 계산기에는 유통/인테리어/소비자 세 가지뿐이라 이렇게 맞춘다.
+   · 유통·대리점 → 유통 단가   · 인테리어 → 인테리어 단가   · 소비자 → 소비자 단가
+   · 별도(예외 단가 업체)는 자동으로 정하지 않는다 — 직원이 직접 고르게 두고 안내만 띄운다. */
+const BC_FROM_CTYPE = { '유통': 'dist', '대리점': 'dist', '인테리어': 'interior', '소비자': 'consumer' };
+function bcBizFromCtype() {
+  const e = (typeof el === 'function') ? el('q-ctype') : null;
+  const t = (e && e.value) || '';
+  return BC_FROM_CTYPE[t] || '';          // 없으면 '' = 자동 지정 안 함
+}
+/* 견적의 단가 유형이 바뀌면(=거래처를 바꿔서 유형이 따라 바뀐 경우 포함)
+   직원이 아직 손대지 않은 세면대 계산기의 업체 구분을 같이 맞춰준다. */
+function bcSyncAllBiz() {
+  const want = bcBizFromCtype();
+  document.querySelectorAll('.q-row').forEach(row => {
+    const sel = row.querySelector('.bc-biz'); if (!sel) return;
+    if (sel.dataset.touched === '1') return;        // 직접 고른 건 건드리지 않는다
+    if (want && sel.value !== want) sel.value = want;
+    try { basinCalcRow(row); } catch (e) { }
+  });
+}
+/* 사용자가 업체 구분을 직접 바꾸면 그 뒤로는 자동으로 안 건드린다 */
+function bcBizTouched(sel) {
+  if (sel) sel.dataset.touched = '1';
+  try { basinCalcRow(sel.closest('.q-row')); } catch (e) { }
+}
 function basinCalcHtml(isBasin) {
   const sizeOpts = BC_SIZES.map((x, i) => `<option value="${i}">${esc(x[0])}</option>`).join('');
   const inp = 'font-size:13px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px;background:#fff';
+  const _bcAuto = bcBizFromCtype();                       // 견적 단가 유형에서 자동으로 고른 업체 구분
+  const _bcCt = (el('q-ctype') && el('q-ctype').value) || '';
   return `<div class="q-bcalc" style="display:${isBasin ? 'block' : 'none'};margin-bottom:8px;border:1.5px solid #f0c060;background:#fffaf0;border-radius:10px;padding:9px 10px">
     <div style="font-size:11.5px;font-weight:700;color:#8a5a00;margin-bottom:7px"><i class="ti ti-calculator"></i> 세면대 단가 자동계산 <span style="font-weight:500;color:var(--t3)">· 직원용 (적용 후 수동 수정 가능)</span></div>
+    <div class="bc-auto-note" style="font-size:11px;margin:-3px 0 7px">${_bcAuto
+      ? `<span style="color:#0f766e"><i class="ti ti-wand"></i> 거래처 유형이 <b>${esc(_bcCt)}</b> 라서 업체 구분을 자동으로 맞췄습니다 (직접 바꿔도 됩니다)</span>`
+      : (_bcCt ? `<span style="color:#a2560f"><i class="ti ti-alert-circle"></i> 거래처 유형이 <b>${esc(_bcCt)}</b> 라 자동 지정이 안 됩니다 — 업체 구분을 직접 골라주세요</span>` : '')}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
       <select class="bc-cat" onchange="basinCalcRow(this.closest('.q-row'))" style="${inp}"><option value="mono">모놀리스(주문제작)</option><option value="natl">국내제작(조건별)</option><option value="std">규격 600×470×200</option><option value="round">라운드형</option></select>
-      <select class="bc-biz" onchange="basinCalcRow(this.closest('.q-row'))" style="${inp}"><option value="dist">유통 업체</option><option value="interior">인테리어 업체</option><option value="consumer" selected>소비자</option></select>
+      <select class="bc-biz" onchange="bcBizTouched(this)" style="${inp}"><option value="dist"${_bcAuto === 'dist' ? ' selected' : ''}>유통 업체</option><option value="interior"${_bcAuto === 'interior' ? ' selected' : ''}>인테리어 업체</option><option value="consumer"${_bcAuto && _bcAuto !== 'consumer' ? '' : ' selected'}>소비자</option></select>
       <select class="bc-size bc-mono" onchange="basinCalcRow(this.closest('.q-row'))" style="${inp}">${sizeOpts}</select>
       <select class="bc-mat bc-mono" onchange="basinCalcRow(this.closest('.q-row'))" style="${inp}"><option value="base">15티 열성형</option><option value="front">팬텀 화이트</option><option value="back">아스펜라이트그레이</option><option value="back">알래스카</option></select>
       <select class="bc-skirt bc-mono" onchange="basinCalcRow(this.closest('.q-row'))" style="${inp}"><option value="-30000">상판만(-3만)</option><option value="0" selected>치마 180 기본</option><option value="30000">200~250(+3만)</option><option value="60000">251~300(+6만)</option><option value="90000">301~350(+9만)</option><option value="120000">351~400(+12만)</option><option value="150000">401~450(+15만)</option><option value="180000">451~500(+18만)</option></select>
@@ -3943,7 +3974,7 @@ function quoteMatPick(inp) {
   const priceEl = row.querySelector('.q-price'); const p = quoteGetPrice(client, name, type); if (p && !_numv(priceEl.value)) priceEl.value = p;
   const wrap = row.querySelector('.q-stone-wrap'); if (wrap) wrap.style.display = name.includes('세면대') ? 'block' : 'none';
   const avEl = row.querySelector('.q-avail'); if (avEl) avEl.innerHTML = qAvailText(name);
-  const bc = row.querySelector('.q-bcalc'); if (bc) { const on = name.includes('세면대'); bc.style.display = on ? 'block' : 'none'; if (on) basinCalcRow(row); }
+  const bc = row.querySelector('.q-bcalc'); if (bc) { const on = name.includes('세면대'); bc.style.display = on ? 'block' : 'none'; if (on) { bcSyncAllBiz(); bcNoteRefresh(); } }
   const hb = row.querySelector('.q-hebe'); if (hb) hb.style.display = name.includes('세면대') ? 'none' : 'flex';
   const hh = row.querySelector('.q-hebe-hint'); if (hh) { const hpj = it ? (+it.hebePerJang || 0) : 0; hh.textContent = hpj > 0 ? ('1장 ' + hpj + '㎡') : ''; }
   quoteRecalc();
@@ -3989,9 +4020,20 @@ function quoteClientChanged() {
   const cs = el('q-ctype'); if (cs) { const c = (state.clients || []).find(x => _normName(x.value) === _normName(client)); if (c && c.ctype) cs.value = c.ctype; }
   quoteRefillPrices();
   quoteExtraRefresh();
+  bcSyncAllBiz(); bcNoteRefresh();          // 거래처가 바뀌면 세면대 계산기 업체 구분도 따라간다
   const hb = el('q-holdbox'); if (hb) hb.innerHTML = quoteHoldBoxHtml(client);
 }
-function quoteTypeChanged() { quoteRefillPrices(); quoteExtraRefresh(); }
+function quoteTypeChanged() { quoteRefillPrices(); quoteExtraRefresh(); bcSyncAllBiz(); bcNoteRefresh(); }
+/* 안내 문구만 다시 그린다 (업체 구분 select 는 건드리지 않음) */
+function bcNoteRefresh() {
+  const auto = bcBizFromCtype();
+  const ct = (el('q-ctype') && el('q-ctype').value) || '';
+  document.querySelectorAll('.bc-auto-note').forEach(nEl => {
+    nEl.innerHTML = auto
+      ? `<span style="color:#0f766e"><i class="ti ti-wand"></i> 거래처 유형이 <b>${esc(ct)}</b> 라서 업체 구분을 자동으로 맞췄습니다 (직접 바꿔도 됩니다)</span>`
+      : (ct ? `<span style="color:#a2560f"><i class="ti ti-alert-circle"></i> 거래처 유형이 <b>${esc(ct)}</b> 라 자동 지정이 안 됩니다 — 업체 구분을 직접 골라주세요</span>` : '');
+  });
+}
 function quoteRefillPrices() {
   const client = (el('q-client') && el('q-client').value || '').trim();
   const type = el('q-ctype') ? el('q-ctype').value : '';
@@ -4221,6 +4263,8 @@ function renderQuoteForm() {
         <button class="btn" onclick="quoteCancel()"><i class="ti ti-list"></i>목록</button>
         <button class="btn btn-pri" style="flex:1.4" onclick="submitQuote('${editing ? q.id : ''}')"><i class="ti ti-check"></i>${editing ? '저장' : '견적 저장'}</button></div>
     </div>`;
+  // 행 HTML 은 #q-ctype 이 화면에 붙기 전에 만들어지므로, 붙인 뒤에 세면대 업체구분을 다시 맞춘다
+  bcSyncAllBiz(); bcNoteRefresh();
   quoteRecalc();
 }
 function collectQItems() {
