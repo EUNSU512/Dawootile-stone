@@ -3932,6 +3932,29 @@ function qAvailText(name) {
   const col = av <= 0 ? '#c0341d' : (av <= (+it.safeJang || 0) ? '#b45309' : '#0f766e');
   return `<span style="color:${col};font-weight:600"><i class="ti ti-packages" style="font-size:12px;vertical-align:-1px"></i> 가용 ${av}장${hebe ? ` · ${hebe}㎡` : ''}${av <= 0 ? ' (재고 없음)' : ''}</span>`;
 }
+/* 이 행의 '1장당 ㎡' — 재고에 등록된 값이 우선, 없으면 규격 칸(예: 1600*3200*12)에서 계산 */
+function qRowHebePerJang(row) {
+  if (!row) return 0;
+  const name = ((row.querySelector('.q-mat') || {}).value || '').trim();
+  const it = (state.inventory || []).find(x => _normName(x.name) === _normName(name));
+  let h = it ? (+it.hebePerJang || 0) : 0;
+  if (!(h > 0)) { try { h = parseSpec(((row.querySelector('.q-spec') || {}).value || '')).hebePerJang || 0; } catch (e) { h = 0; } }
+  return h > 0 ? h : 0;
+}
+/* 장당 단가 아래에 ㎡당 단가를 같이 보여준다.
+   장 단위로만 보면 단가가 맞는지 바로 안 보여서, 늘 쓰는 ㎡ 기준으로 한 줄 더 띄운다. */
+function qPerHebeRefresh(row) {
+  const box = row && row.querySelector('.q-perhebe'); if (!box) return;
+  const name = ((row.querySelector('.q-mat') || {}).value || '').trim();
+  if (name.includes('세면대')) { box.innerHTML = ''; return; }          // 세면대는 장 단위가 아니다
+  const h = qRowHebePerJang(row);
+  const price = _numv((row.querySelector('.q-price') || {}).value);
+  if (!(h > 0)) { box.innerHTML = name ? '<span style="color:var(--t3)">규격이 없어 ㎡당 단가를 계산할 수 없습니다</span>' : ''; return; }
+  if (!(price > 0)) { box.innerHTML = '<span style="color:var(--t3)">1장 ' + h + '㎡</span>'; return; }
+  const per = Math.round(price / h);
+  box.innerHTML = '<span style="color:var(--t3)"><i class="ti ti-ruler-2" style="font-size:12px;vertical-align:-1px"></i> ㎡당</span> '
+    + '<b style="color:var(--gd);font-size:13.5px">' + fmtWon(per) + '</b><span style="color:var(--t3)">원 · 1장 ' + h + '㎡</span>';
+}
 function qRowHtml(d) {
   d = d || {}; const i = _qN++; const inp = 'font-size:14px;padding:8px;border:1.5px solid var(--bd2);border-radius:8px'; const _isBasin = (d.name || '').includes('세면대');
   return `<div class="q-row" style="border:1px solid var(--bd2);border-radius:10px;padding:8px 9px;margin-bottom:8px">
@@ -3943,12 +3966,13 @@ function qRowHtml(d) {
     <div class="q-stone-wrap" style="margin-bottom:6px;display:${_isBasin ? 'block' : 'none'}"><select class="q-stone" style="width:100%;font-size:14px;padding:8px;border:1.5px solid var(--bd2);border-radius:8px;background:#fff"><option value="">— 석종(컬러) 선택 · 세면대 발주에 적용 —</option>${BASIN_STONES.map(st => `<option value="${esc(st.k)}" ${d.stone === st.k ? 'selected' : ''}>${esc(st.k)}${st.t ? ' · ' + st.t : ''}</option>`).join('')}</select></div>
     ${basinCalcHtml(_isBasin)}
     <div style="display:flex;gap:6px;align-items:center">
-      <input class="q-spec" lang="en" placeholder="규격" value="${esc(d.spec || '')}" style="flex:1.7;min-width:0;${inp}">
+      <input class="q-spec" lang="en" placeholder="규격" value="${esc(d.spec || '')}" oninput="quoteRecalc()" style="flex:1.7;min-width:0;${inp}">
       <input class="q-qty" inputmode="text" placeholder="수량" value="${esc(d.qty || '')}" oninput="quoteRecalc()" style="flex:1;min-width:44px;${inp};text-align:right">
       <button type="button" class="btn btn-sm" title="환불(마이너스) 전환" onclick="qFlipQty(this)" style="flex:none;padding:8px 7px;font-weight:800">±</button>
       <input class="q-price" inputmode="numeric" placeholder="단가" value="${esc(d.price || '')}" oninput="quoteRecalc()" style="flex:1.3;min-width:56px;${inp};text-align:right">
       <div class="q-amt" style="flex:1.4;min-width:62px;text-align:right;font-weight:700;padding:8px 2px;color:var(--t1);font-size:14px">0</div>
     </div>
+    <div class="q-perhebe" style="font-size:11.5px;text-align:right;margin:4px 2px 0;min-height:15px"></div>
     <div class="q-hebe" style="display:${_isBasin ? 'none' : 'flex'};gap:6px;align-items:center;margin-top:6px">
       <span style="white-space:nowrap;font-size:12px;color:var(--t3)"><i class="ti ti-ruler-2" style="font-size:12px;vertical-align:-1px"></i> ㎡당 단가</span>
       <input class="q-hebeprice" inputmode="numeric" placeholder="헤베당 단가 입력 → 장당 자동" oninput="quoteHebeToPrice(this)" style="flex:1;min-width:0;font-size:13px;padding:6px 8px;border:1.5px solid var(--bd2);border-radius:8px;text-align:right">
@@ -4046,7 +4070,7 @@ function quoteRefillPrices() {
 let _qRawTotal = 0;
 function quoteRecalc() {
   let supply = 0;
-  document.querySelectorAll('#q-rows .q-row').forEach(r => { const qty = _numv(r.querySelector('.q-qty').value); const price = _numv(r.querySelector('.q-price').value); const amt = Math.round(qty * price); const ac = r.querySelector('.q-amt'); ac.textContent = fmtWon(amt); ac.style.color = amt < 0 ? '#c0341d' : 'var(--t1)'; supply += amt; });
+  document.querySelectorAll('#q-rows .q-row').forEach(r => { const qty = _numv(r.querySelector('.q-qty').value); const price = _numv(r.querySelector('.q-price').value); const amt = Math.round(qty * price); const ac = r.querySelector('.q-amt'); ac.textContent = fmtWon(amt); ac.style.color = amt < 0 ? '#c0341d' : 'var(--t1)'; supply += amt; try { qPerHebeRefresh(r); } catch (e) { } });
   try { qMarkMinus(); } catch (e) { }
   document.querySelectorAll('.qx-row').forEach(r => { const qty = _numv(r.querySelector('.qx-qty').value); const price = _numv(r.querySelector('.qx-price').value); const amt = Math.round(qty * price); r.querySelector('.qx-amt').textContent = fmtWon(amt); supply += amt; });
   const noteEl = el('q-basin-note');
