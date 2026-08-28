@@ -3849,11 +3849,14 @@ function bcBizFromCtype() {
 /* 견적의 단가 유형이 바뀌면(=거래처를 바꿔서 유형이 따라 바뀐 경우 포함)
    직원이 아직 손대지 않은 세면대 계산기의 업체 구분을 같이 맞춰준다. */
 function bcSyncAllBiz() {
-  const want = bcBizFromCtype();
+  /* 자동으로 정할 수 없는 유형(별도 등)은 기본값 '소비자'로 되돌린다.
+     ★ 행 HTML 은 새 폼이 화면에 붙기 전에 만들어져서 '이전 폼'의 단가 유형을 읽는다.
+       그래서 여기서 반드시 다시 정해줘야 앞 견적의 값이 남지 않는다. */
+  const want = bcBizFromCtype() || 'consumer';
   document.querySelectorAll('.q-row').forEach(row => {
     const sel = row.querySelector('.bc-biz'); if (!sel) return;
     if (sel.dataset.touched === '1') return;        // 직접 고른 건 건드리지 않는다
-    if (want && sel.value !== want) sel.value = want;
+    if (sel.value !== want) sel.value = want;
     try { basinCalcRow(row); } catch (e) { }
   });
 }
@@ -3870,8 +3873,8 @@ function basinCalcHtml(isBasin) {
   return `<div class="q-bcalc" style="display:${isBasin ? 'block' : 'none'};margin-bottom:8px;border:1.5px solid #f0c060;background:#fffaf0;border-radius:10px;padding:9px 10px">
     <div style="font-size:11.5px;font-weight:700;color:#8a5a00;margin-bottom:7px"><i class="ti ti-calculator"></i> 세면대 단가 자동계산 <span style="font-weight:500;color:var(--t3)">· 직원용 (적용 후 수동 수정 가능)</span></div>
     <div class="bc-auto-note" style="font-size:11px;margin:-3px 0 7px">${_bcAuto
-      ? `<span style="color:#0f766e"><i class="ti ti-wand"></i> 거래처 유형이 <b>${esc(_bcCt)}</b> 라서 업체 구분을 자동으로 맞췄습니다 (직접 바꿔도 됩니다)</span>`
-      : (_bcCt ? `<span style="color:#a2560f"><i class="ti ti-alert-circle"></i> 거래처 유형이 <b>${esc(_bcCt)}</b> 라 자동 지정이 안 됩니다 — 업체 구분을 직접 골라주세요</span>` : '')}</div>
+      ? `<span style="color:#0f766e"><i class="ti ti-wand"></i> 거래처 유형 <b>${esc(_bcCt)}</b> 에 맞춰 업체 구분을 자동으로 골랐습니다 (직접 바꿔도 됩니다)</span>`
+      : (_bcCt ? `<span style="color:#a2560f"><i class="ti ti-alert-circle"></i> 거래처 유형 <b>${esc(_bcCt)}</b> 는 자동으로 정할 수 없습니다 — 업체 구분을 직접 골라주세요</span>` : '')}</div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
       <select class="bc-cat" onchange="basinCalcRow(this.closest('.q-row'))" style="${inp}"><option value="mono">모놀리스(주문제작)</option><option value="natl">국내제작(조건별)</option><option value="std">규격 600×470×200</option><option value="round">라운드형</option></select>
       <select class="bc-biz" onchange="bcBizTouched(this)" style="${inp}"><option value="dist"${_bcAuto === 'dist' ? ' selected' : ''}>유통 업체</option><option value="interior"${_bcAuto === 'interior' ? ' selected' : ''}>인테리어 업체</option><option value="consumer"${_bcAuto && _bcAuto !== 'consumer' ? '' : ' selected'}>소비자</option></select>
@@ -4030,8 +4033,8 @@ function bcNoteRefresh() {
   const ct = (el('q-ctype') && el('q-ctype').value) || '';
   document.querySelectorAll('.bc-auto-note').forEach(nEl => {
     nEl.innerHTML = auto
-      ? `<span style="color:#0f766e"><i class="ti ti-wand"></i> 거래처 유형이 <b>${esc(ct)}</b> 라서 업체 구분을 자동으로 맞췄습니다 (직접 바꿔도 됩니다)</span>`
-      : (ct ? `<span style="color:#a2560f"><i class="ti ti-alert-circle"></i> 거래처 유형이 <b>${esc(ct)}</b> 라 자동 지정이 안 됩니다 — 업체 구분을 직접 골라주세요</span>` : '');
+      ? `<span style="color:#0f766e"><i class="ti ti-wand"></i> 거래처 유형 <b>${esc(ct)}</b> 에 맞춰 업체 구분을 자동으로 골랐습니다 (직접 바꿔도 됩니다)</span>`
+      : (ct ? `<span style="color:#a2560f"><i class="ti ti-alert-circle"></i> 거래처 유형 <b>${esc(ct)}</b> 는 자동으로 정할 수 없습니다 — 업체 구분을 직접 골라주세요</span>` : '');
   });
 }
 function quoteRefillPrices() {
