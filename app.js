@@ -3932,6 +3932,32 @@ function qAvailText(name) {
   const col = av <= 0 ? '#c0341d' : (av <= (+it.safeJang || 0) ? '#b45309' : '#0f766e');
   return `<span style="color:${col};font-weight:600"><i class="ti ti-packages" style="font-size:12px;vertical-align:-1px"></i> 가용 ${av}장${hebe ? ` · ${hebe}㎡` : ''}${av <= 0 ? ' (재고 없음)' : ''}</span>`;
 }
+/* ── 고른 자재는 이름을 못 고치게 잠근다 ────────────────────
+   이름을 손으로 고치면 저장할 때 `quoteLearnPrice()` 가 그 이름으로 단가표에 새 항목을
+   만들어버려서, 오타 하나에 쓸데없는 품목이 계속 쌓였다.
+   그래서 재고·단가표에 등록된 자재를 고르면 이름칸을 잠그고,
+   바꾸려면 행을 통째로 지우고 다시 고르게 한다.
+   등록되지 않은 이름(=아예 새로 쓰는 경우)은 그대로 고칠 수 있다. */
+function qIsRegisteredMat(name) {
+  const k = _normName((name || '').trim()); if (!k) return false;
+  if ((state.inventory || []).some(x => _normName(x.name) === k)) return true;
+  if ((state.priceList || []).some(x => _normName(x.itemName) === k)) return true;
+  return false;
+}
+function qLockNote(name) {
+  return qIsRegisteredMat(name)
+    ? ' <span style="color:var(--t3)"><i class="ti ti-lock" style="font-size:11px;vertical-align:-1px"></i> 선택한 자재 · 바꾸려면 오른쪽 ✕로 줄을 지우고 다시 고르세요</span>'
+    : '';
+}
+const Q_LOCK_TITLE = '선택한 자재는 이름을 고칠 수 없습니다. 바꾸려면 오른쪽 ✕로 이 줄을 지우고 다시 고르세요.';
+function qLockMat(row) {
+  const inp = row && row.querySelector('.q-mat'); if (!inp) return;
+  const on = qIsRegisteredMat(inp.value);
+  inp.readOnly = on;
+  inp.style.background = on ? 'var(--soft)' : '';
+  inp.style.fontWeight = on ? '700' : '';
+  inp.title = on ? Q_LOCK_TITLE : '';
+}
 /* 이 행의 '1장당 ㎡' — 재고에 등록된 값이 우선, 없으면 규격 칸(예: 1600*3200*12)에서 계산 */
 function qRowHebePerJang(row) {
   if (!row) return 0;
@@ -3957,12 +3983,13 @@ function qPerHebeRefresh(row) {
 }
 function qRowHtml(d) {
   d = d || {}; const i = _qN++; const inp = 'font-size:14px;padding:8px;border:1.5px solid var(--bd2);border-radius:8px'; const _isBasin = (d.name || '').includes('세면대');
+  const _lockMat = qIsRegisteredMat(d.name);
   return `<div class="q-row" style="border:1px solid var(--bd2);border-radius:10px;padding:8px 9px;margin-bottom:8px">
     <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
-      <input class="q-mat" list="q-mat-list" lang="ko" placeholder="자재명 (선택/입력)" value="${esc(d.name || '')}" onchange="quoteMatPick(this)" style="flex:2.4;min-width:0;${inp}">
-      <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.q-row').remove();quoteRecalc()" aria-label="삭제"><i class="ti ti-x"></i></button>
+      <input class="q-mat" list="q-mat-list" lang="ko" placeholder="자재명 (선택/입력)" value="${esc(d.name || '')}" onchange="quoteMatPick(this)"${_lockMat ? ` readonly title="${esc(Q_LOCK_TITLE)}"` : ''} style="flex:2.4;min-width:0;${inp}${_lockMat ? ';background:var(--soft);font-weight:700' : ''}">
+      <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.q-row').remove();quoteRecalc()" aria-label="삭제" title="이 품목 줄을 통째로 삭제"><i class="ti ti-x"></i></button>
     </div>
-    <div class="q-avail" style="font-size:11.5px;margin:-2px 2px 6px;min-height:14px">${qAvailText(d.name)}</div>
+    <div class="q-avail" style="font-size:11.5px;margin:-2px 2px 6px;min-height:14px">${qAvailText(d.name)}${qLockNote(d.name)}</div>
     <div class="q-stone-wrap" style="margin-bottom:6px;display:${_isBasin ? 'block' : 'none'}"><select class="q-stone" style="width:100%;font-size:14px;padding:8px;border:1.5px solid var(--bd2);border-radius:8px;background:#fff"><option value="">— 석종(컬러) 선택 · 세면대 발주에 적용 —</option>${BASIN_STONES.map(st => `<option value="${esc(st.k)}" ${d.stone === st.k ? 'selected' : ''}>${esc(st.k)}${st.t ? ' · ' + st.t : ''}</option>`).join('')}</select></div>
     ${basinCalcHtml(_isBasin)}
     <div style="display:flex;gap:6px;align-items:center">
@@ -4000,7 +4027,8 @@ function quoteMatPick(inp) {
   const type = el('q-ctype') ? el('q-ctype').value : '';
   const priceEl = row.querySelector('.q-price'); const p = quoteGetPrice(client, name, type); if (p && !_numv(priceEl.value)) priceEl.value = p;
   const wrap = row.querySelector('.q-stone-wrap'); if (wrap) wrap.style.display = name.includes('세면대') ? 'block' : 'none';
-  const avEl = row.querySelector('.q-avail'); if (avEl) avEl.innerHTML = qAvailText(name);
+  const avEl = row.querySelector('.q-avail'); if (avEl) avEl.innerHTML = qAvailText(name) + qLockNote(name);
+  qLockMat(row);                                  // 등록된 자재를 고르면 이름칸 잠금
   const bc = row.querySelector('.q-bcalc'); if (bc) { const on = name.includes('세면대'); bc.style.display = on ? 'block' : 'none'; if (on) { bcSyncAllBiz(); bcNoteRefresh(); } }
   const hb = row.querySelector('.q-hebe'); if (hb) hb.style.display = name.includes('세면대') ? 'none' : 'flex';
   const hh = row.querySelector('.q-hebe-hint'); if (hh) { const hpj = it ? (+it.hebePerJang || 0) : 0; hh.textContent = hpj > 0 ? ('1장 ' + hpj + '㎡') : ''; }
