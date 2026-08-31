@@ -7034,20 +7034,85 @@ function hebeFromSpec(spec) { const m = (spec || '').match(/(\d{3,4})\s*[*xX×]\
 function costGubunOf(name) { const n = (name || ''); if (/운송|배송|운반|파렛트|팔레트|팔렛|파레트|빠렛/.test(n)) return '운송'; if (/재단|타공|고스라|뒷도|배면|워터젯|사선|모서리|가공|연마|코너/.test(n)) return '가공'; if (/시공|실측|설치/.test(n)) return '시공'; return '자재'; }
 function openCostForm(id) { if (!isAdmin()) { toast('원가는 관리자만 볼 수 있습니다'); return; } filters.costEdit = id; render(); const _pg = el('pg-' + tab); if (_pg) _pg.scrollIntoView({ block: 'start' }); }
 function costCancel() { filters.costEdit = ''; render(); }
+/* ── 세면대 중국 원가 → 원화 원가 ─────────────────────────────
+   (중국원가 + 200) ÷ 위안환율 × 원화환율 × 1.4  +  브라켓  +  석종 추가금
+   · 브라켓 : 기장 1500 초과 40,000 / 1500 이하 20,000
+   · 석종   : 팬텀 +90,000 · 알래스카 +100,000 · 아스팬(키프로스) +100,000
+   ※ 추가금은 ×1.4 를 한 '다음'에 더한다 (사용자 확인, 2026-08-31)
+   환율이 바뀌면 아래 숫자만 고치면 된다. */
+const BCN = { addCny: 200, cny: 7.2, krw: 1480, mul: 1.4, lenCut: 1500, brkOver: 40000, brkUnder: 20000 };
+const BCN_STONES = ['팬텀 화이트', '알래스카 화이트', '아스팬라이트그레이'];
+function basinStoneAdd(stone) {
+  const t = String(stone || '');
+  if (/팬텀/.test(t)) return 90000;
+  if (/알래스카/.test(t)) return 100000;
+  if (/아스팬|아스펜|키프로스/.test(t)) return 100000;
+  return 0;
+}
+function basinCnCost(cny, lenMm, stone) {
+  const c = +cny || 0; if (!(c > 0)) return null;
+  const base = Math.round((c + BCN.addCny) / BCN.cny * BCN.krw * BCN.mul);
+  const brk = (+lenMm || 0) > BCN.lenCut ? BCN.brkOver : BCN.brkUnder;
+  const st = basinStoneAdd(stone);
+  return { base: base, brk: brk, st: st, total: base + brk + st };
+}
+/* 원가 줄이 세면대인지 — 품목명에 '세면대'가 들어가면 중국원가 계산칸을 띄운다 */
+function costIsBasin(name) { return String(name || '').includes('세면대'); }
+function costBasinBoxHtml(d) {
+  const inp = 'font-size:12.5px;padding:5px 7px;border:1.5px solid var(--bd2);border-radius:7px;background:#fff';
+  const len = (d.cnLen != null && d.cnLen !== '') ? d.cnLen : (basinLen(d.spec || '') || '');
+  return `<div class="ct-basin" style="display:${costIsBasin(d.name) ? 'flex' : 'none'};gap:6px;align-items:center;flex-wrap:wrap;margin:-2px 0 8px 6px;padding:7px 9px;border-left:3px solid #f0c060;background:#fffaf0;border-radius:0 9px 9px 0">
+    <span style="font-size:11px;font-weight:700;color:#8a5a00;white-space:nowrap"><i class="ti ti-calculator"></i> 중국 원가</span>
+    <input class="ct-cncost" inputmode="decimal" placeholder="위안(¥)" value="${esc(d.cnCost || '')}" oninput="costBasinCalc(this)" style="${inp};width:82px;text-align:right">
+    <input class="ct-cnlen" inputmode="numeric" placeholder="기장mm" value="${esc(len)}" oninput="costBasinCalc(this)" style="${inp};width:78px;text-align:right">
+    <select class="ct-cnstone" onchange="costBasinCalc(this)" style="${inp};width:150px"><option value="">석종 추가 없음</option>${BCN_STONES.map(k => `<option ${((d.cnStone || '') === k) ? 'selected' : ''}>${esc(k)}</option>`).join('')}</select>
+    <span class="ct-cnout" style="font-size:11.5px;color:var(--t3);flex:1;min-width:150px"></span>
+    <button type="button" class="btn btn-sm btn-pri" onclick="costBasinApply(this)"><i class="ti ti-check"></i>원가단가 적용</button>
+  </div>`;
+}
+/* 값이 바뀔 때마다 계산식과 결과를 보여준다 (적용 버튼을 눌러야 원가단가에 들어간다) */
+function costBasinCalc(elm) {
+  const box = elm.closest('.ct-basin'); if (!box) return;
+  const r = basinCnCost((box.querySelector('.ct-cncost') || {}).value,
+                        (box.querySelector('.ct-cnlen') || {}).value,
+                        (box.querySelector('.ct-cnstone') || {}).value);
+  const out = box.querySelector('.ct-cnout'); if (!out) return;
+  if (!r) { out.innerHTML = '<span style="color:var(--t3)">위안 금액을 넣으면 원가가 계산됩니다</span>'; return; }
+  out.innerHTML = `= <b style="font-size:13.5px;color:#a2560f">${fmtWon(r.total)}</b>원`
+    + `<span style="color:var(--t3)"> · 기본 ${fmtWon(r.base)} + 브라켓 ${fmtWon(r.brk)}${r.st ? ' + 석종 ' + fmtWon(r.st) : ''}</span>`;
+}
+function costBasinApply(btn) {
+  const box = btn.closest('.ct-basin'); const row = btn.closest('.ct-row'); if (!box || !row) return;
+  const r = basinCnCost((box.querySelector('.ct-cncost') || {}).value,
+                        (box.querySelector('.ct-cnlen') || {}).value,
+                        (box.querySelector('.ct-cnstone') || {}).value);
+  if (!r) { toast('중국 원가(위안)를 입력하세요'); return; }
+  const u = row.querySelector('.ct-unit'); if (u) u.value = r.total;
+  const q = row.querySelector('.ct-qty'); if (q && !_numv(q.value)) q.value = 1;
+  costRecalc(); toast('세면대 원가단가 ' + fmtWon(r.total) + '원 적용');
+}
+/* 품목명을 고쳐서 세면대가 되거나 아니게 되면 계산칸을 켜고 끈다 */
+function costNameChanged(inpEl) {
+  const row = inpEl.closest('.ct-row'); if (!row) return;
+  const box = row.nextElementSibling;
+  if (box && box.classList.contains('ct-basin')) box.style.display = costIsBasin(inpEl.value) ? 'flex' : 'none';
+}
 function costLineHtml(d) {
   d = d || {}; const inp = 'font-size:13px;padding:6px 7px;border:1.5px solid var(--bd2);border-radius:7px';
   return `<div class="ct-row" style="display:flex;gap:5px;align-items:center;margin-bottom:6px;flex-wrap:wrap">
     <select class="ct-gubun" onchange="costRecalc()" style="${inp};flex:none;width:66px">${GUBUN.map(g => `<option ${d.gubun === g ? 'selected' : ''}>${g}</option>`).join('')}</select>
-    <input class="ct-name" placeholder="품목명" value="${esc(d.name || '')}" style="${inp};flex:2;min-width:90px" lang="ko">
+    <input class="ct-name" placeholder="품목명" value="${esc(d.name || '')}" oninput="costNameChanged(this)" style="${inp};flex:2;min-width:90px" lang="ko">
     <input class="ct-spec" placeholder="규격" value="${esc(d.spec || '')}" style="${inp};flex:1;min-width:64px" lang="en">
     <input class="ct-hebe" inputmode="decimal" placeholder="헤베" value="${esc(d.hebe || '')}" oninput="costRecalc()" style="${inp};flex:none;width:52px;text-align:right">
     <input class="ct-qty" inputmode="numeric" placeholder="수량" value="${esc(d.qty || '')}" oninput="costRecalc()" style="${inp};flex:none;width:48px;text-align:right">
     <input class="ct-unit" inputmode="numeric" placeholder="원가단가" value="${esc(d.unitCost || '')}" oninput="costRecalc()" style="${inp};flex:none;width:76px;text-align:right">
     <input class="ct-cost" inputmode="numeric" placeholder="원가" value="${esc(d.cost || '')}" oninput="costRecalc()" style="${inp};flex:none;width:88px;text-align:right;background:#fff6f6;font-weight:700">
-    <button type="button" class="btn btn-ghost btn-sm" onclick="this.closest('.ct-row').remove();costRecalc()"><i class="ti ti-x"></i></button>
-  </div>`;
+    <button type="button" class="btn btn-ghost btn-sm" onclick="const r=this.closest('.ct-row');const b=r.nextElementSibling;if(b&&b.classList.contains('ct-basin'))b.remove();r.remove();costRecalc()"><i class="ti ti-x"></i></button>
+  </div>${costBasinBoxHtml(d)}`;
 }
-function addCostRow() { const c = el('ct-rows'); if (c) c.insertAdjacentHTML('beforeend', costLineHtml({ gubun: '자재' })); }
+function addCostRow() { const c = el('ct-rows'); if (c) { c.insertAdjacentHTML('beforeend', costLineHtml({ gubun: '자재' })); costBasinRefresh(); } }
+/* 화면을 새로 그린 뒤 세면대 줄들의 계산 결과를 한 번씩 채워준다 */
+function costBasinRefresh() { document.querySelectorAll('#ct-rows .ct-basin .ct-cncost').forEach(x => { try { costBasinCalc(x); } catch (e) { } }); }
 function costRecalc() {
   let cMat = 0, cCons = 0, cTrans = 0;
   document.querySelectorAll('#ct-rows .ct-row').forEach(r => {
@@ -7075,7 +7140,7 @@ function renderCostForm() {
   _costRev = { mat: 0, proc: 0, cons: 0, trans: 0 };
   (q.items || []).forEach(it => { const c = marginCat(it.name); const k = c === '가공' ? 'proc' : c === '시공' ? 'cons' : c === '운송' ? 'trans' : 'mat'; _costRev[k] += Math.round(+it.amt || 0); });
   const _procItems = (q.items || []).filter(it => costGubunOf(it.name) === '가공');
-  const lines = (q.costLines && q.costLines.length) ? q.costLines : (q.items || []).filter(it => costGubunOf(it.name) !== '가공').map(it => ({ gubun: costGubunOf(it.name), factory: '', name: it.name, spec: it.spec || '', hebe: hebeFromSpec(it.spec || ''), qty: it.qty || '', unitCost: '', cost: '' }));
+  const lines = (q.costLines && q.costLines.length) ? q.costLines : (q.items || []).filter(it => costGubunOf(it.name) !== '가공').map(it => ({ gubun: costGubunOf(it.name), factory: '', name: it.name, spec: it.spec || '', hebe: hebeFromSpec(it.spec || ''), qty: it.qty || '', unitCost: '', cost: '', cnStone: it.stone || '' }));
   const rows = lines.map(costLineHtml).join('');
   el('pg-' + tab).innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-calculator"></i>원가 정리</h2><p>${esc(q.docNo || '')} · ${esc(q.client || '')} · 매출 ${fmtWon(q.supply)}</p></div>
@@ -7107,12 +7172,24 @@ function renderCostForm() {
       </div>
       <div class="frm-foot" style="margin-top:12px"><button class="btn" style="flex:1" onclick="costCancel()">취소</button><button class="btn btn-pri" style="flex:2" onclick="submitCost('${q.id}')"><i class="ti ti-check"></i>원가 저장</button></div>
     </div>`;
+  costBasinRefresh();
   costRecalc();
 }
 async function submitCost(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
   const lines = [];
-  document.querySelectorAll('#ct-rows .ct-row').forEach(r => { const name = (r.querySelector('.ct-name').value || '').trim(); const cost = _numv(r.querySelector('.ct-cost').value); if (name || cost > 0) { lines.push({ gubun: r.querySelector('.ct-gubun').value, factory: '', name: name, spec: (r.querySelector('.ct-spec').value || '').trim(), hebe: _numv(r.querySelector('.ct-hebe').value) || '', qty: _numv(r.querySelector('.ct-qty').value) || '', unitCost: _numv(r.querySelector('.ct-unit').value) || '', cost: cost }); } });
+  document.querySelectorAll('#ct-rows .ct-row').forEach(r => {
+    const name = (r.querySelector('.ct-name').value || '').trim(); const cost = _numv(r.querySelector('.ct-cost').value);
+    if (!(name || cost > 0)) return;
+    const line = { gubun: r.querySelector('.ct-gubun').value, factory: '', name: name, spec: (r.querySelector('.ct-spec').value || '').trim(), hebe: _numv(r.querySelector('.ct-hebe').value) || '', qty: _numv(r.querySelector('.ct-qty').value) || '', unitCost: _numv(r.querySelector('.ct-unit').value) || '', cost: cost };
+    // 세면대 줄이면 중국 원가 입력값도 같이 저장해서, 다시 열었을 때 그대로 보이게 한다
+    const bx = r.nextElementSibling;
+    if (bx && bx.classList.contains('ct-basin')) {
+      const cn = _numv((bx.querySelector('.ct-cncost') || {}).value);
+      if (cn > 0) { line.cnCost = cn; line.cnLen = _numv((bx.querySelector('.ct-cnlen') || {}).value) || ''; line.cnStone = (bx.querySelector('.ct-cnstone') || {}).value || ''; }
+    }
+    lines.push(line);
+  });
   const processCost = el('ct-process') ? _numv(el('ct-process').value) : 0;
   const costTotal = lines.reduce((a, b) => a + (+b.cost || 0), 0) + processCost; const sup = +q.supply || 0; const margin = sup - costTotal;
   await Store.update('quotes', id, { costLines: lines, processCost: processCost, costTotal: costTotal, margin: margin, marginRate: sup > 0 ? +(margin / sup).toFixed(4) : 0 });
