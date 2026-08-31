@@ -72,13 +72,13 @@ const Store = {
   },
   async add(coll, obj) {
     obj.createdAt = Date.now();
-    if (CLOUD) { await cref(coll).add(obj); }
-    else {
-      const arr = this.read(coll);
-      obj.id = 'L' + Date.now() + Math.floor(Math.random() * 1000);
-      arr.push(obj); this._writeLocal(coll, arr);
-      if (this._watchers[coll]) this._watchers[coll](arr);
-    }
+    // ★ 새로 만든 문서 id 를 돌려준다 — 현장 등록 직후 그 현장에 홀딩을 걸 때 필요하다
+    if (CLOUD) { const ref = await cref(coll).add(obj); return ref && ref.id; }
+    const arr = this.read(coll);
+    obj.id = 'L' + Date.now() + Math.floor(Math.random() * 1000);
+    arr.push(obj); this._writeLocal(coll, arr);
+    if (this._watchers[coll]) this._watchers[coll](arr);
+    return obj.id;
   },
   async update(coll, id, obj) {
     if (CLOUD) { await cref(coll).doc(id).update(obj); }
@@ -2692,6 +2692,7 @@ async function submitSite(id) {
   if (!constructDate) { toast('시공일을 선택하세요'); return; }
   if (!factory) { toast('가공 공장을 선택하세요'); return; }
   if (!team) { toast('시공팀을 선택하세요'); return; }
+  let newSiteId = '';
   const stage = el('s-stage').value || '접수';
   if (id && stage === '완료' && siteOpenIssues(id).length) { toast(`미해결 이슈 ${siteOpenIssues(id).length}건 — 이슈를 처리 완료해야 현장을 완료할 수 있어요`); return; }
   const obj = {
@@ -2711,7 +2712,7 @@ async function submitSite(id) {
     await Store.update('sites', id, obj); toast('현장 정보 저장됨');
   } else {
     obj.history = { '접수': todayStr() }; if (obj.stage !== '접수') obj.history[obj.stage] = todayStr();
-    await Store.add('sites', obj); toast('현장 등록 완료');
+    newSiteId = await Store.add('sites', obj); toast('현장 등록 완료');
   }
   // 연결된 홀딩에 실사용 수량 연동(출고는 홀딩에서 함) — 이번에 고른 것 우선, 없으면 이미 연결된 홀딩 자동 탐색(재편집 대응)
   let linkHoldId = _holdLinkSite;
@@ -2733,6 +2734,52 @@ async function submitSite(id) {
   _holdLinkSite = null;
   if (_siteFromQuote) { try { await Store.update('quotes', _siteFromQuote, { siteDone: true, siteDoneAt: Date.now() }); } catch (e) { } _siteFromQuote = ''; }
   closeModal();
+
+  /* ── 현장을 새로 등록했으면 그 자재로 홀딩까지 바로 잡아준다 ──────────
+     견적 → 현장 → 홀딩 → 출고 를 화면마다 옮겨다니지 않게 하려는 것.
+     · 자재 미정이거나 실제 자재가 없으면 잡지 않는다
+     · 이미 홀딩을 골라 연결했으면(_holdLinkSite) 새로 만들지 않는다
+     · 만든 뒤에는 홀딩 화면으로 옮겨서 바로 [출고] 를 누를 수 있게 한다 */
+  if (!id && newSiteId && !linkHoldId) {
+    const real = items.filter(r => (r.name || '').trim() && (r.name || '').trim() !== '(미정)' && (+r.qty || 0) > 0);
+    if (matPending || !real.length) { toast('현장 등록 완료 · 자재가 미정이라 홀딩은 잡지 않았습니다'); return; }
+    try {
+      const hItems = real.map(r => {
+        const inv = state.inventory.find(i => _normName(i.name) === _normName(r.name));
+        return { materialName: r.name, jang: r.qty, hebe: inv ? +(r.qty * (+inv.hebePerJang || 0)).toFixed(2) : 0, lot: r.lot || '', pattern: r.pattern || '' };
+      });
+      // 재고가 모자라면 '예정' 홀딩으로 — 입고되면 자동으로 '홀딩'이 된다 (기존 규칙 그대로)
+      const enough = hItems.every(it => holdAvailExcl(it.materialName, '') >= (+it.jang || 0));
+      const hid = await Store.add('holdings', {
+        vendor: client, items: hItems,
+        materialName: hItems[0].materialName, jang: hItems[0].jang, hebe: hItems[0].hebe, lot: hItems[0].lot,
+        useDate: constructDate, note: '견적·현장에서 자동 홀딩',
+        status: enough ? '홀딩' : '예정',
+        forSiteId: newSiteId, forSiteName: obj.name, by: me.name
+      });
+      toast(enough ? '홀딩 완료 · 바로 출고할 수 있습니다' : '재고 부족 — 예정 홀딩으로 잡았습니다 (입고 시 자동 전환)');
+      _goHoldAndFocus(hid);
+    } catch (e) { toast('현장은 등록됐지만 홀딩 자동 등록에 실패했습니다: ' + ((e && e.message) || e)); }
+  }
+}
+/* 홀딩 화면으로 옮기고 방금 만든 홀딩을 찾아 스크롤·강조한다 */
+let _holdFocusId = '';
+function _goHoldAndFocus(hid) {
+  _holdFocusId = hid || '';
+  go('hold');
+  let n = 0;
+  const tick = () => {
+    const card = _holdFocusId ? document.querySelector('[data-holdid="' + _holdFocusId + '"]') : null;
+    if (card) {
+      card.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      card.style.outline = '2px solid var(--gd)'; card.style.borderRadius = '12px';
+      setTimeout(() => { card.style.outline = ''; }, 2600);
+      _holdFocusId = '';
+      return;
+    }
+    if (n++ < 14) setTimeout(tick, 250);        // 목록이 다시 그려질 때까지 잠깐 기다린다
+  };
+  setTimeout(tick, 250);
 }
 
 /* ===================================================================
@@ -4461,8 +4508,12 @@ function quoteRegister(id) {
     go('basin'); setTimeout(() => { try { openBasinForm(null, { vendor: q.client, items: bi, quoteId: id }); } catch (e) { } }, 90);
     toast('세면대 발주로 불러왔습니다');
   } else if (hasGagong) {
-    go('sites'); setTimeout(() => { try { openSiteForm(null, { name: q.client, address: q.siteAddr, quoteId: id }); } catch (e) { } }, 90);
-    toast('가공 포함 · 현장 등록으로 이동');
+    // ★ 견적 화면에 그대로 머문 채 현장 등록창만 띄운다 (예전엔 현장 탭으로 넘어갔다)
+    //   자재도 같이 넘겨서 현장 저장 → 홀딩까지 한 번에 이어지게 한다
+    // 현장명은 견적의 현장명 → 현장주소 순으로 채운다. 업체명을 현장명으로 쓰면 동명 현장이 쌓인다
+    const _sn = [q.siteName, q.siteAddr].map(v => String(v == null ? '' : v).trim()).find(Boolean) || '';
+    openSiteForm(null, { name: _sn, client: q.client, address: q.siteAddr, quoteId: id, items: items });
+    toast('가공 포함 · 현장 등록 후 자재는 자동으로 홀딩됩니다');
   } else { openShipForm({ targetName: q.client, items: items, quoteId: id, siteAddr: (q.siteAddr || '').trim() }); toast('출고 등록으로 불러왔습니다 · 확인 후 등록'); }
   /* ★ 현장 주소만 넘긴다.
      견적서의 수신·참조(q.attn)는 '견적서를 받는 사람'이라 출고 서류에는 나오면 안 된다.
@@ -9958,7 +10009,7 @@ function holdCardHtml(h) {
           <button class="btn btn-sm" style="flex:1" onclick="releaseHold('${h.id}')"><i class="ti ti-lock-open"></i>해제</button>
           ${isAdmin() ? `<button class="btn btn-sm btn-danger" onclick="delHold('${h.id}')"><i class="ti ti-trash"></i>삭제</button>` : ''}
         </div>`));
-  return `<div class="card hold-card" style="margin-bottom:11px;${conf ? 'opacity:.92' : ''}${_bundleOn && _selH ? ';border:2px solid #5847b8;background:#f6f4fe' : ''}">
+  return `<div class="card hold-card" data-holdid="${esc(h.id)}" style="margin-bottom:11px;${conf ? 'opacity:.92' : ''}${_bundleOn && _selH ? ';border:2px solid #5847b8;background:#f6f4fe' : ''}">
         <div class="hold-card-body">
         ${_bundleOn ? (_canBundle
           ? `<label style="display:flex;align-items:center;gap:8px;margin-bottom:9px;cursor:pointer;font-size:12.5px;font-weight:700;color:${_selH ? '#5847b8' : 'var(--t2)'}"><input type="checkbox" ${_selH ? 'checked' : ''} onchange="toggleHSel('${h.id}')" style="width:17px;height:17px"> 묶음 출고에 포함</label>`
