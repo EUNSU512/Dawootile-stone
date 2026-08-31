@@ -2501,10 +2501,28 @@ function siteCard(s) {
   </div>`;
 }
 
+/* ── 이 현장에 '지금 걸려 있는' 홀딩 찾기 ────────────────────
+   예전에는 `status !== '해제'` 이고 `forSiteName` 만 같으면 연결된 것으로 봤다. 두 가지가 잘못됐다.
+   ① **확정(=이미 출고 완료)** 홀딩까지 '연결됨'으로 세서, 끝난 홀딩 때문에 새 홀딩을 못 잡았다.
+   ② 현장명은 비워두면 업체명이 들어가 **같은 이름의 현장이 여럿** 생긴다(신성그룹 4곳 등).
+      그래서 엉뚱한 현장의 홀딩이 잡혀 자재가 다르게 떴다.
+   지금은 진행 중(홀딩·예정)만 보고, 이름 매칭은 `forSiteId` 가 없는 옛날 홀딩에 한해서만,
+   그리고 그 이름을 쓰는 현장이 하나뿐일 때만 쓴다. */
+function _holdLive(h) { return !['해제', '확정'].includes((h && h.status) || '홀딩'); }
+function siteLinkedHold(s) {
+  if (!s) return null;
+  const hs = state.holdings || [];
+  const byId = hs.find(h => _holdLive(h) && h.forSiteId === s.id);
+  if (byId) return byId;
+  const nm = (s.name || '').trim(); if (!nm) return null;
+  const sameName = (state.sites || []).filter(x => (x.name || '').trim() === nm).length;
+  if (sameName > 1) return null;                       // 동명 현장이 여럿이면 이름으로 고를 수 없다
+  return hs.find(h => _holdLive(h) && !((h.forSiteId || '').trim()) && (h.forSiteName || '').trim() === nm) || null;
+}
 function openSiteDetail(id) {
   const s = state.sites.find(x => x.id === id); if (!s) return;
   const skip = s.orderType === '도면';
-  const linkedHold = state.holdings.find(h => h.status !== '해제' && (h.forSiteId === s.id || (s.name && h.forSiteName === s.name)));
+  const linkedHold = siteLinkedHold(s);
   openModal(`
     <div class="sheet-h"><h3><i class="ti ti-building-community"></i>${esc(s.name)}</h3><button class="x" onclick="closeModal()">×</button></div>
     <div style="margin-bottom:12px">${pill(s.stage || '접수')}${s.confirmed ? ' <span class="pill p-done">확정</span>' : ''}</div>
@@ -2544,8 +2562,12 @@ function openSiteDetail(id) {
 /* 현장 → 홀딩 생성 (현장 정보로 홀딩 폼 프리필) */
 function holdFromSite(id) {
   const s = state.sites.find(x => x.id === id); if (!s) return;
-  const existing = state.holdings.find(h => h.status !== '해제' && (h.forSiteId === id || (s.name && h.forSiteName === s.name)));
-  if (existing) { toast(`이미 홀딩이 연결된 현장입니다 (${existing.status || '홀딩'}) — 중복 방지`); return; }
+  const existing = siteLinkedHold(s);
+  if (existing) {
+    const what = (existing.materialName || '') + (existing.jang ? ' ' + (+existing.jang || 0) + '장' : '');
+    toast(`이미 홀딩이 잡혀 있습니다 — ${existing.vendor || ''}${what ? ' · ' + what : ''} (${existing.status || '홀딩'})`);
+    return;
+  }
   openHoldForm(null, { forSiteId: id, vendor: s.client || '', items: siteItems(s).map(it => ({ materialName: it.name, jang: it.qty, lot: it.lot })), useDate: s.constructDate });
 }
 async function advanceStage(id, stage) {
@@ -2563,7 +2585,10 @@ async function delSite(id) {
   const s = state.sites.find(x => x.id === id); const nm = s ? s.name : '';
   await Store.remove('sites', id);
   // 이 현장에 연결됐던 홀딩의 현장 정보 제거(고아 데이터 방지)
-  for (const h of state.holdings.filter(h => h.forSiteId === id || (nm && h.forSiteName === nm))) {
+  // forSiteId 로 확실히 연결된 것만 정리한다. 이름만 같은 남의 홀딩은 건드리지 않는다
+  //  (예전 홀딩은 forSiteId 가 없으므로, 이름이 그 현장 하나뿐일 때만 함께 정리)
+  const _uniqName = nm && (state.sites || []).filter(x => (x.name || '').trim() === nm).length === 0;
+  for (const h of (state.holdings || []).filter(h => h.forSiteId === id || (_uniqName && !((h.forSiteId || '').trim()) && (h.forSiteName || '').trim() === nm))) {
     await Store.update('holdings', h.id, { forSiteId: '', forSiteName: '' });
   }
   toast('삭제됨 · 연결 홀딩의 현장 정보도 정리'); closeModal();
@@ -2691,8 +2716,9 @@ async function submitSite(id) {
   // 연결된 홀딩에 실사용 수량 연동(출고는 홀딩에서 함) — 이번에 고른 것 우선, 없으면 이미 연결된 홀딩 자동 탐색(재편집 대응)
   let linkHoldId = _holdLinkSite;
   if (!linkHoldId && id) {
-    const s0 = state.sites.find(x => x.id === id); const oldName = s0 ? s0.name : '';
-    const lh = state.holdings.find(h => !['해제', '확정'].includes(h.status || '홀딩') && (h.forSiteId === id || (oldName && h.forSiteName === oldName)));
+    const s0 = state.sites.find(x => x.id === id);
+    // ★ 이름만 같은 남의 홀딩을 덮어쓰면 안 된다 — siteLinkedHold 의 안전한 판정을 그대로 쓴다
+    const lh = siteLinkedHold(s0);
     if (lh) linkHoldId = lh.id;
   }
   if (linkHoldId) {
