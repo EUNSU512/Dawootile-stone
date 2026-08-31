@@ -7234,9 +7234,24 @@ async function saveCrewFee(id, val) { if (!isAdmin()) { toast('관리자만'); r
 async function toggleCrewPaid(id) {
   if (!isAdmin()) { toast('관리자만'); return; }
   const s = (state.sites || []).find(x => x.id === id); if (!s) return;
+  if (s.crewDirect) { toast('업체 직불 건입니다 — 직불을 먼저 해제하세요'); return; }
   const paid = !s.crewPaid;
   try { await Store.update('sites', id, { crewPaid: paid, crewPaidDate: paid ? todayStr() : '' }); } catch (e) { }
   toast(paid ? '시공비 정산 완료 표시' : '미정산으로 변경'); renderSettle();
+}
+/* 업체 직불 = 시공팀이 거래처에서 시공비를 직접 받는 건.
+   우리가 줄 돈이 아니므로 켜면 자동으로 '정산 완료'가 된다. 끄면 다시 미정산으로 돌아간다. */
+async function toggleCrewDirect(id) {
+  if (!isAdmin()) { toast('관리자만'); return; }
+  const s = (state.sites || []).find(x => x.id === id); if (!s) return;
+  const on = !s.crewDirect;
+  try {
+    await Store.update('sites', id, on
+      ? { crewDirect: true, crewDirectAt: todayStr(), crewPaid: true, crewPaidDate: todayStr() }
+      : { crewDirect: false, crewDirectAt: '', crewPaid: false, crewPaidDate: '' });
+  } catch (e) { }
+  toast(on ? '업체 직불 · 정산 완료로 넘겼습니다' : '직불 해제 · 미정산으로 되돌렸습니다');
+  renderSettle();
 }
 function crewToggleUnpaid() { filters.crewUnpaidOnly = !filters.crewUnpaidOnly; renderSettle(); }
 function crewPickTeam(v) { filters.crewTeam = v || ''; renderSettle(); }
@@ -7247,12 +7262,15 @@ function downloadCrewLedger() {
   if (!sites.length) { toast('시공팀 지정된 현장이 없습니다'); return; }
   const head = ['시공팀', '거래처', '현장', '현장 주소', '시공일', '연결 견적', '시공 매출', '시공비', '남는 금액', '정산여부', '정산일'];
   const aoa = [['시공비 정산 원장 (시공팀별)'], ['출력일 ' + todayStr()], [], head];
-  let tPaid = 0, tUnpaid = 0, tSale = 0;
+  let tPaid = 0, tUnpaid = 0, tSale = 0, tDirect = 0;
   sites.forEach(s => {
     const fee = +s.crewFee || 0; const sale = siteCrewSale(s);
-    if (s.crewPaid) tPaid += fee; else tUnpaid += fee; tSale += sale;
+    if (s.crewDirect) tDirect += fee; else if (s.crewPaid) tPaid += fee; else tUnpaid += fee;
+    tSale += sale;
     aoa.push([s.team || '', s.client || '', s.name || '', s.address || '', s.constructDate || '',
-      siteQuoteNos(s).join(', '), sale, fee, sale - fee, s.crewPaid ? '정산완료' : '미정산', s.crewPaidDate || '']);
+      siteQuoteNos(s).join(', '), sale, fee, s.crewDirect ? '' : (sale - fee),
+      s.crewDirect ? '업체 직불' : (s.crewPaid ? '정산완료' : '미정산'),
+      s.crewDirect ? (s.crewDirectAt || '') : (s.crewPaidDate || '')]);
   });
   aoa.push([]);
   aoa.push(['', '', '', '', '', '시공 매출 합계', tSale, '', '', '', '']);
@@ -7260,16 +7278,22 @@ function downloadCrewLedger() {
   aoa.push(['', '', '', '', '', '남는 금액', tSale - (tPaid + tUnpaid), '', '', '', '']);
   aoa.push(['', '', '', '', '', '정산완료 합계', tPaid, '', '', '', '']);
   aoa.push(['', '', '', '', '', '미정산 합계', tUnpaid, '', '', '', '']);
+  aoa.push(['', '', '', '', '', '업체 직불 합계', tDirect, '', '', '', '']);
   const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 12 }, { wch: 16 }, { wch: 20 }, { wch: 28 }, { wch: 12 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 12 }, { wch: 9 }, { wch: 12 }];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '시공비정산'); XLSX.writeFile(wb, '시공비정산_' + todayStr() + '.xlsx');
   toast('시공비 정산 엑셀 다운로드');
 }
 function crewSettleCard() {
   const sites = (state.sites || []).filter(s => (s.team || '').trim() && !isSelfTeam(s.team));
-  const totUnpaid = sites.filter(s => !s.crewPaid).reduce((a, s) => a + (+s.crewFee || 0), 0);
-  const totPaid = sites.filter(s => s.crewPaid).reduce((a, s) => a + (+s.crewFee || 0), 0);
+  // 업체 직불은 '우리가 주고받는 돈'이 아니라 따로 뺀다
+  const totUnpaid = sites.filter(s => !s.crewPaid && !s.crewDirect).reduce((a, s) => a + (+s.crewFee || 0), 0);
+  const totPaid = sites.filter(s => s.crewPaid && !s.crewDirect).reduce((a, s) => a + (+s.crewFee || 0), 0);
+  const dirSites = sites.filter(s => s.crewDirect);
+  const totDirect = dirSites.reduce((a, s) => a + (+s.crewFee || 0), 0);
   const totSale = sites.reduce((a, s) => a + siteCrewSale(s), 0);
   const totFee = totUnpaid + totPaid;
+  // 남는 금액은 직불 건을 빼고 계산한다 — 직불은 우리 손을 거치지 않아 마진을 단정할 수 없다
+  const ownSale = sites.filter(s => !s.crewDirect).reduce((a, s) => a + siteCrewSale(s), 0);
   const onlyUnpaid = !!filters.crewUnpaidOnly;
   const byTeam = {}; sites.forEach(s => { const t = (s.team || '미지정'); (byTeam[t] = byTeam[t] || []).push(s); });
   const teams = Object.keys(byTeam).sort((a, b) => a.localeCompare(b));
@@ -7280,13 +7304,15 @@ function crewSettleCard() {
     let list = byTeam[t].slice().sort((a, b) => (b.constructDate || '').localeCompare(a.constructDate || ''));
     if (onlyUnpaid) list = list.filter(s => !s.crewPaid);
     if (!list.length) return '';
-    const tUnpaid = byTeam[t].filter(s => !s.crewPaid).reduce((a, s) => a + (+s.crewFee || 0), 0);
-    const tPaid = byTeam[t].filter(s => s.crewPaid).reduce((a, s) => a + (+s.crewFee || 0), 0);
+    const tUnpaid = byTeam[t].filter(s => !s.crewPaid && !s.crewDirect).reduce((a, s) => a + (+s.crewFee || 0), 0);
+    const tPaid = byTeam[t].filter(s => s.crewPaid && !s.crewDirect).reduce((a, s) => a + (+s.crewFee || 0), 0);
+    const tDirect = byTeam[t].filter(s => s.crewDirect).reduce((a, s) => a + (+s.crewFee || 0), 0);
     const tSale = byTeam[t].reduce((a, s) => a + siteCrewSale(s), 0);
     const rows = list.map(s => {
       const fee = +s.crewFee || 0;
       const sale = siteCrewSale(s);
       const mg = sale - fee;
+      const dir = !!s.crewDirect;
       return `<tr style="border-bottom:1px solid var(--soft)">
         <td style="padding:6px 8px;white-space:nowrap">${esc((s.constructDate || '').slice(5))}</td>
         <td style="padding:6px 8px"><div style="font-weight:600">${esc(s.client || s.name || '')}</div>
@@ -7296,16 +7322,23 @@ function crewSettleCard() {
           ? `<b>${fmtWon(sale)}</b>${siteQuoteNos(s).length ? `<div style="font-size:10px;color:var(--t3)">${esc(siteQuoteNos(s).join(', '))}</div>` : ''}`
           : `<span style="color:var(--t3)">-</span>`}</td>
         <td style="padding:6px 8px;text-align:right"><input inputmode="numeric" value="${fee || ''}" onchange="saveCrewFee('${s.id}',this.value)" placeholder="시공비" style="${inp}"></td>
-        <td style="padding:6px 8px;text-align:right;white-space:nowrap">${(sale > 0 || fee > 0)
-          ? `<b style="color:${mg >= 0 ? '#0f766e' : '#c0341d'}">${fmtWon(mg)}</b>`
-          : `<span style="color:var(--t3)">-</span>`}</td>
-        <td style="padding:6px 8px;text-align:center"><button class="btn btn-sm ${s.crewPaid ? 'btn-pri' : ''}" style="${s.crewPaid ? 'background:#0f766e;border-color:#0f766e' : 'color:#b45309'}" onclick="toggleCrewPaid('${s.id}')">${s.crewPaid ? '정산완료' : '미정산'}</button></td>
-        <td style="padding:6px 8px;text-align:center;font-size:11px;color:var(--t3)">${s.crewPaid ? esc(s.crewPaidDate || '') : '-'}</td>
+        <td style="padding:6px 8px;text-align:right;white-space:nowrap">${dir
+          ? `<span style="color:#5847b8;font-weight:700">직불</span>`
+          : ((sale > 0 || fee > 0) ? `<b style="color:${mg >= 0 ? '#0f766e' : '#c0341d'}">${fmtWon(mg)}</b>` : `<span style="color:var(--t3)">-</span>`)}</td>
+        <td style="padding:6px 8px;text-align:center;white-space:nowrap">
+          <div style="display:inline-flex;gap:4px;flex-wrap:wrap;justify-content:center">
+            <button class="btn btn-sm ${(s.crewPaid && !dir) ? 'btn-pri' : ''}" ${dir ? 'disabled' : ''}
+              style="${dir ? 'opacity:.4' : (s.crewPaid ? 'background:#0f766e;border-color:#0f766e' : 'color:#b45309')}"
+              onclick="toggleCrewPaid('${s.id}')">${(s.crewPaid && !dir) ? '정산완료' : '미정산'}</button>
+            <button class="btn btn-sm" style="${dir ? 'background:#5847b8;border-color:#5847b8;color:#fff' : 'color:#5847b8;border-color:#c9c0f0'}"
+              onclick="toggleCrewDirect('${s.id}')" title="시공팀이 거래처에서 직접 받는 건">업체 직불</button>
+          </div></td>
+        <td style="padding:6px 8px;text-align:center;font-size:11px;color:var(--t3)">${dir ? `<span style="color:#5847b8">직불 ${esc(s.crewDirectAt || '')}</span>` : (s.crewPaid ? esc(s.crewPaidDate || '') : '-')}</td>
       </tr>`;
     }).join('');
     return `<div style="margin-top:10px"><div style="display:flex;align-items:center;justify-content:space-between;background:var(--soft);border-radius:8px;padding:6px 10px;margin-bottom:4px">
         <b style="font-size:13px">${esc(t)}${isSelfTeam(t) ? ' <span style="font-size:10px;color:var(--t3);font-weight:500">(자체)</span>' : ''}</b>
-        <span style="font-size:11.5px;color:var(--t3)">매출 <b style="color:var(--gd)">${fmtWon(tSale)}</b> · 미정산 <b style="color:#c0341d">${fmtWon(tUnpaid)}</b> · 완료 <b style="color:#0f766e">${fmtWon(tPaid)}</b></span></div>
+        <span style="font-size:11.5px;color:var(--t3)">매출 <b style="color:var(--gd)">${fmtWon(tSale)}</b> · 미정산 <b style="color:#c0341d">${fmtWon(tUnpaid)}</b> · 완료 <b style="color:#0f766e">${fmtWon(tPaid)}</b>${tDirect ? ` · 직불 <b style="color:#5847b8">${fmtWon(tDirect)}</b>` : ''}</span></div>
       <table style="width:100%;border-collapse:collapse;font-size:12.5px"><thead><tr style="color:var(--t2);font-size:11px"><th style="padding:4px 8px;text-align:left">시공일</th><th style="padding:4px 8px;text-align:left">현장</th><th style="padding:4px 8px;text-align:right">시공 매출</th><th style="padding:4px 8px;text-align:right">시공비</th><th style="padding:4px 8px;text-align:right">남는 금액</th><th style="padding:4px 8px;text-align:center">정산</th><th style="padding:4px 8px;text-align:center">정산일</th></tr></thead><tbody>${rows}</tbody></table></div>`;
   }).join('');
   return `<div class="card" style="margin-bottom:12px;padding:13px 14px">
@@ -7315,9 +7348,10 @@ function crewSettleCard() {
     </div>
     <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:6px">
       <div style="text-align:center;padding:8px;background:#f4f7fd;border-radius:9px"><div style="font-size:10.5px;color:var(--t2)">시공 매출 합계</div><div style="font-size:15px;font-weight:800;color:var(--gd)">${fmtWon(totSale)}</div></div>
-      <div style="text-align:center;padding:8px;background:${totSale - totFee >= 0 ? '#eefaf5' : '#fdf0ea'};border-radius:9px"><div style="font-size:10.5px;color:var(--t2)">남는 금액 (매출 − 시공비)</div><div style="font-size:15px;font-weight:800;color:${totSale - totFee >= 0 ? '#0f766e' : '#c0341d'}">${fmtWon(totSale - totFee)}</div></div>
+      <div style="text-align:center;padding:8px;background:${ownSale - totFee >= 0 ? '#eefaf5' : '#fdf0ea'};border-radius:9px"><div style="font-size:10.5px;color:var(--t2)">남는 금액 <span style="font-size:9.5px;color:var(--t3)">(직불 제외)</span></div><div style="font-size:15px;font-weight:800;color:${ownSale - totFee >= 0 ? '#0f766e' : '#c0341d'}">${fmtWon(ownSale - totFee)}</div></div>
       <div style="text-align:center;padding:8px;background:#fdf0ea;border-radius:9px"><div style="font-size:10.5px;color:var(--t2)">시공비 미정산</div><div style="font-size:15px;font-weight:800;color:#c0341d">${fmtWon(totUnpaid)}</div></div>
       <div style="text-align:center;padding:8px;background:#eefaf5;border-radius:9px"><div style="font-size:10.5px;color:var(--t2)">시공비 정산완료</div><div style="font-size:15px;font-weight:800;color:#0f766e">${fmtWon(totPaid)}</div></div>
+      ${dirSites.length ? `<div style="text-align:center;padding:8px;background:#f3f1fd;border-radius:9px;grid-column:1/-1"><div style="font-size:10.5px;color:var(--t2)">업체 직불 <span style="font-size:9.5px;color:var(--t3)">— 시공팀이 거래처에서 직접 받음 (${dirSites.length}건)</span></div><div style="font-size:15px;font-weight:800;color:#5847b8">${fmtWon(totDirect)}</div></div>` : ''}
     </div>
     ${totSale > 0 ? '' : `<div style="font-size:11px;color:var(--t3);margin-bottom:6px"><i class="ti ti-info-circle"></i> 시공 매출은 <b>견적이 연결된 현장</b>에서만 나옵니다. 견적 카드의 [현장 연결]로 이어두면 여기에 표시됩니다.</div>`}
     <div data-keepscroll id="settle-crew-list" style="max-height:50vh;overflow:auto">${blocks || `<div style="font-size:12px;color:var(--t3);text-align:center;padding:14px">${onlyUnpaid ? '미정산 현장이 없습니다' : '시공팀이 지정된 현장이 없습니다'}</div>`}</div>
