@@ -5630,8 +5630,9 @@ function _pmBanner() {
 let _pmSel = null;   // null = 아직 안 건드림(추천값 사용)
 function openPayMatch() { if (!isAdmin()) { toast('관리자만 가능합니다'); return; } qListSave(); _pmSel = null; filters.payMatch = true; go('quote'); }
 function payMatchClose() { filters.payMatch = false; _pmSel = null; renderQuote(); qListRestore(); }
-/* 기본 체크 대상 = 거래처가 확실히 정해졌고(추정 아님), 미수보다 더 들어오지도 않은 입금 */
-function _pmSure(m) { return !m.guess && !m.leftover; }
+/* 기본 체크 대상 = 거래처가 확실히 정해진 입금.
+   선입금(미수 초과분)은 어차피 배분하지 않으므로 체크를 막을 이유가 없다 — 안내만 한다. */
+function _pmSure(m) { return !m.guess; }
 function _pmChecked(m) { if (_pmSel) return !!_pmSel[m.tid]; return _pmSure(m); }   // 기본: 확실한 것만 체크
 function pmToggle(tid) {
   const list = buildPayMatches();
@@ -5670,7 +5671,7 @@ function renderPayMatch() {
     </div>
     <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:11px">
       <div class="stat"><div class="ic g"><i class="ti ti-building-store"></i></div><div class="v">${groups.length}</div><div class="l">거래처</div><div class="s">입금 ${list.length}건</div></div>
-      <div class="stat"><div class="ic b"><i class="ti ti-alert-circle"></i></div><div class="v">${need}</div><div class="l">확인 필요</div><div class="s">거래처 추정·선입금</div></div>
+      <div class="stat"><div class="ic b"><i class="ti ti-alert-circle"></i></div><div class="v">${need}</div><div class="l">거래처 확인 필요</div><div class="s">입금자명으로 추정한 건</div></div>
       <div class="stat"><div class="ic r"><i class="ti ti-cash-banknote"></i></div><div class="v" style="font-size:19px">${fmtWon(selSum)}</div><div class="l">반영될 금액</div><div class="s">${sel.length}건 선택 · 반영됨 ${linked}건</div></div>
     </div>
     ${list.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px">
@@ -5698,8 +5699,8 @@ function renderPayMatch() {
         ${g.ms.map(m => {
           const on = _pmChecked(m);
           const applySum = m.qs.reduce((a, q) => a + q.amount, 0);
-          const warn = m.guess ? '입금자명으로 거래처를 추정했습니다 — 맞는지 확인하세요'
-            : m.leftover > 0 ? `미수보다 ${fmtWon(m.leftover)}원 많이 들어왔습니다 (선입금) — 그 금액은 반영하지 않습니다` : '';
+          const warn = m.guess ? '입금자명으로 거래처를 추정했습니다 — 맞는지 확인하세요' : '';
+          const info = m.leftover > 0 ? `미수보다 ${fmtWon(m.leftover)}원 많습니다 — 초과분은 반영하지 않고 남겨둡니다 (선입금)` : '';
           return `<label style="display:flex;gap:9px;align-items:flex-start;cursor:pointer;padding:10px 12px;border-top:1px solid var(--bd);background:${on ? 'var(--gl2,#f4fbf8)' : ''}">
             <input type="checkbox" ${on ? 'checked' : ''} onchange="pmToggle('${m.tid}')" style="width:17px;height:17px;margin-top:2px;flex:none">
             <span style="flex:1;min-width:0">
@@ -5708,6 +5709,7 @@ function renderPayMatch() {
                 <b style="font-size:14.5px;color:var(--gd)">${fmtWon(m.amount)}원</b></span>
               <span style="display:block;font-size:11.5px;color:var(--t3);margin-top:2px">${esc(m.dt || m.date || '')}${applySum < m.amount ? ` · 반영 ${fmtWon(applySum)}` : ''}</span>
               ${warn ? `<span style="display:block;font-size:11.5px;color:var(--amber-t);margin-top:3px"><i class="ti ti-alert-triangle"></i> ${esc(warn)}</span>` : ''}
+              ${info ? `<span style="display:block;font-size:11.5px;color:var(--t3);margin-top:3px"><i class="ti ti-info-circle"></i> ${esc(info)}</span>` : ''}
               <span style="display:block;margin-top:6px">${m.qs.map(q => `<span style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:3px 0;border-top:1px dashed var(--bd)">
                   <span><i class="ti ti-arrow-narrow-right" style="color:var(--t3)"></i> ${esc(q.docNo)} <span style="color:var(--t3)">${esc(q.date)}</span></span>
                   <span style="white-space:nowrap"><b>${fmtWon(q.amount)}</b> <span style="color:var(--t3)">/ 미수 ${fmtWon(q.rem)}</span>${q.part ? ' <span class="pill p-wait" style="font-size:9.5px;padding:0 5px">일부</span>' : ''}</span></span>`).join('')}</span>
@@ -5755,7 +5757,16 @@ async function pmApply() {
         await Store.update('quotes', q.id, { paidAmount: next, paid: total > 0 && next >= total, paidDate: todayStr() });
         alloc.push({ quoteId: q.id, docNo: q.docNo || '', amount: add });
       }
-      if (alloc.length) { await Store.update('banktx', m.tid, { alloc: alloc, appliedAt: Date.now(), appliedBy: (me && me.name) || '' }); ok++; }
+      if (alloc.length) {
+        await Store.update('banktx', m.tid, { alloc: alloc, appliedAt: Date.now(), appliedBy: (me && me.name) || '' });
+        // 사람이 확인해서 반영한 것이므로 '입금자명 → 거래처'를 기억해 둔다.
+        // 다음부터 같은 입금자명은 '추정'이 아니라 확정으로 잡혀서 기본 체크된다.
+        if (m.guess) { try { const t0 = (state.banktx || []).find(x => x.id === m.tid);
+          const k = (t0 && (t0.pkey || _bankKey(t0.payer))) || ''; 
+          if (k) { const map = Object.assign({}, bankAliasMap()); if (!map[k]) { map[k] = m.client; await saveBankAlias(map); } }
+        } catch (e) { } }
+        ok++;
+      }
     } catch (e) { fail++; console.warn('pmApply', e); }
   }
   _pmSel = null; _pmBusy = false;
