@@ -7082,7 +7082,10 @@ function costBasinCalc(elm) {
     + `<span style="color:var(--t3)"> · 기본 ${fmtWon(r.base)} + 브라켓 ${fmtWon(r.brk)}${r.st ? ' + 석종 ' + fmtWon(r.st) : ''}</span>`;
 }
 function costBasinApply(btn) {
-  const box = btn.closest('.ct-basin'); const row = btn.closest('.ct-row'); if (!box || !row) return;
+  const box = btn.closest('.ct-basin'); if (!box) return;
+  // ★ 계산칸(.ct-basin)은 원가 줄(.ct-row) 의 '형제'다 — closest 로는 못 찾는다
+  const row = box.previousElementSibling;
+  if (!row || !row.classList.contains('ct-row')) { toast('원가 줄을 찾지 못했습니다'); return; }
   const r = basinCnCost((box.querySelector('.ct-cncost') || {}).value,
                         (box.querySelector('.ct-cnlen') || {}).value,
                         (box.querySelector('.ct-cnstone') || {}).value);
