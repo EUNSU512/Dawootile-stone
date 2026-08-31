@@ -7092,7 +7092,9 @@ function costBasinApply(btn) {
   if (!r) { toast('중국 원가(위안)를 입력하세요'); return; }
   const u = row.querySelector('.ct-unit'); if (u) u.value = r.total;
   const q = row.querySelector('.ct-qty'); if (q && !_numv(q.value)) q.value = 1;
-  costRecalc(); toast('세면대 원가단가 ' + fmtWon(r.total) + '원 적용');
+  const hb = row.querySelector('.ct-hebe'); if (hb) hb.value = '';   // 세면대는 헤베로 곱하지 않는다
+  costRecalc();
+  toast('세면대 원가단가 ' + fmtWon(r.total) + '원 적용 · 개당 × 수량');
 }
 /* 품목명을 고쳐서 세면대가 되거나 아니게 되면 계산칸을 켜고 끈다 */
 function costNameChanged(inpEl) {
@@ -7122,7 +7124,11 @@ function costRecalc() {
     const g = r.querySelector('.ct-gubun').value;
     const hebe = _numv(r.querySelector('.ct-hebe').value), qty = _numv(r.querySelector('.ct-qty').value), unit = _numv(r.querySelector('.ct-unit').value);
     const costEl = r.querySelector('.ct-cost');
-    if (g === '자재' && hebe > 0 && qty > 0 && unit > 0) { costEl.value = Math.round(hebe * qty * unit); }
+    // ★ 세면대는 '개당' 단가다 — 헤베를 곱하면 안 된다. 계산칸이 열려 있는 줄은 수량만 곱한다
+    const _bx = r.nextElementSibling;
+    const _isBasinRow = !!(_bx && _bx.classList.contains('ct-basin') && _bx.style.display !== 'none');
+    if (_isBasinRow) { if (qty > 0 && unit > 0) costEl.value = Math.round(qty * unit); }
+    else if (g === '자재' && hebe > 0 && qty > 0 && unit > 0) { costEl.value = Math.round(hebe * qty * unit); }
     const c = _numv(costEl.value);
     if (g === '운송') cTrans += c; else if (g === '시공') cCons += c; else cMat += c;
   });
