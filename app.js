@@ -1213,6 +1213,18 @@ function startCustomerSubs() {
   //   그 거래처가 볼 단가는 미리 계산해서 '그 거래처 문서(roles/이메일)' 안에 적어둔다.
   //   → 로그인할 때 me.custPrices 로 이미 들어와 있다. 추가 구독이 필요 없다.
   if (me.custPriceBase && !(me.custPrices && Object.keys(me.custPrices).length)) _custPriceErr = true;
+  // 본인 문서만 계속 지켜본다(규칙상 본인 것은 읽을 수 있다) — 단가표를 고치면 새로고침 없이 바로 바뀐다
+  try {
+    cref('roles').doc(me.email).onSnapshot(d => {
+      if (!d.exists || !me || me.role !== 'customer') return;
+      const rd = d.data() || {};
+      me.custPriceBase = rd.custPriceBase || '';
+      me.custPriceAdj = +rd.custPriceAdj || 0;
+      me.custPrices = (rd.custPrices && typeof rd.custPrices === 'object') ? rd.custPrices : null;
+      _custPriceErr = !!(me.custPriceBase && !(me.custPrices && Object.keys(me.custPrices).length));
+      if ((filters.custTab || 'stock') === 'stock') renderCustomerStock();
+    }, err => console.warn('cust role', err));
+  } catch (e) { console.warn(e); }
   startCustomerHoldings();
   startCustomerHoldReqs();
 }
