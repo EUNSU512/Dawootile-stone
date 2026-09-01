@@ -281,7 +281,8 @@ async function afterAuth(user) {
       if (_r === 'customer' || _r === 'crew') {
         const _rd = rd.data() || {};
         me = { name: (_rd.name || _email.split('@')[0]), email: _email, role: _r,
-               custPriceBase: _rd.custPriceBase || '', custPriceAdj: +_rd.custPriceAdj || 0 };
+               custPriceBase: _rd.custPriceBase || '', custPriceAdj: +_rd.custPriceAdj || 0,
+               custPrices: (_rd.custPrices && typeof _rd.custPrices === 'object') ? _rd.custPrices : null };
         el('login').style.display = 'none';
         el('app').style.display = 'block';
         el('me-av').textContent = initial(me.name);
@@ -464,6 +465,7 @@ function onData(coll) {
   if (coll === 'holdings' && me && !isCustomerRole()) { autoReleaseHolds(); maybeActivatePlanned(); }
   if (coll === 'inventory' && me && !isCustomerRole()) maybeActivatePlanned();   // 재고 변동(해제·입고·조정 등)으로 여유 생기면 예정홀딩 확보
   if (['holdings', 'inventory', 'transactions'].includes(coll) && me && !isCustomerRole()) scheduleAvailMirror();   // 고객 노출용 가용수량 미러 갱신(디바운스)
+  if (['priceList', 'members'].includes(coll) && me && !isCustomerRole()) scheduleCustPriceSync();   // 거래처 화면에 보일 단가 미리 계산해서 거래처 문서에 기재(디바운스)
   if (coll === 'chulgoReqs') { refreshChulgoChatIfOpen(); if (me && !isCustomerRole()) chulgoAlertNew(); }   // 채팅 실시간 갱신 + 새 지시 소리 알림
   if (me) render();
 }
@@ -1119,7 +1121,7 @@ function custStockBody(list) {
   return `<div style="border:0.5px solid var(--bd);border-radius:12px;overflow:hidden;margin-top:2px">
     <div id="cust-stock-wrap" data-keepscroll style="max-height:calc(100vh - 250px);min-height:200px;overflow-y:auto;-webkit-overflow-scrolling:touch">
       <table class="cust-tbl"><thead><tr><th>자재명 · 규격</th><th style="text-align:right;width:70px">가용재고</th>${showPrice ? '<th style="text-align:right;width:92px">단가</th>' : ''}<th style="width:62px">상태</th></tr></thead><tbody>${rows}</tbody></table>
-    </div></div>${showPrice && _custPriceErr ? `<div style="font-size:11.5px;color:var(--amber-t);margin-top:7px;background:#fef3e2;border-radius:9px;padding:8px 11px"><i class="ti ti-alert-triangle"></i> 단가를 불러오지 못했습니다 — 담당자에게 문의해 주세요.</div>` : ''}`;
+    </div></div>${showPrice && _custPriceErr ? `<div style="font-size:11.5px;color:var(--amber-t);margin-top:7px;background:#fef3e2;border-radius:9px;padding:8px 11px"><i class="ti ti-alert-triangle"></i> 단가가 아직 준비되지 않았습니다 — 담당자에게 문의해 주세요.</div>` : ''}`;
 }
 function filterCustStock() {
   filters.custSearch = el('cust-search') ? el('cust-search').value : '';
@@ -1207,29 +1209,70 @@ function startCustomerSubs() {
       if (me && me.role === 'customer' && (filters.custTab || 'stock') === 'stock') renderCustomerStock();
     }, err => console.warn('cust inv', err));
   } catch (e) { console.warn(e); }
-  // 단가를 보여주도록 설정된 고객이면 단가표도 구독한다.
-  // 읽기 권한이 없으면 경고만 남기고 넘어간다 — 재고 화면은 단가 없이 그대로 동작한다.
-  if (me.custPriceBase) {
-    try {
-      cref('priceList').onSnapshot(snap => {
-        state.priceList = snap.docs.map(d => Object.assign({ id: d.id }, d.data()));
-        if (me && me.role === 'customer' && (filters.custTab || 'stock') === 'stock') renderCustomerStock();
-      }, err => { console.warn('cust priceList', err); _custPriceErr = true; try { renderCustomerStock(); } catch (e) { } });
-    } catch (e) { console.warn(e); }
-  }
+  // ★ 단가표(priceList)는 고객이 읽지 않는다(권한도 없다).
+  //   그 거래처가 볼 단가는 미리 계산해서 '그 거래처 문서(roles/이메일)' 안에 적어둔다.
+  //   → 로그인할 때 me.custPrices 로 이미 들어와 있다. 추가 구독이 필요 없다.
+  if (me.custPriceBase && !(me.custPrices && Object.keys(me.custPrices).length)) _custPriceErr = true;
   startCustomerHoldings();
   startCustomerHoldReqs();
 }
 let _custPriceErr = false;
-/* 고객에게 보여줄 이 자재의 단가 — 기준 단가(유통 등) + 가감액.
-   예: 신성그룹 = 유통단가 − 7,000 */
+/* 단가표 이름 → 저장용 키 (Firestore 맵 키로 쓸 수 있게 정리) */
+function custPriceKey(name) {
+  return _normName(name).replace(/[.\/\[\]#$]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+/* 고객에게 보여줄 이 자재의 단가.
+   ★ 단가표를 뒤지지 않는다 — 미리 계산돼 거래처 문서에 적혀 있는 값을 그대로 읽는다.
+   예: 신성그룹 = (유통단가 − 7,000) 이 이미 숫자로 저장돼 있음 */
 function custUnitPrice(item) {
-  if (!me || !me.custPriceBase) return null;
-  const key = ctypeKey(me.custPriceBase);
-  const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(item && item.name));
-  const base = pl ? (+pl[key] || 0) : 0;
-  if (!(base > 0)) return null;                    // 기준 단가가 없으면 표시하지 않는다
-  return Math.max(0, Math.round(base + (+me.custPriceAdj || 0)));
+  if (!me || !me.custPriceBase || !me.custPrices) return null;
+  const v = me.custPrices[custPriceKey(item && item.name)];
+  const n = +v;
+  return (v == null || !isFinite(n) || n <= 0) ? null : Math.round(n);
+}
+/* ── 거래처가 볼 단가를 미리 계산해서 거래처 문서에 적어두기 (직원/관리자 화면에서만 동작) ──
+   단가표가 바뀌면 자동으로 다시 계산해 저장한다. 고객은 이 결과값만 읽는다. */
+function custPriceMapFor(base, adj) {
+  const key = ctypeKey(base || '');
+  const add = +adj || 0;
+  const map = {};
+  (state.priceList || []).forEach(p => {
+    const k = custPriceKey(p.itemName);
+    if (!k || /^__.*__$/.test(k)) return;
+    const b = +p[key] || 0;
+    if (!(b > 0)) return;
+    map[k] = Math.max(0, Math.round(b + add));
+  });
+  return map;
+}
+let _cpTimer = null, _cpBusy = false; const _cpLast = {};
+function scheduleCustPriceSync() {
+  if (!me || isCustomerRole() || !CLOUD) return;
+  clearTimeout(_cpTimer);
+  _cpTimer = setTimeout(runCustPriceSync, 1200);
+}
+async function runCustPriceSync() {
+  if (!me || isCustomerRole() || !CLOUD) return;
+  if (_cpBusy) { scheduleCustPriceSync(); return; }
+  if (!_loadedColls.priceList || !_loadedColls.members) { scheduleCustPriceSync(); return; }
+  _cpBusy = true;
+  try {
+    const targets = (state.members || []).filter(m => m.role === 'customer' && m.custPriceBase && m.email);
+    for (const m of targets) {
+      const email = (m.email || '').toLowerCase();
+      const map = custPriceMapFor(m.custPriceBase, m.custPriceAdj);
+      if (!Object.keys(map).length) continue;              // 단가표가 아직 안 올라왔으면 건드리지 않는다
+      const sig = JSON.stringify(map);
+      if (_cpLast[email] === sig) continue;                // 이번 접속 중 이미 같은 값으로 저장함
+      try {
+        const cur = await cref('roles').doc(email).get();
+        const old = cur.exists ? ((cur.data() || {}).custPrices || null) : null;
+        if (old && JSON.stringify(old) === sig) { _cpLast[email] = sig; continue; }
+        await Store.setMerge('roles', email, { custPrices: map, custPricesAt: Date.now() });
+        _cpLast[email] = sig;
+      } catch (e) { console.warn('custPrice sync', email, e); }
+    }
+  } finally { _cpBusy = false; }
 }
 function startCustomerHoldReqs() {
   if (!CLOUD || !me || me.role !== 'customer' || !me.name) return;
@@ -11520,7 +11563,7 @@ function openMemberForm(id) {
           </select>
           <input id="m-custadj" inputmode="numeric" value="${esc(v.custPriceAdj != null && v.custPriceAdj !== '' ? v.custPriceAdj : '')}" placeholder="가감액 (예: -7000)" style="flex:1;min-width:130px;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px;text-align:right">
         </div>
-        <div style="font-size:11px;color:var(--t3);margin-top:6px;line-height:1.5">기준 단가에 가감액을 더해서 보여줍니다. <b>예: 유통 + (−7000)</b> → 유통단가에서 7,000원 뺀 금액.<br>단가표에 그 자재 단가가 없으면 <b>문의</b>로 표시됩니다.</div>
+        <div style="font-size:11px;color:var(--t3);margin-top:6px;line-height:1.5">기준 단가에 가감액을 더해서 보여줍니다. <b>예: 유통 + (−7000)</b> → 유통단가에서 7,000원 뺀 금액.<br>단가표에 그 자재 단가가 없으면 <b>문의</b>로 표시됩니다.<br><b>계산된 금액만</b> 그 거래처 계정에 저장됩니다 — 거래처는 단가표 자체를 볼 수 없습니다. 단가표를 고치면 자동으로 다시 계산됩니다.</div>
       </div>
       <div class="fld full"><div class="perm-head"><label style="margin:0"><i class="ti ti-lock-access"></i> 메뉴 접근 권한 <span style="color:var(--t3);font-weight:500">— 직원 권한일 때 적용</span></label>
         <div class="perm-quick"><button type="button" onclick="menuPermAll(true)">전체 허용</button><button type="button" onclick="menuPermAll(false)">전체 해제</button></div></div>
@@ -11581,7 +11624,13 @@ async function submitMember(id) {
   obj.custPriceAdj = (obj.role === 'customer' && _cb) ? _ca : 0;
   const prevEmail = id ? ((state.members.find(m => m.id === id) || {}).email || '').toLowerCase() : '';
   if (id) await Store.update('members', id, obj); else await Store.add('members', obj);
-  await setRoleDoc(email, obj.role, name, prevEmail, { custPriceBase: obj.custPriceBase, custPriceAdj: obj.custPriceAdj });
+  // 거래처가 볼 단가는 미리 계산해서 같이 적어둔다 (고객은 단가표를 읽지 않는다)
+  const _extra = { custPriceBase: obj.custPriceBase, custPriceAdj: obj.custPriceAdj };
+  if (obj.role === 'customer' && obj.custPriceBase) {
+    const _m = custPriceMapFor(obj.custPriceBase, obj.custPriceAdj);
+    if (Object.keys(_m).length) { _extra.custPrices = _m; _extra.custPricesAt = Date.now(); }
+  }
+  await setRoleDoc(email, obj.role, name, prevEmail, _extra);
   toast('저장됨'); closeModal();
 }
 async function setRoleDoc(email, role, name, prevEmail, extra) {
