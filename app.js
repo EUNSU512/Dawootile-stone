@@ -4161,6 +4161,7 @@ function qRowHtml(d) {
       <div class="q-amt" style="flex:1.4;min-width:62px;text-align:right;font-weight:700;padding:8px 2px;color:var(--t1);font-size:14px">0</div>
     </div>
     <div class="q-perhebe" style="font-size:11.5px;text-align:right;margin:4px 2px 0;min-height:15px"></div>
+    <div class="q-prev" style="font-size:11.5px;text-align:right;margin:2px 2px 0"></div>
     <div class="q-hebe" style="display:${_isBasin ? 'none' : 'flex'};gap:6px;align-items:center;margin-top:6px">
       <span style="white-space:nowrap;font-size:12px;color:var(--t3)"><i class="ti ti-ruler-2" style="font-size:12px;vertical-align:-1px"></i> ㎡당 단가</span>
       <input class="q-hebeprice" inputmode="numeric" placeholder="헤베당 단가 입력 → 장당 자동" oninput="quoteHebeToPrice(this)" style="flex:1;min-width:0;font-size:13px;padding:6px 8px;border:1.5px solid var(--bd2);border-radius:8px;text-align:right">
@@ -4250,18 +4251,102 @@ function bcNoteRefresh() {
       : (ct ? `<span style="color:#a2560f"><i class="ti ti-alert-circle"></i> 거래처 유형 <b>${esc(ct)}</b> 는 자동으로 정할 수 없습니다 — 업체 구분을 직접 골라주세요</span>` : '');
   });
 }
-function quoteRefillPrices() {
+/* 단가 채우기.
+   ★ force 가 아니면 '비어 있는 칸만' 채운다.
+     거래처(상호)나 단가 유형을 바꿨다고 해서 사람이 직접 넣은 단가를 덮어쓰면 안 된다
+     (2026-09-01 요청: "견적서 상호나 이런 거 변경하면 단가 변경하지 말았으면 함").
+     일부러 다시 불러오고 싶으면 품목 위 [단가 다시 불러오기] 버튼을 쓴다. */
+function quoteRefillPrices(force) {
   const client = (el('q-client') && el('q-client').value || '').trim();
   const type = el('q-ctype') ? el('q-ctype').value : '';
-  document.querySelectorAll('#q-rows .q-row').forEach(r => { const name = (r.querySelector('.q-mat').value || '').trim(); if (!name) return; const p = quoteGetPrice(client, name, type); if (p) r.querySelector('.q-price').value = p; });
+  let n = 0;
+  document.querySelectorAll('#q-rows .q-row').forEach(r => {
+    const name = (r.querySelector('.q-mat').value || '').trim(); if (!name) return;
+    const pe = r.querySelector('.q-price'); if (!pe) return;
+    if (!force && _numv(pe.value) !== 0) return;          // 이미 들어있는 단가는 건드리지 않는다
+    const p = quoteGetPrice(client, name, type);
+    if (p) { pe.value = p; n++; }
+  });
+  quoteRecalc();
+  return n;
+}
+function quoteRefillPricesForce() {
+  const n = quoteRefillPrices(true);
+  toast(n ? (n + '개 품목 단가를 다시 불러왔습니다') : '다시 불러올 단가가 없습니다');
+}
+/* ── 거래처별 '이전 판매 단가' ──────────────────────────────
+   지난 견적에서 그 거래처에 실제로 판 단가를 자재줄·운송비 밑에 띄운다.
+   따로 저장하는 게 아니라 견적 기록에서 그때그때 뽑는다. */
+let _cpvMap = null, _cpvAt = 0;
+function clientPrevPriceMap() {
+  if (_cpvMap && Date.now() - _cpvAt < 8000) return _cpvMap;
+  const m = {};
+  (state.quotes || []).forEach(q => {
+    const c = _normName(q.client || ''); if (!c) return;
+    const d = qDate(q) || '';
+    (q.items || []).forEach(it => {
+      const n = _normName(it.name || ''); const p = +it.price || 0;
+      if (!n || !(p > 0)) return;
+      const k = c + '' + n;
+      const cur = m[k];
+      if (!cur || d >= cur.date) m[k] = { price: p, date: d, docNo: q.docNo || '' };
+    });
+  });
+  _cpvMap = m; _cpvAt = Date.now();
+  return m;
+}
+function clientPrevPrice(client, name) {
+  const c = _normName(client || ''), n = _normName(name || '');
+  if (!c || !n) return null;
+  return clientPrevPriceMap()[c + '' + n] || null;
+}
+/* 이전 판매 단가 한 줄 만들기 (자재줄·운송비줄 공용) */
+function _prevPriceHtml(h, cur, applyFn) {
+  const same = cur > 0 && Math.abs(cur - h.price) < 1;
+  const col = same ? 'var(--t3)' : '#a2560f';
+  let d = h.date || ''; try { d = _shortDate(h.date); } catch (e) { }
+  return `<span style="color:var(--t3)"><i class="ti ti-history" style="font-size:12px;vertical-align:-1px"></i> 이전 판매</span> `
+    + `<b style="color:${col};font-size:13px">${fmtWon(h.price)}</b>`
+    + `<span style="color:var(--t3)">원 · ${esc(d)}${h.docNo ? ' · ' + esc(h.docNo) : ''}</span>`
+    + (same ? `<span style="color:var(--gd);margin-left:5px">같음</span>`
+      : ` <button type="button" class="btn btn-sm" style="padding:1px 8px;font-size:11px;margin-left:5px" onclick="${applyFn}(this,${h.price})">적용</button>`);
+}
+function qPrevRefresh(row) {
+  const box = row && row.querySelector('.q-prev'); if (!box) return;
+  box.innerHTML = '';
+  const name = ((row.querySelector('.q-mat') || {}).value || '').trim();
+  const client = (el('q-client') && el('q-client').value || '').trim();
+  if (!name || !client) return;
+  const h = clientPrevPrice(client, name); if (!h) return;
+  box.innerHTML = _prevPriceHtml(h, _numv((row.querySelector('.q-price') || {}).value), 'qPrevApply');
+}
+function qPrevApply(btn, p) {
+  const row = btn.closest('.q-row'); if (!row) return;
+  const pe = row.querySelector('.q-price'); if (pe) pe.value = p;
+  quoteRecalc();
+}
+function qxPrevRefresh(row) {
+  const box = row && row.querySelector('.qx-prev'); if (!box) return;
+  box.innerHTML = '';
+  const name = row.getAttribute('data-name') || '';
+  const client = (el('q-client') && el('q-client').value || '').trim();
+  if (!name || !client) return;
+  let cat = ''; try { cat = marginCat(name); } catch (e) { }
+  if (cat !== '운송') return;                              // 운송비만 (요청 범위)
+  const h = clientPrevPrice(client, name); if (!h) return;
+  box.innerHTML = _prevPriceHtml(h, _numv((row.querySelector('.qx-price') || {}).value), 'qxPrevApply');
+}
+function qxPrevApply(btn, p) {
+  const row = btn.closest('.qx-row'); if (!row) return;
+  const pe = row.querySelector('.qx-price'); if (pe) pe.value = p;
   quoteRecalc();
 }
 let _qRawTotal = 0;
 function quoteRecalc() {
   let supply = 0;
-  document.querySelectorAll('#q-rows .q-row').forEach(r => { const qty = _numv(r.querySelector('.q-qty').value); const price = _numv(r.querySelector('.q-price').value); const amt = Math.round(qty * price); const ac = r.querySelector('.q-amt'); ac.textContent = fmtWon(amt); ac.style.color = amt < 0 ? '#c0341d' : 'var(--t1)'; supply += amt; try { qPerHebeRefresh(r); } catch (e) { } });
+  document.querySelectorAll('#q-rows .q-row').forEach(r => { const qty = _numv(r.querySelector('.q-qty').value); const price = _numv(r.querySelector('.q-price').value); const amt = Math.round(qty * price); const ac = r.querySelector('.q-amt'); ac.textContent = fmtWon(amt); ac.style.color = amt < 0 ? '#c0341d' : 'var(--t1)'; supply += amt; try { qPerHebeRefresh(r); } catch (e) { } try { qPrevRefresh(r); } catch (e) { } });
   try { qMarkMinus(); } catch (e) { }
-  document.querySelectorAll('.qx-row').forEach(r => { const qty = _numv(r.querySelector('.qx-qty').value); const price = _numv(r.querySelector('.qx-price').value); const amt = Math.round(qty * price); r.querySelector('.qx-amt').textContent = fmtWon(amt); supply += amt; });
+  document.querySelectorAll('.qx-row').forEach(r => { const qty = _numv(r.querySelector('.qx-qty').value); const price = _numv(r.querySelector('.qx-price').value); const amt = Math.round(qty * price); r.querySelector('.qx-amt').textContent = fmtWon(amt); supply += amt; try { qxPrevRefresh(r); } catch (e) { } });
   const noteEl = el('q-basin-note');
   if (noteEl) {
     let basin = false;
@@ -4367,12 +4452,13 @@ function qxRowHtml(item, d) {
   const inp = 'font-size:14px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px';
   const price = (d && d.price != null && d.price !== '') ? d.price : (extraPrices()[name] || '');
   const qty = (d && d.qty != null) ? d.qty : '';
-  return `<div class="qx-row" data-name="${esc(name)}" data-unit="${esc(unit)}" style="display:flex;gap:6px;align-items:center;margin-bottom:5px">
+  return `<div class="qx-row" data-name="${esc(name)}" data-unit="${esc(unit)}" style="display:flex;gap:6px;row-gap:0;flex-wrap:wrap;align-items:center;margin-bottom:5px">
     <div style="flex:2.2;min-width:0;font-size:13.5px">${esc(name)}</div>
     <input class="qx-qty" inputmode="numeric" placeholder="0" value="${esc(qty)}" oninput="quoteRecalc()" style="flex:1;min-width:42px;${inp};text-align:right">
     <div style="width:24px;font-size:11.5px;color:var(--t3);text-align:center">${esc(unit)}</div>
     <input class="qx-price" inputmode="numeric" placeholder="단가" value="${esc(price)}" oninput="quoteRecalc()" style="flex:1.3;min-width:54px;${inp};text-align:right">
     <div class="qx-amt" style="flex:1.3;min-width:58px;text-align:right;font-weight:700;font-size:14px">0</div>
+    <div class="qx-prev" style="flex:0 0 100%;font-size:11.5px;text-align:right"></div>
   </div>`;
 }
 function extraItemsFor(ctype) {
@@ -4437,7 +4523,11 @@ function renderQuoteForm() {
         <div class="fld full" style="margin-bottom:10px"><label><i class="ti ti-lock" style="font-size:13px;color:var(--blue)"></i> 이 거래처 홀딩 자재 불러오기 <span style="color:var(--t3);font-weight:500">(눌러서 견적에 추가 → 확정 후 출고)</span></label>
           <div id="q-holdbox" style="border:1px solid var(--bd2);border-radius:10px;padding:4px 10px;max-height:26vh;overflow:auto">${quoteHoldBoxHtml(v.client || '')}</div>
         </div>
-        <div class="fld full" style="margin-bottom:10px"><label>견적 품목 <span class="req">*</span> <span style="color:var(--t3);font-weight:500">(자재 선택 시 규격·단가 자동 · 단가 수정 가능)</span></label>
+        <div class="fld full" style="margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:5px">
+            <label style="margin:0">견적 품목 <span class="req">*</span> <span style="color:var(--t3);font-weight:500">(자재를 고르면 단가가 자동으로 들어갑니다 · 넣은 단가는 거래처를 바꿔도 그대로)</span></label>
+            <button type="button" class="btn btn-sm" style="margin-left:auto" onclick="quoteRefillPricesForce()" title="지금 거래처·단가 유형 기준으로 모든 품목 단가를 다시 채웁니다 (직접 넣은 단가도 덮어씁니다)"><i class="ti ti-refresh"></i>단가 다시 불러오기</button>
+          </div>
           <div id="q-rows">${rows}</div>
           <datalist id="q-mat-list">${matOpts}</datalist>
           <button type="button" class="btn btn-ghost btn-sm btn-block" onclick="addQRow()"><i class="ti ti-plus"></i>품목 추가</button>
