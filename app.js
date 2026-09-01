@@ -279,7 +279,9 @@ async function afterAuth(user) {
       const rd = await cref('roles').doc(_email).get();
       const _r = rd.exists ? ((rd.data() || {}).role) : '';
       if (_r === 'customer' || _r === 'crew') {
-        me = { name: (rd.data().name || _email.split('@')[0]), email: _email, role: _r };
+        const _rd = rd.data() || {};
+        me = { name: (_rd.name || _email.split('@')[0]), email: _email, role: _r,
+               custPriceBase: _rd.custPriceBase || '', custPriceAdj: +_rd.custPriceAdj || 0 };
         el('login').style.display = 'none';
         el('app').style.display = 'block';
         el('me-av').textContent = initial(me.name);
@@ -1097,6 +1099,7 @@ function custStockList() {
 function custAvail(i) { return (i.availJang == null) ? Math.max(0, +i.jang || 0) : Math.max(0, +i.availJang || 0); }
 function custStockBody(list) {
   if (!list.length) return `<div class="empty"><i class="ti ti-search-off"></i>해당하는 자재가 없습니다</div>`;
+  const showPrice = !!(me && me.custPriceBase);
   const rows = list.map(i => {
     const jang = custAvail(i);
     const inStock = jang > 0;
@@ -1107,13 +1110,16 @@ function custStockBody(list) {
     return `<tr>
       <td><div style="font-weight:600;color:var(--t1);word-break:keep-all">${esc(i.name)}</div>${i.spec ? `<div style="color:var(--t3);font-size:11px;margin-top:2px">${esc(i.spec)}</div>` : ''}${restock}</td>
       <td style="text-align:right;white-space:nowrap"><div style="font-weight:700;color:${inStock ? 'var(--t1)' : 'var(--t3)'}">${jang}장</div></td>
+      ${showPrice ? `<td style="text-align:right;white-space:nowrap">${(() => { const p = custUnitPrice(i); return p != null
+        ? `<div style="font-weight:700;color:var(--gd)">${fmtWon(p)}</div><div style="font-size:10px;color:var(--t3)">장당 · VAT 별도</div>`
+        : `<div style="color:var(--t3);font-size:11.5px">문의</div>`; })()}</td>` : ''}
       <td><span style="display:inline-flex;align-items:center;gap:6px"><span class="live-dot" style="${dot}"></span>${lbl}</span></td>
     </tr>`;
   }).join('');
   return `<div style="border:0.5px solid var(--bd);border-radius:12px;overflow:hidden;margin-top:2px">
     <div id="cust-stock-wrap" data-keepscroll style="max-height:calc(100vh - 250px);min-height:200px;overflow-y:auto;-webkit-overflow-scrolling:touch">
-      <table class="cust-tbl"><thead><tr><th>자재명 · 규격</th><th style="text-align:right;width:70px">가용재고</th><th style="width:62px">상태</th></tr></thead><tbody>${rows}</tbody></table>
-    </div></div>`;
+      <table class="cust-tbl"><thead><tr><th>자재명 · 규격</th><th style="text-align:right;width:70px">가용재고</th>${showPrice ? '<th style="text-align:right;width:92px">단가</th>' : ''}<th style="width:62px">상태</th></tr></thead><tbody>${rows}</tbody></table>
+    </div></div>${showPrice && _custPriceErr ? `<div style="font-size:11.5px;color:var(--amber-t);margin-top:7px;background:#fef3e2;border-radius:9px;padding:8px 11px"><i class="ti ti-alert-triangle"></i> 단가를 불러오지 못했습니다 — 담당자에게 문의해 주세요.</div>` : ''}`;
 }
 function filterCustStock() {
   filters.custSearch = el('cust-search') ? el('cust-search').value : '';
@@ -1201,8 +1207,29 @@ function startCustomerSubs() {
       if (me && me.role === 'customer' && (filters.custTab || 'stock') === 'stock') renderCustomerStock();
     }, err => console.warn('cust inv', err));
   } catch (e) { console.warn(e); }
+  // 단가를 보여주도록 설정된 고객이면 단가표도 구독한다.
+  // 읽기 권한이 없으면 경고만 남기고 넘어간다 — 재고 화면은 단가 없이 그대로 동작한다.
+  if (me.custPriceBase) {
+    try {
+      cref('priceList').onSnapshot(snap => {
+        state.priceList = snap.docs.map(d => Object.assign({ id: d.id }, d.data()));
+        if (me && me.role === 'customer' && (filters.custTab || 'stock') === 'stock') renderCustomerStock();
+      }, err => { console.warn('cust priceList', err); _custPriceErr = true; try { renderCustomerStock(); } catch (e) { } });
+    } catch (e) { console.warn(e); }
+  }
   startCustomerHoldings();
   startCustomerHoldReqs();
+}
+let _custPriceErr = false;
+/* 고객에게 보여줄 이 자재의 단가 — 기준 단가(유통 등) + 가감액.
+   예: 신성그룹 = 유통단가 − 7,000 */
+function custUnitPrice(item) {
+  if (!me || !me.custPriceBase) return null;
+  const key = ctypeKey(me.custPriceBase);
+  const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(item && item.name));
+  const base = pl ? (+pl[key] || 0) : 0;
+  if (!(base > 0)) return null;                    // 기준 단가가 없으면 표시하지 않는다
+  return Math.max(0, Math.round(base + (+me.custPriceAdj || 0)));
 }
 function startCustomerHoldReqs() {
   if (!CLOUD || !me || me.role !== 'customer' || !me.name) return;
@@ -11485,6 +11512,16 @@ function openMemberForm(id) {
       <div class="fld"><label>권한</label><select id="m-role"><option value="staff" ${v.role === 'staff' ? 'selected' : ''}>직원</option><option value="admin" ${v.role === 'admin' ? 'selected' : ''}>관리자</option><option value="customer" ${v.role === 'customer' ? 'selected' : ''}>고객(거래처) · 재고조회만</option><option value="crew" ${v.role === 'crew' ? 'selected' : ''}>시공팀 · 시공 스케줄만</option></select></div>
       <div class="fld full"><label>로그인 이메일<span class="req">*</span></label><input id="m-email" type="email" value="${esc(v.email || '')}" autocapitalize="none" spellcheck="false" placeholder="예) hong@dawoo.com"></div>
       <div class="fld full"><label>연락처 <span style="color:var(--t3);font-weight:500">(견적서 담당자 연락처로 표시)</span></label><input id="m-phone" value="${esc(v.phone || '')}" placeholder="예) 010-1234-5678"></div>
+      <div class="fld full" style="background:#f4f7fd;border-radius:11px;padding:10px 12px">
+        <label style="margin-bottom:6px"><i class="ti ti-tag" style="color:var(--blue)"></i> 고객 화면에 단가 보여주기 <span style="color:var(--t3);font-weight:500">— 고객(거래처) 권한일 때만 적용</span></label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <select id="m-custbase" style="flex:1;min-width:130px;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px;background:#fff">
+            <option value="">안 보여줌</option>${CTYPES.map(t => `<option ${((v.custPriceBase || '') === t) ? 'selected' : ''}>${esc(t)}</option>`).join('')}
+          </select>
+          <input id="m-custadj" inputmode="numeric" value="${esc(v.custPriceAdj != null && v.custPriceAdj !== '' ? v.custPriceAdj : '')}" placeholder="가감액 (예: -7000)" style="flex:1;min-width:130px;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px;text-align:right">
+        </div>
+        <div style="font-size:11px;color:var(--t3);margin-top:6px;line-height:1.5">기준 단가에 가감액을 더해서 보여줍니다. <b>예: 유통 + (−7000)</b> → 유통단가에서 7,000원 뺀 금액.<br>단가표에 그 자재 단가가 없으면 <b>문의</b>로 표시됩니다.</div>
+      </div>
       <div class="fld full"><div class="perm-head"><label style="margin:0"><i class="ti ti-lock-access"></i> 메뉴 접근 권한 <span style="color:var(--t3);font-weight:500">— 직원 권한일 때 적용</span></label>
         <div class="perm-quick"><button type="button" onclick="menuPermAll(true)">전체 허용</button><button type="button" onclick="menuPermAll(false)">전체 해제</button></div></div>
         <div class="perm-grid">${ALL_TABS.filter(t => !ALWAYS_TABS.includes(t)).map(t => { const sens = RESTRICTED_TABS.includes(t); return `<div class="perm-row${sens ? ' sens' : ''}"><span class="perm-lab"><i class="ti ${TAB_ICONS[t] || 'ti-square'}"></i>${TAB_LABELS[t]}${sens ? '<span class="pbadge">민감</span>' : ''}</span><label class="swt"><input type="checkbox" class="m-menu" value="${t}" ${curMenus.includes(t) ? 'checked' : ''}><span class="track"></span></label></div>`; }).join('')}</div>
@@ -11537,16 +11574,23 @@ async function submitMember(id) {
   const _menus = Array.from(document.querySelectorAll('.m-menu')).filter(c => c.checked).map(c => c.value);
   const obj = { name, role: el('m-role').value, email, phone: (el('m-phone') && el('m-phone').value || '').trim() };
   if (obj.role === 'staff') { obj.menus = _menus; obj.canTax = !!(el('m-cantax') && el('m-cantax').checked); obj.canLedger = !!(el('m-canledger') && el('m-canledger').checked); }
+  // 고객 화면 단가 설정 — 고객 권한일 때만 의미가 있다
+  const _cb = (el('m-custbase') && el('m-custbase').value) || '';
+  const _ca = Math.round(_numv(el('m-custadj') && el('m-custadj').value));
+  obj.custPriceBase = (obj.role === 'customer') ? _cb : '';
+  obj.custPriceAdj = (obj.role === 'customer' && _cb) ? _ca : 0;
   const prevEmail = id ? ((state.members.find(m => m.id === id) || {}).email || '').toLowerCase() : '';
   if (id) await Store.update('members', id, obj); else await Store.add('members', obj);
-  await setRoleDoc(email, obj.role, name, prevEmail);
+  await setRoleDoc(email, obj.role, name, prevEmail, { custPriceBase: obj.custPriceBase, custPriceAdj: obj.custPriceAdj });
   toast('저장됨'); closeModal();
 }
-async function setRoleDoc(email, role, name, prevEmail) {
+async function setRoleDoc(email, role, name, prevEmail, extra) {
   if (!CLOUD) return;
   try {
     if (prevEmail && prevEmail !== email) await cref('roles').doc(prevEmail).delete();
-    await cref('roles').doc(email).set({ role: role || 'staff', name: name || '' });
+    // ★ 고객 계정은 members 를 읽을 권한이 없다. 로그인할 때 읽는 건 roles 문서뿐이므로
+    //   고객에게 보여줄 단가 설정도 여기에 같이 넣는다.
+    await cref('roles').doc(email).set(Object.assign({ role: role || 'staff', name: name || '' }, extra || {}));
   } catch (e) { console.warn('roles doc', e); }
 }
 async function delMember(id) {
