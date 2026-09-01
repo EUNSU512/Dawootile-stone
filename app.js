@@ -830,7 +830,7 @@ async function saveClientBizInfo(id) {
   const taxInfo = { bizNo: g('bizno'), corpName: g('corp') || c.value, ceo: g('ceo'), addr: g('addr'), bizType: g('biztype'), bizClass: g('bizclass'), contact: g('contact'), email: g('email'), tel: g('tel'), hp: g('hp'), fax: g('fax') };
   const patch = { taxInfo: taxInfo };
   const ct = classifyCtype(taxInfo.bizType, taxInfo.bizClass, taxInfo.corpName);
-  if ((c.ctype || '') !== ct && (taxInfo.bizType || taxInfo.bizClass)) patch.ctype = ct;
+  if (ctypeAutoOK(c.ctype) && (c.ctype || '') !== ct && (taxInfo.bizType || taxInfo.bizClass)) patch.ctype = ct;
   await Store.update('clients', id, patch); toast('거래처 정보 저장됨'); setTimeout(renderClients, 300);
 }
 async function lookupClientBiz(id) {
@@ -915,7 +915,7 @@ async function importClientsFull(input) {
       if (match) {
         const ex = match.taxInfo || {}; const merged = {};
         ['bizNo', 'corpName', 'ceo', 'addr', 'bizType', 'bizClass', 'contact', 'email'].forEach(k => { merged[k] = ti[k] || ex[k] || ''; });
-        const patch = { taxInfo: merged }; if (bizType || bizClass) patch.ctype = ct;
+        const patch = { taxInfo: merged }; if ((bizType || bizClass) && ctypeAutoOK(match.ctype)) patch.ctype = ct;   // 손으로 정한 대리점·별도는 지킨다
         batch.update(coll.doc(match.id), patch); updated++; ops++;
       } else {
         const ref = coll.doc(); batch.set(ref, { value: name, ctype: ct, taxInfo: ti });
@@ -4240,7 +4240,14 @@ function quoteClientChanged() {
   bcSyncAllBiz(); bcNoteRefresh();          // 거래처가 바뀌면 세면대 계산기 업체 구분도 따라간다
   const hb = el('q-holdbox'); if (hb) hb.innerHTML = quoteHoldBoxHtml(client);
 }
-function quoteTypeChanged() { quoteRefillPrices(); quoteExtraRefresh(); bcSyncAllBiz(); bcNoteRefresh(); }
+/* 단가 유형(업체 유형)을 '직접 고른' 경우 — 그 유형 단가로 다시 채운다.
+   상호만 바뀐 것과 다르다. 유형을 고르는 건 "이 단가로 가겠다"는 뜻이라 덮어쓴다. */
+function quoteTypeChanged() {
+  const n = quoteRefillPrices(true);
+  quoteExtraRefresh(); bcSyncAllBiz(); bcNoteRefresh();
+  const t = el('q-ctype') ? el('q-ctype').value : '';
+  if (n) toast(t + ' 단가로 ' + n + '개 품목을 다시 채웠습니다');
+}
 /* 안내 문구만 다시 그린다 (업체 구분 select 는 건드리지 않음) */
 function bcNoteRefresh() {
   const auto = bcBizFromCtype();
@@ -4819,7 +4826,7 @@ async function taxSaveClientNow(quiet) {
   try {
     const patch = { taxInfo: buyer };
     const ct = classifyCtype(buyer.bizType, buyer.bizClass, buyer.corpName);   // 업태·종목으로 거래처 유형도 같이 정리
-    if ((c.ctype || '') !== ct && (buyer.bizType || buyer.bizClass)) patch.ctype = ct;
+    if (ctypeAutoOK(c.ctype) && (c.ctype || '') !== ct && (buyer.bizType || buyer.bizClass)) patch.ctype = ct;
     await Store.update('clients', c.id, patch);
     const b = el('tx-saved');
     if (b) { b.textContent = '· 저장됨'; setTimeout(() => { if (el('tx-saved')) el('tx-saved').textContent = ''; }, 2000); }
@@ -6217,7 +6224,7 @@ async function submitTaxInvoice(id) {
   try {
     toast('세금계산서 발행 중…');
     await saveClientTaxInfo(q.client, buyer);
-    try { const _ct = classifyCtype(buyer.bizType, buyer.bizClass, buyer.corpName); const _c = (state.clients || []).find(x => _normName(x.value) === _normName(q.client)); if (_c && (_c.ctype || '') !== _ct) await Store.update('clients', _c.id, { ctype: _ct }); } catch (e) { }
+    try { const _ct = classifyCtype(buyer.bizType, buyer.bizClass, buyer.corpName); const _c = (state.clients || []).find(x => _normName(x.value) === _normName(q.client)); if (_c && ctypeAutoOK(_c.ctype) && (_c.ctype || '') !== _ct) await Store.update('clients', _c.id, { ctype: _ct }); } catch (e) { }
     const token = await auth.currentUser.getIdToken();
     const send = async pl => {
       const rr = await fetch(PUSH_FN + '?action=taxinvoice', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify(pl) });
@@ -6242,14 +6249,20 @@ async function submitTaxInvoice(id) {
   } catch (e) { toast('발행 오류: ' + ((e && e.message) || e)); }
   finally { setTimeout(() => { _busy = false; }, 700); }
 }
-/* 업태/업종/상호로 거래처 유형 자동분류 */
+/* 업태/업종/상호로 거래처 유형 자동분류
+   ★ '대리점' 은 자동으로 정하지 않는다 (2026-09-01).
+     상호에 '○○대리점' 이 들어있는 곳은 한샘·LX 같은 **남의 브랜드 대리점**이지
+     우리(다우세라믹) 대리점이 아니다. 대리점 단가는 다우세라믹 대리점에만 주는 값이므로
+     사람이 직접 지정해야 한다. '별도'(예외 업체 단가)도 마찬가지다. */
 function classifyCtype(bizType, bizClass, name) {
   const t = ((bizType || '') + ' ' + (bizClass || '') + ' ' + (name || '')).replace(/\s/g, '');
-  if (/대리점/.test(t)) return '대리점';
   if (/건축|건설|가구|인테리어|시공|실내|목공|창호|리모델|설계|디자인|공사|marble/i.test(t)) return '인테리어';
   if (/도매|소매|도소매|타일|도기|위생|석재|제조|무역|유통|자재|판매|건자재/.test(t)) return '유통';
   return '소비자';
 }
+/* 자동분류가 지금 값을 덮어써도 되는지.
+   '대리점'·'별도' 는 사람이 정한 값이라 사업자 조회·계산서 발행 때 건드리면 안 된다. */
+function ctypeAutoOK(cur) { const c = String(cur == null ? '' : cur).trim(); return c !== '대리점' && c !== '별도'; }
 /* 사업자번호로 기업정보 조회 → 자동입력 + 유형 자동분류 + 거래처 등록 */
 async function lookupBizInfo() {
   const raw = el('tx-bizno') ? el('tx-bizno').value : ''; const corpNum = (raw || '').replace(/[^0-9]/g, '');
