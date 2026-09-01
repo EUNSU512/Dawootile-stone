@@ -8772,6 +8772,23 @@ function toggleQSel(id) {
   renderQuote();
 }
 function qSelClear() { _qSel.clear(); _qSelClient = ''; renderQuote(); }
+/* 묶음 청구서의 비고 — 같은 내용이 견적 수만큼 반복되지 않게 한 번씩만 적는다.
+   견적마다 비고가 조금씩 다른 경우(운송비 별도, 양중 장비대 별도 …)가 있어서
+   통째로 버리지 않고 '줄 단위'로 합친다.
+   ① 줄이 가장 많은 비고를 기준으로 깔고
+   ② 다른 견적에만 있는 줄을 뒤에 덧붙인다 (공백만 다른 줄은 같은 줄로 본다) */
+function billMergedMemo(qs) {
+  const key = s => String(s).replace(/\s+/g, ' ').trim();
+  const lines = m => String(m || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+  const memos = (qs || []).map(q => String((q && q.memo) || '').trim()).filter(Boolean);
+  if (!memos.length) return [];
+  let base = memos[0];
+  memos.forEach(m => { if (lines(m).length > lines(base).length) base = m; });
+  const out = lines(base);
+  const seen = new Set(out.map(key));
+  memos.forEach(m => lines(m).forEach(l => { const k = key(l); if (k && !seen.has(k)) { seen.add(k); out.push(l); } }));
+  return out;
+}
 /* ══════════════════════════════════════════════════════════
    묶음 청구 — 항목 편집 단계
    출력 전에 어떤 품목을 넣을지 고르고 수량·단가를 손볼 수 있다.
@@ -9132,7 +9149,7 @@ function combinedBillDocHtml(qs, picked, extraDc) {
   <table class="items"><colgroup><col style="width:6.5%"><col style="width:20%"><col style="width:12%"><col style="width:4%"><col style="width:5%"><col style="width:9.5%"><col style="width:10.5%"><col style="width:8.5%"><col style="width:10.5%"><col style="width:13%"></colgroup>
     <thead><tr><th>날짜</th><th>품목명</th><th>규격</th><th>단위</th><th>수량</th><th>단가</th><th>공급가</th><th>부가세</th><th>합계금액</th><th>현장 · 담당</th></tr></thead><tbody>${rows}</tbody></table>
   <div class="bottom">
-    <div class="memo"><div class="mh">비 고</div><div class="mb">${[...new Set(qs.map(q => (q.memo || '').trim()).filter(Boolean))].map(m => e(m)).join('<br><br>')}</div></div>
+    <div class="memo"><div class="mh">비 고</div><div class="mb">${billMergedMemo(qs).map(l => e(l)).join('<br>')}</div></div>
     <table class="sum">
       <tr><td class="k">공급가액 합계</td><td class="v">${fmtWon(supply)} 원</td></tr>
       <tr><td class="k">부가세 (10%)</td><td class="v">${fmtWon(vat)} 원</td></tr>
