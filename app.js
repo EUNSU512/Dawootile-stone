@@ -7791,7 +7791,7 @@ function _uq(v) { try { return decodeURIComponent(String(v || '')); } catch (e) 
 const _openSup = new Set();      // 매입처
 const _openCli = new Set();      // 매출 거래처
 function purToggleSup(enc) { const k = _uq(enc); if (_openSup.has(k)) _openSup.delete(k); else _openSup.add(k); renderSettle(); }
-function saleToggleCli(enc) { const k = _uq(enc); if (_openCli.has(k)) _openCli.delete(k); else _openCli.add(k); renderSettle(); }
+function saleToggleCli(enc) { const k = _uq(enc); if (_openCli.has(k)) _openCli.delete(k); else _openCli.add(k); if (!_saleRefresh()) renderSettle(); }
 let _purView = 'list';                    // list | supplier
 function purSetView(v) { _purView = v; renderSettle(); }
 function purchaseCard(ym) {
@@ -8016,7 +8016,7 @@ function downloadPurchases(ym) {
    같은 계산서면 한 줄로 합치고, 어느 쪽에서 왔는지 표시해 둔다.
    ══════════════════════════════════════════════════════════ */
 let _saleView = 'list';                    // list = 건별 / client = 거래처별
-function saleSetView(v) { _saleView = v; renderSettle(); }
+function saleSetView(v) { _saleView = v; if (!_saleRefresh()) renderSettle(); }
 function _ntsKey(v) { return String(v == null ? '' : v).replace(/[^0-9A-Za-z]/g, ''); }
 /* 앱에서 발행한 매출 계산서 (발행일 기준) */
 function salesFromApp(sd, ed) {
@@ -8162,9 +8162,45 @@ function openPurSupplierAll(enc) {
   }).join('') : `<div class="empty"><i class="ti ti-file-off"></i>매입 내역이 없습니다</div>`}</div>
     <div class="frm-foot"><button class="btn btn-block" onclick="closeModal()">닫기</button></div>`);
 }
-function salesCard(ym) {
+/* 출처 배지 — 목록 두 군데(건별·거래처별)에서 같이 쓴다 */
+function _saleSrcPill(r) {
+  return r.src === 'both' ? `<span class="pill p-done" style="font-size:9px;padding:0 5px">양쪽</span>`
+    : r.src === 'app' ? (r.unconfirmed && !r.test ? `<span class="pill p-issue" style="font-size:9px;padding:0 5px">확인 필요</span>` : `<span class="pill p-prog" style="font-size:9px;padding:0 5px">앱 발행</span>`)
+      : `<span class="pill p-gray" style="font-size:9px;padding:0 5px">홈택스</span>`;
+}
+/* ── 매출 계산서 검색 ──
+   거래처 / 전표(견적)번호 / 품목 / 국세청 승인번호 / 일자 를 한 칸에서 찾는다.
+   검색칸은 목록 밖에 두고 목록만 다시 그린다 — 그래야 글자 칠 때 커서가 안 빠진다. */
+function _saleHit(r, qy) {
+  if (!qy) return true;
+  return ((r.client || '') + ' ' + (r.docNo || '') + ' ' + (r.item || '') + ' ' + (r.nts || '') + ' ' + (r.date || ''))
+    .toLowerCase().includes(qy);
+}
+/* 목록만 다시 그린다. 정산 화면이 아니면 false 를 돌려준다 */
+function _saleRefresh() {
+  const box = el('sale-listbox'); if (!box) return false;
+  const sc = el('settle-sale-list'); const top = sc ? sc.scrollTop : 0;
+  box.innerHTML = _saleListHtml(filters.settleMonth || todayStr().slice(0, 7));
+  const s2 = el('settle-sale-list'); if (s2) s2.scrollTop = top;
+  return true;
+}
+function saleSearchChanged(v) {
+  filters.saleSearch = v;
+  _saleRefresh();
+  const x = el('sale-search-x'); if (x) x.style.display = (v || '').trim() ? '' : 'none';
+}
+function saleSearchClear() {
+  filters.saleSearch = '';
+  const i = el('sale-search'); if (i) { i.value = ''; i.focus(); }
+  saleSearchChanged('');
+}
+function salesCard(ym) { const p = _saleParts(ym); return p.head + p.search + `<div id="sale-listbox">${p.list}</div></div>`; }
+function _saleListHtml(ym) { return _saleParts(ym).list; }
+function _saleParts(ym) {
   const sd = ym + '-01', ed = _ymd(new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0));
   const rows = salesRows(sd, ed);
+  const _sq = (filters.saleSearch || '').trim().toLowerCase();
+  const fRows = _sq ? rows.filter(r => _saleHit(r, _sq)) : rows;   // 검색은 목록에만 건다 (위 합계는 그 달 전체)
   const t = salesSum(rows.filter(r => !r.test));       // 테스트 발행은 실제 매출이 아니라 합계에서 뺀다
   const nApp = rows.filter(r => r.src === 'app').length;
   const nHt = rows.filter(r => r.src === 'hometax').length;
@@ -8177,16 +8213,15 @@ function salesCard(ym) {
   const cell = (lab, v, col, sub) => `<div style="text-align:center;padding:9px 6px;background:var(--soft);border-radius:10px">
     <div style="font-size:10.5px;color:var(--t2);margin-bottom:3px">${lab}</div>
     <div style="font-size:15px;font-weight:800;color:${col}">${fmtWon(v)}</div>${sub ? `<div style="font-size:10px;color:var(--t3);margin-top:1px">${sub}</div>` : ''}</div>`;
-  const srcPill = r => r.src === 'both' ? `<span class="pill p-done" style="font-size:9px;padding:0 5px">양쪽</span>`
-    : r.src === 'app' ? (r.unconfirmed && !r.test ? `<span class="pill p-issue" style="font-size:9px;padding:0 5px">확인 필요</span>` : `<span class="pill p-prog" style="font-size:9px;padding:0 5px">앱 발행</span>`)
-      : `<span class="pill p-gray" style="font-size:9px;padding:0 5px">홈택스</span>`;
+  const srcPill = _saleSrcPill;
   // 거래처별
   const byC = {};
-  rows.forEach(r => { const k = r.client || '(상호없음)'; if (!byC[k]) byC[k] = { n: 0, supply: 0, vat: 0, total: 0 }; const o = byC[k]; o.n++; o.supply += (+r.supply || 0); o.vat += (+r.vat || 0); o.total += (+r.total || 0); });
+  fRows.forEach(r => { const k = r.client || '(상호없음)'; if (!byC[k]) byC[k] = { n: 0, supply: 0, vat: 0, total: 0 }; const o = byC[k]; o.n++; o.supply += (+r.supply || 0); o.vat += (+r.vat || 0); o.total += (+r.total || 0); });
   const cKeys = Object.keys(byC).sort((a, b) => byC[b].total - byC[a].total);
+  const cKeysAll = Object.keys(rows.reduce((m, r) => { m[r.client || '(상호없음)'] = 1; return m; }, {}));
   const cRows = cKeys.length ? cKeys.map(k => {
     const open = _openCli.has(k);
-    const mine = rows.filter(r => (r.client || '(상호없음)') === k);
+    const mine = fRows.filter(r => (r.client || '(상호없음)') === k);
     const detail = open ? `<tr><td colspan="5" style="padding:0;background:#f6faf7">
         <div style="padding:8px 10px 10px">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
@@ -8214,9 +8249,9 @@ function salesCard(ym) {
       <td style="padding:6px 8px;text-align:right;color:var(--t3)">${fmtWon(byC[k].vat)}</td>
       <td style="padding:6px 8px;text-align:right;font-weight:800;color:var(--gd)">${fmtWon(byC[k].total)}</td></tr>${detail}`;
   }).join('')
-    : `<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--t3)">매출 계산서가 없습니다</td></tr>`;
+    : `<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--t3)">${_sq ? '검색 결과가 없습니다' : '매출 계산서가 없습니다'}</td></tr>`;
   // 건별
-  const lRows = rows.length ? rows.map(r => `<tr style="border-bottom:1px solid var(--soft)">
+  const lRows = fRows.length ? fRows.map(r => `<tr style="border-bottom:1px solid var(--soft)">
       <td style="padding:6px 8px;white-space:nowrap;font-size:11.5px;color:var(--t3)">${esc((r.date || '').slice(5))}</td>
       <td style="padding:6px 8px"><b>${esc(r.client || '-')}</b>${r.docNo ? `<div style="font-size:10.5px;color:var(--t3)">${esc(r.docNo)}</div>` : (r.item ? `<div style="font-size:10.5px;color:var(--t3)">${esc(r.item)}</div>` : '')}</td>
       <td style="padding:6px 8px;text-align:center;white-space:nowrap">${srcPill(r)}${r.test ? `<div style="font-size:9px;color:#9a6a12;font-weight:700;margin-top:2px">테스트</div>` : ''}</td>
@@ -8225,10 +8260,19 @@ function salesCard(ym) {
       <td style="padding:6px 8px;text-align:right;font-weight:700">${fmtWon(r.total)}</td>
       <td style="padding:6px 8px;text-align:center;white-space:nowrap">${r.mgt ? `<button class="btn btn-sm" style="padding:2px 7px" onclick="taxViewDoc('${esc(r.mgt)}','print')"><i class="ti ti-file-search"></i>보기</button>` : `<span style="font-size:10.5px;color:var(--t3)">${r.nts ? esc(String(r.nts).slice(0, 8)) + '…' : '-'}</span>`}</td>
     </tr>`).join('')
-    : `<tr><td colspan="7" style="padding:16px;text-align:center;color:var(--t3)">${esc(ym)} 매출 계산서가 없습니다</td></tr>`;
+    : `<tr><td colspan="7" style="padding:16px;text-align:center;color:var(--t3)">${_sq ? '검색 결과가 없습니다' : esc(ym) + ' 매출 계산서가 없습니다'}</td></tr>`;
   const tabBtn = (v, l) => `<button class="chip ${_saleView === v ? 'active' : ''}" onclick="saleSetView('${v}')">${l}</button>`;
   const admin = isAdmin();
-  return `<div class="card" style="margin-bottom:12px;padding:13px 14px">
+  // 검색 결과 요약 (검색 중일 때만)
+  const ft = salesSum(fRows.filter(r => !r.test));
+  const resultBar = _sq ? `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#eef4ff;border:1px solid #cfe0ff;border-radius:10px;padding:8px 11px;margin-bottom:9px;font-size:12px">
+      <span style="color:#2f6fed;font-weight:800"><i class="ti ti-search"></i> 검색 결과 ${fRows.length}건</span>
+      <span style="color:var(--t2)">공급가 <b>${fmtWon(ft.supply)}</b></span>
+      <span style="color:var(--t2)">세액 <b>${fmtWon(ft.vat)}</b></span>
+      <span style="color:var(--gd);font-weight:800">합계 ${fmtWon(ft.total)}</span>
+      <span style="color:var(--t3);font-size:11px">거래처 ${cKeys.length}곳${fRows.filter(r => r.test).length ? ' · 테스트 제외' : ''}</span>
+    </div>` : '';
+  const head = `<div class="card" style="margin-bottom:12px;padding:13px 14px">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:9px">
       <div style="font-size:11.5px;color:var(--t3);font-weight:700"><i class="ti ti-file-invoice"></i> 매출 세금계산서</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -8241,7 +8285,7 @@ function salesCard(ym) {
       ${cell('매출 공급가', t.supply, 'var(--gd)', t.n + '건' + (nTest ? ' · 테스트 ' + nTest + '건 제외' : ''))}
       ${cell('매출 세액', t.vat, '#b45309', '부가세 납부분')}
       ${cell('합계', t.total, 'var(--gd)', '공급가+세액')}
-      ${cell('거래처', cKeys.length, '#2f6fed', '곳')}
+      ${cell('거래처', cKeysAll.length, '#2f6fed', '곳')}
       ${cell('계산서 미발행', noTaxAmt, noTaxAmt > 0 ? '#c0341d' : 'var(--t3)', noTax.length + '건')}
     </div>
     ${noTax.length ? `<div class="banner warn" style="margin-bottom:9px;font-size:12px"><i class="ti ti-alert-triangle"></i><span style="flex:1;min-width:0">
@@ -8253,13 +8297,20 @@ function salesCard(ym) {
       실제로 끊은 건이라면 홈택스 수집 기간을 넓혀 다시 불러오세요. 계산서 없이 표시만 해둔 거라면 그대로 두시면 됩니다.</span></div>` : ''}
     <div style="font-size:11px;color:var(--t3);line-height:1.6;margin-bottom:9px">
       · 출처 — <b>앱 발행</b> ${nApp}건 · <b>홈택스</b> ${nHt}건 · <b>양쪽</b> ${nBoth}건 (승인번호가 같으면 한 줄로 합치고 금액은 홈택스 기준을 씁니다)
-      ${nHt + nBoth === 0 ? '<br>· 홈택스에서 아직 안 가져왔습니다. <b>홈택스에서 불러오기</b>를 누르면 앱 밖에서 발행한 건까지 다 들어옵니다.' : ''}</div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${tabBtn('list', '건별')}${tabBtn('client', '거래처별 ' + cKeys.length)}</div>
+      ${nHt + nBoth === 0 ? '<br>· 홈택스에서 아직 안 가져왔습니다. <b>홈택스에서 불러오기</b>를 누르면 앱 밖에서 발행한 건까지 다 들어옵니다.' : ''}</div>`;
+  // 검색칸은 목록 바깥에 둔다 — 목록만 다시 그려야 글자 칠 때 커서가 안 빠진다
+  const search = `<div class="search-box" style="margin-bottom:9px"><i class="ti ti-search"></i>
+      <input id="sale-search" placeholder="거래처 · 견적번호 · 품목 · 승인번호 검색" value="${esc(filters.saleSearch || '')}" oninput="saleSearchChanged(this.value)" autocomplete="off" lang="ko">
+      <button class="search-x" id="sale-search-x" style="${_sq ? '' : 'display:none'}" onclick="saleSearchClear()"><i class="ti ti-x"></i></button>
+    </div>`;
+  const list = `${resultBar}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${tabBtn('list', '건별 ' + fRows.length)}${tabBtn('client', '거래처별 ' + cKeys.length)}</div>
     <div data-keepscroll id="settle-sale-list" style="max-height:44vh;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">
       ${_saleView === 'client'
       ? `<thead><tr style="border-bottom:1.5px solid var(--bd);color:var(--t2);font-size:11px"><th style="padding:6px 8px;text-align:left">거래처</th><th style="padding:6px 8px;text-align:right">건수</th><th style="padding:6px 8px;text-align:right">공급가</th><th style="padding:6px 8px;text-align:right">세액</th><th style="padding:6px 8px;text-align:right">합계</th></tr></thead><tbody>${cRows}</tbody>`
       : `<thead><tr style="border-bottom:1.5px solid var(--bd);color:var(--t2);font-size:11px"><th style="padding:6px 8px;text-align:left">일자</th><th style="padding:6px 8px;text-align:left">거래처 · 전표</th><th style="padding:6px 8px;text-align:center">출처</th><th style="padding:6px 8px;text-align:right">공급가</th><th style="padding:6px 8px;text-align:right">세액</th><th style="padding:6px 8px;text-align:right">합계</th><th style="padding:6px 8px;text-align:center">문서</th></tr></thead><tbody>${lRows}</tbody>`}
-    </table></div></div>`;
+    </table></div>`;
+  return { head, search, list };
 }
 function downloadSales(ym) {
   const sd = ym + '-01', ed = _ymd(new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0));
