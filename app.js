@@ -4424,7 +4424,7 @@ function renderQuoteForm() {
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
           <div class="fld" style="flex:2;min-width:180px;margin:0"><label>거래처 <span class="req">*</span></label>${searchBox('q-client', '업체명 검색·입력', v.client || '', 'companyNames', 'quoteClientChanged')}</div>
           <div class="fld" style="flex:1;min-width:130px;margin:0"><label>단가 유형</label><select id="q-ctype" onchange="quoteTypeChanged()" style="width:100%;font-size:15px;padding:9px 10px;border:1.5px solid var(--bd2);border-radius:10px">${CTYPES.map(t => `<option ${((editing && v.ctype) || clientType(v.client || '')) === t ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-          <div class="fld" style="flex:1;min-width:130px;margin:0"><label>분류</label><select id="q-cat" onchange="quoteCatChanged(this.value)" style="width:100%;font-size:15px;padding:9px 10px;border:1.5px solid var(--bd2);border-radius:10px">${QCATS.map(cc => `<option ${((editing && v.category) || '세라믹+세면대') === cc ? 'selected' : ''}>${cc}</option>`).join('')}</select></div>
+          <div class="fld" style="flex:1;min-width:130px;margin:0"><label>분류</label><select id="q-cat" onchange="quoteCatChanged(this.value)" style="width:100%;font-size:15px;padding:9px 10px;border:1.5px solid var(--bd2);border-radius:10px">${QCATS.map(cc => `<option ${_formCat === cc ? 'selected' : ''}>${cc}</option>`).join('')}</select></div>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
           <div class="fld" style="flex:1;min-width:150px;margin:0"><label>견적일</label><input type="date" id="q-date" value="${esc((editing && v.date) || todayStr())}"></div>
@@ -6828,7 +6828,23 @@ function renderQuoteSettings() {
       </div>
     </div>`;
 }
-function quoteCatChanged(v) { filters.quoteCat = v; renderQuoteForm(); }
+/* 분류 바꾸기.
+   ★ '세라믹+세면대' 와 '석재' 는 입력 폼이 완전히 똑같다 — 다시 그리면 입력하던
+     거래처·품목이 통째로 지워지므로 다시 그리지 않는다.
+     '통관비용' 만 아예 다른 폼이라 그때만 다시 그리고, 거래처는 이어서 넣어준다. */
+function quoteCatChanged(v) {
+  const nowCustoms = !!el('cx-rows');            // 지금 화면이 통관 폼인가
+  const wantCustoms = (v === '통관비용');
+  filters.quoteCat = v;
+  if (nowCustoms === wantCustoms) return;        // 폼 모양이 같으면 그대로 둔다 (입력값 보존)
+  const keep = ((el(nowCustoms ? 'cx-client' : 'q-client') || {}).value || '').trim();
+  renderQuoteForm();
+  const t = el(wantCustoms ? 'cx-client' : 'q-client');
+  if (t && keep && !(t.value || '').trim()) {
+    t.value = keep;
+    if (!wantCustoms) { try { quoteClientChanged(); } catch (e) { } }
+  }
+}
 function cxRowHtml(d) {
   d = d || {}; const inp = 'font-size:14px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px';
   return `<div class="cx-row" style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
