@@ -4615,24 +4615,37 @@ function quoteLinkSite(id) {
     <div class="sheet-h"><h3><i class="ti ti-link"></i>기존 현장에 연결</h3><button class="x" onclick="closeModal()">×</button></div>
     <div class="frm">
       <div style="font-size:12px;color:var(--t3);margin-bottom:9px">견적 <b>${esc(q.docNo || '')}</b> · ${esc(q.client || '')} 를 이미 등록된 현장에 연결합니다. 연결하면 <b>현장 등록 완료</b>로 표시됩니다.</div>
-      <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i><input id="lnk-search" placeholder="현장명·업체·주소 검색" oninput="quoteLinkSiteFilter()" autocomplete="off" lang="ko"></div>
+      <div class="search-box" style="margin-bottom:8px"><i class="ti ti-search"></i><input id="lnk-search" placeholder="현장명·업체·주소 검색" oninput="quoteLinkSiteFilter()" autocomplete="off" lang="ko"></div>
+      <label style="display:flex;align-items:center;gap:7px;font-size:12px;color:var(--t2);margin-bottom:9px;cursor:pointer">
+        <input type="checkbox" id="lnk-done" ${_lnkShowDone ? 'checked' : ''} onchange="quoteLinkSiteToggleDone(this)" style="width:16px;height:16px"> 완료된 현장도 보기
+        <span id="lnk-hidden" style="color:var(--t3)"></span></label>
       <div id="lnk-list" data-keepscroll style="max-height:52vh;overflow:auto">${_linkSiteRows('')}</div>
     </div>`);
   setTimeout(() => { const inp = el('lnk-search'); if (inp) { inp.value = q.client || ''; quoteLinkSiteFilter(); } }, 30);
 }
+let _lnkShowDone = false, _lnkHiddenN = 0;
+function quoteLinkSiteToggleDone(cb) { _lnkShowDone = !!(cb && cb.checked); quoteLinkSiteFilter(); }
 function _linkSiteRows(qy) {
   qy = (qy || '').trim().toLowerCase();
   let list = (state.sites || []).slice().sort((a, b) => (b.constructDate || '').localeCompare(a.constructDate || '') || (+b.createdAt || 0) - (+a.createdAt || 0));
   if (qy) list = list.filter(x => ((x.name || '') + (x.client || '') + (x.address || '') + (x.region || '')).toLowerCase().includes(qy));
+  // ★ 끝난 현장은 기본으로 숨긴다 — 완료 현장이 대부분이라 진행 중인 현장이 묻힌다
+  const done = list.filter(x => (x.stage || '') === '완료');
+  _lnkHiddenN = done.length;
+  if (!_lnkShowDone) list = list.filter(x => (x.stage || '') !== '완료');
   list = list.slice(0, 80);
-  if (!list.length) return `<div class="empty"><i class="ti ti-building-community"></i>연결할 현장이 없습니다</div>`;
+  if (!list.length) return `<div class="empty"><i class="ti ti-building-community"></i>${_lnkHiddenN && !_lnkShowDone ? '진행 중인 현장이 없습니다 · 완료 ' + _lnkHiddenN + '곳은 숨겨져 있습니다' : '연결할 현장이 없습니다'}</div>`;
   return list.map(x => `<div style="display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid var(--soft)">
     <div style="min-width:0;flex:1"><div style="font-weight:700;font-size:13.5px">${esc(x.name || x.client || '-')}</div>
       <div style="font-size:11px;color:var(--t3)">${esc(x.client || '')}${x.constructDate ? ' · 시공 ' + esc(x.constructDate) : ''}${x.team ? ' · ' + esc(x.team) : ''}</div>
       ${x.address ? `<div style="font-size:11px;color:var(--t3)">${esc(x.address)}</div>` : ''}</div>
     <button class="btn btn-sm btn-pri" style="flex:none" onclick="quoteLinkSiteDo('${x.id}')"><i class="ti ti-link"></i>연결</button></div>`).join('');
 }
-function quoteLinkSiteFilter() { const w = el('lnk-list'); if (w) w.innerHTML = _linkSiteRows(el('lnk-search') ? el('lnk-search').value : ''); }
+function quoteLinkSiteFilter() {
+  const w = el('lnk-list'); if (w) w.innerHTML = _linkSiteRows(el('lnk-search') ? el('lnk-search').value : '');
+  const h = el('lnk-hidden');
+  if (h) h.textContent = (!_lnkShowDone && _lnkHiddenN) ? ('(완료 ' + _lnkHiddenN + '곳 숨김)') : '';
+}
 async function quoteLinkSiteDo(siteId) {
   const id = _linkQuoteId; const q = (state.quotes || []).find(x => x.id === id); const st = (state.sites || []).find(x => x.id === siteId);
   if (!q || !st) { toast('연결 대상을 찾을 수 없습니다'); return; }
