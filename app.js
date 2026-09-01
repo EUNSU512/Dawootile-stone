@@ -11009,7 +11009,7 @@ function chulgoDispatchCard(g, forWarehouse) {
       ${forWarehouse && st === '지시' ? `<button class="btn btn-pri btn-sm" style="flex:1.4" onclick="chulgoAckDispatch('${g.dispatchId}')"><i class="ti ti-check"></i>접수 (요청서 인쇄)</button>` : ''}
       ${forWarehouse && (st === '지시' || st === '확인') ? `<button class="btn btn-sm" style="flex:1" onclick="chulgoDoneDispatch('${g.dispatchId}')"><i class="ti ti-circle-check"></i>완료</button>` : ''}
       ${chatBtn}
-      <button class="btn btn-sm" onclick="chulgoPrintDispatch('${g.dispatchId}')"><i class="ti ti-printer"></i>요청서${forWarehouse ? ' 재인쇄' : ''}</button>
+      <button class="btn btn-sm" onclick="chulgoPrintDispatch('${g.dispatchId}')"><i class="ti ti-file-text"></i>요청서 열기</button>
       ${!forWarehouse && st !== '완료' ? `<button class="btn btn-sm" style="color:var(--red-t)" onclick="cancelDispatch('${g.dispatchId}')" title="출고 지시 취소 · 대기열로 되돌림"><i class="ti ti-arrow-back-up"></i></button>` : ''}
     </div>
   </div>`;
@@ -11067,7 +11067,7 @@ function chulgoCompletedRow(g) {
         <div style="font-size:10.5px;color:var(--t3);margin-top:1px">완료 ${when}${doneBy ? ' · ' + esc(doneBy) : ''}</div></div>
       <span class="pill p-done" style="flex:none">완료</span></div>
     <div class="frm-foot" style="margin-top:7px">
-      <button class="btn btn-sm" onclick="chulgoPrintDispatch('${g.dispatchId}')"><i class="ti ti-printer"></i>요청서</button>
+      <button class="btn btn-sm" onclick="chulgoPrintDispatch('${g.dispatchId}')"><i class="ti ti-file-text"></i>요청서 열기</button>
       ${isAdmin() ? `<button class="btn btn-sm" style="color:var(--blue)" onclick="chulgoRestoreDispatch('${g.dispatchId}')" title="진행 중(지시)으로 되돌림"><i class="ti ti-arrow-back-up"></i>되돌리기</button>` : ''}
     </div></div>`;
 }
@@ -11115,7 +11115,7 @@ async function chulgoAckConfirm(dispatchId) {
   const reqs = (state.chulgoReqs || []).filter(r => r.dispatchId === dispatchId && (r.status || '') === '지시');
   for (const r of reqs) { try { await Store.update('chulgoReqs', r.id, { status: '확인', handler, ackedBy: (me && me.name) || '', ackedAt: Date.now() }); } catch (e) { } }
   closeModal();
-  toast('접수 처리 · 요청서 인쇄');
+  toast('접수 처리 · 요청서를 열었습니다 (필요할 때만 인쇄)');
   setTimeout(() => chulgoPrintDispatch(dispatchId), 200);
 }
 async function chulgoDoneDispatch(dispatchId) {
@@ -11159,7 +11159,17 @@ table{border-collapse:collapse;width:100%}
 .detail{margin-top:12px}.detail td{border:1px solid #333;padding:11px 10px;font-size:13px}.detail .k{background:#f2f2f2;font-weight:700;text-align:center;white-space:nowrap;width:15%}
 .sign{margin-top:14px}.sign td{border:1px solid #333;font-size:12.5px;text-align:center}.sign .k{background:#f2f2f2;font-weight:700;padding:9px 6px;width:12%}.sign .v{padding:9px 6px;height:48px;vertical-align:top;width:21.3%}
 .co{text-align:center;font-size:15px;font-weight:800;margin-top:14px}
-@media print{body{padding:10px 12px}}</style></head><body>
+/* 화면에서만 보이는 도구막대 — 인쇄할 때는 안 나온다 */
+.tb{position:fixed;top:0;left:0;right:0;z-index:99;display:flex;gap:8px;align-items:center;justify-content:flex-end;
+    background:#111;padding:8px 14px;box-shadow:0 2px 8px rgba(0,0,0,.25)}
+.tb .msg{margin-right:auto;color:#cfd6e4;font-size:12.5px}
+.tb button{font-family:inherit;font-size:14px;font-weight:700;border:0;border-radius:8px;padding:8px 16px;cursor:pointer}
+.tb .p{background:#2f6fed;color:#fff}.tb .c{background:#3a3f4a;color:#e6e9ef}
+@media screen{body{padding-top:70px}.docno{top:74px}}
+@media print{body{padding:10px 12px}.tb{display:none !important}}</style></head><body>
+  <div class="tb"><span class="msg">인쇄가 필요할 때만 오른쪽 [인쇄]를 누르세요. 그냥 보기만 해도 됩니다.</span>
+    <button class="p" onclick="window.print()">🖨 인쇄</button>
+    <button class="c" onclick="window.close()">닫기</button></div>
   <div class="docno">No. ${e(g.docNos[0] || '')}${g.docNos.length > 1 ? ' 외 ' + (g.docNos.length - 1) : ''}</div>
   <h1>출 고 요 청 서</h1>
   <div class="sub">${companyInfo().name}　|　Material Dispatch Order</div>
@@ -11185,7 +11195,8 @@ table{border-collapse:collapse;width:100%}
   const w = window.open('', '_blank');
   if (!w) { toast('팝업이 차단되었습니다. 팝업 허용 후 다시'); return; }
   w.document.write(html); w.document.close(); w.focus();
-  setTimeout(() => { try { w.print(); } catch (e) { } }, 350);
+  /* ★ 자동 인쇄하지 않는다 — 안 뽑고 화면으로만 확인하는 경우가 많아
+       인쇄창이 매번 뜨는 게 번거롭다는 요청. 요청서 위쪽 [인쇄] 버튼으로 뽑는다. */
 }
 function chulgoQueueRow(r) {
   const items = (r.items || []).map(it => `${esc(it.name)} ${+it.qty || 0}${esc(it.unit || '')}`).join(', ');
