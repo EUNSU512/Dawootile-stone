@@ -6065,16 +6065,29 @@ async function taxRefreshInfo(qid) {
   } catch (e) { toast('조회 실패: ' + ((e && e.message) || e)); }
 }
 function taxListInner() {
-  const list = (state.quotes || []).filter(q => q.taxMgtKey || q.ntsConfirmNum)
+  /* ★ 묶음 발행분은 계산서 한 장이므로 한 줄로만 보여준다.
+     묶음에 딸린 견적(taxBundleRef)은 금액이 0 으로 저장돼 있어 그대로 두면
+     0원짜리 줄이 여러 개 뜬다 → 대표 건 한 줄에 전체 금액으로 모은다. */
+  const list = (state.quotes || []).filter(q => (q.taxMgtKey || q.ntsConfirmNum) && !q.taxBundleRef)
     .sort((a, b) => (+b.taxIssuedAt || 0) - (+a.taxIssuedAt || 0) || (b.taxDate || '').localeCompare(a.taxDate || ''));
   if (!list.length) return `<div class="empty"><i class="ti ti-file-off"></i>앱에서 발행한 계산서가 아직 없습니다</div>`;
   const sum = list.reduce((a, q) => a + (+q.taxTotal || +q.total || 0), 0);
-  return `<div style="font-size:12px;color:var(--t3);margin-bottom:8px">앱에서 발행한 <b style="color:var(--t1)">${list.length}건</b> · 합계 <b style="color:var(--gd)">${fmtWon(sum)}</b>원</div>
+  const bundleN = list.filter(q => (q.taxBundleIds || []).length > 1).length;
+  return `<div style="font-size:12px;color:var(--t3);margin-bottom:8px">앱에서 발행한 <b style="color:var(--t1)">${list.length}건</b> · 합계 <b style="color:var(--gd)">${fmtWon(sum)}</b>원${bundleN ? ` <span style="color:#2f6fed">· 묶음 ${bundleN}장</span>` : ''}</div>
     <div class="tbl-wrap"><table class="tbl" style="font-size:12px"><thead><tr>
       <th>발행일</th><th>거래처</th><th style="text-align:right">합계</th><th>승인번호</th><th>상태</th><th style="width:88px"></th></tr></thead><tbody>
       ${list.map(q => `<tr>
         <td style="white-space:nowrap">${esc(q.taxDate || '-')}${q.taxTestMode ? '<div style="font-size:10px;color:#9a6a12;font-weight:700">테스트</div>' : ''}</td>
-        <td><b>${esc(q.client || '-')}</b><div style="font-size:10.5px;color:var(--t3)">${esc(q.docNo || '')}${q.taxMgtKey && q.taxMgtKey !== q.docNo ? ' · ' + esc(q.taxMgtKey) : ''}</div></td>
+        <td><b>${esc(q.client || '-')}</b>${(() => {
+        const nos = q.taxBundleNos || [], n = (q.taxBundleIds || []).length;
+        if (n > 1) {
+          const txt = nos.length ? nos.join(', ') : (q.docNo || '');
+          return `<div style="font-size:10.5px;color:#2f6fed;font-weight:700;margin-top:1px"><i class="ti ti-stack-2" style="font-size:11px"></i> 묶음 ${n}건</div>`
+            + `<div style="font-size:10.5px;color:var(--t3);word-break:keep-all">${esc(txt)}</div>`
+            + (q.taxMgtKey ? `<div style="font-size:10px;color:var(--bd2)">${esc(q.taxMgtKey)}</div>` : '');
+        }
+        return `<div style="font-size:10.5px;color:var(--t3)">${esc(q.docNo || '')}${q.taxMgtKey && q.taxMgtKey !== q.docNo ? ' · ' + esc(q.taxMgtKey) : ''}</div>`;
+      })()}</td>
         <td style="text-align:right;font-weight:700;white-space:nowrap">${fmtWon(q.taxTotal || q.total)}</td>
         <td style="font-size:11px">${q.ntsConfirmNum ? esc(q.ntsConfirmNum) : '<span style="color:var(--t3)">-</span>'}</td>
         <td style="font-size:11px">${q.taxState ? esc(q.taxState) : '<span style="color:var(--t3)">미확인</span>'}</td>
