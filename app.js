@@ -7197,7 +7197,10 @@ function quoteCardHtml(q) {
   const taxPill = q.taxInvoice ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="클릭 시 해제"><i class="ti ti-file-check"></i> 계산서 발행${q.taxDate ? ' ' + esc(q.taxDate.slice(5)) : ''}</button>` : `<button class="pill p-gray" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="발행으로 표시"><i class="ti ti-file-off"></i> 계산서 미발행</button>`;
   const _shipD = q.shipped ? quoteShipDate(q) : '';
   const shipBadge = q.shipped ? `<span class="pill p-done"><i class="ti ti-truck-delivery"></i> 출고 완료${_shipD ? ' ' + esc(_shortDate(_shipD)) : ''}</span>` : '';
-  const siteBadge = q.siteDone ? `<span class="pill p-done"><i class="ti ti-building-community"></i> 현장 등록 완료</span>` : '';
+  /* 현장 등록 완료 배지 — 누르면 그 현장 상세가 열린다 (현장명도 같이 보여준다) */
+  const _qSite = q.siteDone ? quoteSiteOf(q) : null;
+  const _qSiteNm = _qSite ? (_qSite.name || _qSite.client || '') : String(q.siteName || '').trim();
+  const siteBadge = q.siteDone ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="event.stopPropagation();quoteOpenSite('${q.id}')" title="${_qSite ? '현장 정보 보기' : '연결된 현장을 찾지 못했습니다'}"><i class="ti ti-building-community"></i> 현장 등록 완료${_qSiteNm ? ' · ' + esc(_qSiteNm) : ''}${_qSite ? ' <i class="ti ti-chevron-right" style="font-size:11px;vertical-align:-1px"></i>' : ''}</button>` : '';
   const basinBadge = q.basinDone ? `<span class="pill p-done"><i class="ti ti-bath"></i> 세면대 발주 완료</span>` : '';
   const doneBadge = q.manualDone ? `<span class="pill p-done"><i class="ti ti-checks"></i> 완료</span>` : '';
   return `<div class="card" style="margin-bottom:10px;padding:12px 14px${_bundle && _selQ ? ';border:2px solid var(--gd);background:#f2fbf6' : ''}">
@@ -7244,7 +7247,7 @@ function openQuoteView(id) {
     (_tt > 0 && _pa >= _tt) ? badge(1, 'p-done', 'ti-cash', '결제완료') : (_pa > 0 ? badge(1, 'p-prog', 'ti-cash', '입금 ' + fmtWon(_pa)) : badge(1, 'p-wait', 'ti-cash', '미결제')),
     q.taxInvoice ? badge(1, 'p-prog', 'ti-file-check', '계산서 발행') : badge(1, 'p-gray', 'ti-file-off', '계산서 미발행'),
     badge(q.shipped, 'p-done', 'ti-truck-delivery', '출고 완료' + (quoteShipDate(q) ? (' ' + _shortDate(quoteShipDate(q))) : '')),
-    badge(q.siteDone, 'p-done', 'ti-building-community', '현장 등록'),
+    q.siteDone ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteOpenSite('${q.id}')" title="현장 정보 보기"><i class="ti ti-building-community"></i> 현장 등록${(() => { const s = quoteSiteOf(q); const n = s ? (s.name || s.client || '') : String(q.siteName || '').trim(); return n ? ' · ' + esc(n) : ''; })()} <i class="ti ti-chevron-right" style="font-size:11px;vertical-align:-1px"></i></button>` : '',
     badge(q.basinDone, 'p-done', 'ti-bath', '세면대 발주'),
     badge(q.manualDone, 'p-done', 'ti-checks', '완료')
   ].join('');
@@ -7589,6 +7592,38 @@ function siteCrewSale(s) {
       .reduce((x, it) => x + Math.round(+it.amt || 0), 0), 0);
 }
 function siteQuoteNos(s) { return (siteQuoteMap()[s.id] || []).map(q => q.docNo || '').filter(Boolean); }
+/* 견적 → 그 견적으로 만든 현장 찾기 (siteQuoteMap 의 반대 방향)
+   ① 견적에 siteId 가 박혀 있으면 그걸로 (확실)
+   ② 예전 자료는 siteId 가 없어서 siteQuoteMap 이 쓰는 '시각+업체' 매칭 결과를 그대로 뒤집어 쓴다
+   ※ 이름으로는 절대 맞추지 않는다 — 현장명·업체명 중복이 흔하다 */
+let _qsRev = null, _qsRevAt = 0;
+function quoteSiteIdMap() {                     // { 견적id : 현장id } — 4초 캐시
+  if (_qsRev && Date.now() - _qsRevAt < 4000) return _qsRev;
+  const m = siteQuoteMap(), r = {};
+  for (const k in m) m[k].forEach(q => { if (!r[q.id]) r[q.id] = k; });
+  _qsRev = r; _qsRevAt = Date.now();
+  return r;
+}
+function quoteSiteOf(q) {
+  if (!q) return null;
+  const sites = state.sites || [];
+  const sid = String(q.siteId || '').trim();
+  if (sid) { const s = sites.find(x => x.id === sid); if (s) return s; }
+  if (!q.siteDone) return null;
+  const k = quoteSiteIdMap()[q.id];
+  return (k && sites.find(x => x.id === k)) || null;
+}
+/* '현장 등록 완료' 배지를 누르면 → 그 현장 상세 팝업 */
+function quoteOpenSite(qid) {
+  const q = (state.quotes || []).find(x => x.id === qid);
+  if (!q) { toast('견적을 찾을 수 없습니다'); return; }
+  const s = quoteSiteOf(q);
+  if (s) { openSiteDetail(s.id); return; }
+  const nm = String(q.siteName || '').trim();
+  toast(nm
+    ? ('연결된 현장 「' + nm + '」 을 현장 목록에서 찾지 못했습니다 — 삭제됐을 수 있어요')
+    : '이 견적에 연결된 현장을 찾지 못했습니다 — [현장 연결] 로 이어줄 수 있어요');
+}
 async function saveCrewFee(id, val) { if (!isAdmin()) { toast('관리자만'); return; } const amt = Math.round(_numv(val)); try { await Store.update('sites', id, { crewFee: amt }); } catch (e) { } }
 async function toggleCrewPaid(id) {
   if (!isAdmin()) { toast('관리자만'); return; }
@@ -9361,67 +9396,196 @@ async function submitBillTaxInvoice() {
    금액 계산 규칙도 인쇄물과 동일 — 부가세 포함으로 넣은 견적은 공급가액을 역산하고,
    견적 할인은 넣은 금액 비율만큼만 적용한다.
    ══════════════════════════════════════════════════════════ */
-function billXlsxAoa() {
+/* ── 색·테두리까지 들어가는 엑셀 라이브러리를 '누를 때만' 불러온다 ──
+   지금 쓰는 기본 XLSX(0.18.5)는 글자색·배경색·테두리를 파일에 저장하지 못한다.
+   그래서 청구서처럼 보기 좋아야 하는 파일에만 xlsx-js-style 을 따로 불러와서 쓴다.
+   · 불러온 뒤 window.XLSX 는 원래대로 돌려놓는다 (다른 기능이 영향받지 않게)
+   · 인터넷이 막혀 못 불러오면 기본 XLSX 로 저장한다 — 색만 빠지고 내용·수식은 똑같다 */
+let _xlsxStyleP = null;
+function xlsxStyleLib() {
+  const fallback = () => (typeof XLSX !== 'undefined' ? XLSX : null);
+  if (window.XLSXStyle) return Promise.resolve(window.XLSXStyle);
+  if (_xlsxStyleP) return _xlsxStyleP;
+  _xlsxStyleP = new Promise(res => {
+    let done = false;
+    const finish = v => { if (!done) { done = true; res(v); } };
+    try {
+      const prev = window.XLSX;
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js';
+      s.onload = () => { window.XLSXStyle = window.XLSX; window.XLSX = prev; finish(window.XLSXStyle); };
+      s.onerror = () => { window.XLSX = prev; finish(fallback()); };
+      document.head.appendChild(s);
+      setTimeout(() => finish(fallback()), 9000);      // 너무 오래 걸리면 그냥 기본으로
+    } catch (e) { finish(fallback()); }
+  });
+  return _xlsxStyleP;
+}
+/* 청구서 엑셀에 쓰는 서식 모음 */
+function billXlsxStyles() {
+  const LINE = { rgb: 'CBD5D1' }, HEAD = '0F766E', SOFT = 'F1F6F4', BAND = 'E2EFEA', RED = 'B42318';
+  const B = { top: { style: 'thin', color: LINE }, bottom: { style: 'thin', color: LINE }, left: { style: 'thin', color: LINE }, right: { style: 'thin', color: LINE } };
+  const fill = c => ({ patternType: 'solid', fgColor: { rgb: c } });
+  const mid = h => ({ horizontal: h, vertical: 'center', wrapText: false });
+  return {
+    title: { font: { bold: true, sz: 20, color: { rgb: '111827' } }, alignment: mid('center') },
+    to: { font: { bold: true, sz: 12, color: { rgb: '374151' } }, alignment: mid('center') },
+    lab: { font: { bold: true, sz: 10.5, color: { rgb: '374151' } }, fill: fill(SOFT), alignment: mid('center'), border: B },
+    val: { font: { sz: 11 }, alignment: mid('left'), border: B },
+    head: { font: { bold: true, sz: 11, color: { rgb: 'FFFFFF' } }, fill: fill(HEAD), alignment: mid('center'), border: B },
+    band: { font: { bold: true, sz: 11, color: { rgb: '0B4F45' } }, fill: fill(BAND), alignment: mid('left'), border: B },
+    txt: { font: { sz: 10.5 }, alignment: mid('left'), border: B },
+    txtC: { font: { sz: 10.5, color: { rgb: '4B5563' } }, alignment: mid('center'), border: B },
+    num: { font: { sz: 10.5 }, alignment: mid('right'), border: B },
+    stL: { font: { bold: true, sz: 10.5, color: { rgb: '0B4F45' } }, fill: fill(SOFT), alignment: mid('right'), border: B },
+    stN: { font: { bold: true, sz: 10.5, color: { rgb: '0B4F45' } }, fill: fill(SOFT), alignment: mid('right'), border: B },
+    stR: { font: { bold: true, sz: 10.5, color: { rgb: RED } }, fill: fill(SOFT), alignment: mid('right'), border: B },
+    ftL: { font: { bold: true, sz: 11, color: { rgb: '374151' } }, fill: fill(SOFT), alignment: mid('right'), border: B },
+    ftN: { font: { bold: true, sz: 11 }, alignment: mid('right'), border: B },
+    ftR: { font: { bold: true, sz: 11, color: { rgb: RED } }, alignment: mid('right'), border: B },
+    grL: { font: { bold: true, sz: 13, color: { rgb: 'FFFFFF' } }, fill: fill(HEAD), alignment: mid('right'), border: B },
+    grN: { font: { bold: true, sz: 13, color: { rgb: 'FFFFFF' } }, fill: fill(HEAD), alignment: mid('right'), border: B },
+    note: { font: { sz: 10, color: { rgb: '6B7280' } }, alignment: mid('left') }
+  };
+}
+/* 묶음 청구서 → 엑셀 시트 데이터 만들기 (파일은 안 만든다 = 그냥 계산이라 안전하게 시험할 수 있다)
+   · 인쇄물과 똑같이 '현장(견적) 단위'로 묶고 묶음마다 소계를 붙인다
+   · 금액 규칙도 인쇄물과 동일 — 부가세 포함 견적은 공급가액을 역산, 견적 할인은 넣은 비율만큼만
+   · ★ 소계·합계는 숫자를 그대로 적지 않고 엑셀 SUM 수식으로 넣는다
+        → 받는 쪽에서 한 줄 지우거나 수량을 고치면 합계가 스스로 다시 계산된다 */
+function billXlsxSheet() {
   if (!_billEdit) return null;
   const t = billEditTotals();
   if (!t.n) { toast('청구할 품목을 하나 이상 선택하세요'); return null; }
   const qs = _billQs().filter(q => _billEdit.items.some(x => x.qid === q.id && x.on));
   if (!qs.length) { toast('청구할 품목이 없습니다'); return null; }
+  const S = billXlsxStyles();
   const co = companyInfo(), client = (qs[0].client || '').trim();
   const docNos = qs.map(q => q.docNo).filter(Boolean);
   const sites = [...new Set(qs.map(billSiteOf).filter(Boolean))];
-  const aoa = [];
-  aoa.push(['청 구 서']);
-  aoa.push([client + ' 귀중']);
-  aoa.push(['공급자', co.name, '사업자등록번호', co.bizno || '', '', '', '출력일', todayStr()]);
-  aoa.push(['견적번호', docNos.join(', ')]);
-  aoa.push(['현장', sites.join(' / ') || '-']);
-  aoa.push([]);
-  aoa.push(['날짜', '품목명', '규격', '단위', '수량', '단가', '공급가', '부가세', '합계금액', '현장 · 담당']);
-  let supply = 0, vat = 0, disc = 0;
+  const NC = 11;                                  // A~K
+  const rows = [], merges = [], rowH = [];
+  const T = (v, st) => ({ t: 's', v: (v == null ? '' : String(v)), s: st });
+  const N = (v, st, z) => ({ t: 'n', v: (+v || 0), z: z || '#,##0', s: st });
+  const F = (f, v, st) => ({ t: 'n', f: f, v: (+v || 0), z: '#,##0', s: st });
+  const blankRow = st => { const a = []; for (let i = 0; i < NC; i++) a.push(T('', st)); return a; };
+  const mrg = (r, c1, c2) => merges.push({ s: { r: r, c: c1 }, e: { r: r, c: c2 } });
+
+  // ── 머리말
+  let a = blankRow(S.title); a[0] = T('청  구  서', S.title);
+  rows.push(a); mrg(rows.length - 1, 0, NC - 1); rowH[rows.length - 1] = { hpt: 34 };
+  a = blankRow(S.to); a[0] = T((client || '거래처') + '  귀중', S.to);
+  rows.push(a); mrg(rows.length - 1, 0, NC - 1); rowH[rows.length - 1] = { hpt: 22 };
+  rows.push([]);
+  const info2 = (k1, v1, k2, v2) => {             // 왼쪽 한 쌍 · 오른쪽 한 쌍
+    const r = blankRow(S.val);
+    r[0] = T(k1, S.lab); r[1] = T(v1, S.val);
+    r[6] = T(k2, S.lab); r[7] = T(v2, S.val);
+    rows.push(r); const i = rows.length - 1; mrg(i, 1, 5); mrg(i, 7, NC - 1); rowH[i] = { hpt: 20 };
+  };
+  const info1 = (k, v) => {                        // 한 줄 전체
+    const r = blankRow(S.val); r[0] = T(k, S.lab); r[1] = T(v, S.val);
+    rows.push(r); const i = rows.length - 1; mrg(i, 1, NC - 1); rowH[i] = { hpt: 20 };
+  };
+  info2('공급자', co.name || '', '사업자등록번호', co.bizno || '');
+  info2('대표자', co.ceo || '', '출력일', todayStr());
+  info1('주소', (co.addr || '') + (co.tel ? '     ' + String(co.tel).replace(/\s+/g, ' ').trim() : ''));
+  info1('견적번호', docNos.join(',  ') || '-');
+  info1('현장', sites.join('   /   ') || '-');
+  rows.push([]);
+
+  // ── 표 머리
+  const HEAD = ['날짜', '품목명', '규격', '단위', '수량', '단가', '공급가액', '부가세', '할인', '합계금액', '현장 · 담당'];
+  rows.push(HEAD.map(h => T(h, S.head))); rowH[rows.length - 1] = { hpt: 26 };
+
+  // ── 현장(견적)별 묶음
+  const subG = [], subH = [], subI = [];
   qs.forEach(q => {
     const all = _billEdit.items.filter(x => x.qid === q.id);
     const on = all.filter(x => x.on);
     if (!on.length) return;
     const supOf = x => { const raw = Math.round(+x.amt || 0); return x.vatIncl ? Math.round(raw / 1.1) : raw; };
     const taxOf = x => { const raw = Math.round(+x.amt || 0); return x.vatIncl ? (raw - supOf(x)) : Math.round(raw * 0.1); };
-    const priceOf = x => { const p = +x.price || 0; if (!p) return ''; return x.vatIncl ? Math.round(p / 1.1) : p; };
-    const _sup = on.reduce((a, x) => a + supOf(x), 0);
-    const _tax = on.reduce((a, x) => a + taxOf(x), 0);
-    const fullSup = all.reduce((a, x) => a + supOf(x), 0);
+    const priceOf = x => { const p = +x.price || 0; if (!p) return null; return x.vatIncl ? Math.round(p / 1.1) : p; };
+    const _sup = on.reduce((s, x) => s + supOf(x), 0);
+    const _tax = on.reduce((s, x) => s + taxOf(x), 0);
+    const fullSup = all.reduce((s, x) => s + supOf(x), 0);
     const _d = Math.round((+q.discount || 0) * (fullSup > 0 ? Math.min(1, _sup / fullSup) : 1));
-    supply += _sup; vat += _tax; disc += _d;
     const site = billSiteOf(q) || '현장 미지정';
     const who = (q.by || '').trim();
     const dt = qDate(q);
-    // 현장 묶음 머리줄
-    aoa.push(['◼ ' + site + (who ? '  ·  담당 ' + who : '') + '  ·  ' + (q.docNo || '') + '  ·  ' + dt + (on.length < all.length ? '  ·  일부 품목' : '')]);
-    on.forEach(x => aoa.push([dt, x.name, x.spec || '', x.unit || '', +x.qty || 0, priceOf(x), supOf(x), taxOf(x), supOf(x) + taxOf(x), site + (who ? ' / ' + who : '')]));
-    aoa.push(['', '소계', '', '', '', '', _sup, _tax, _sup + _tax - _d, _d > 0 ? ('할인 -' + _d) : '']);
-    aoa.push([]);
+    // 현장 머리줄 (한 줄 전체를 연한 초록 띠로)
+    const bd = blankRow(S.band);
+    bd[0] = T('◼   ' + site + (who ? '   ·   담당 ' + who : '') + '   ·   ' + (q.docNo || '') + '   ·   ' + dt + (on.length < all.length ? '   ·   일부 품목' : ''), S.band);
+    rows.push(bd); mrg(rows.length - 1, 0, NC - 1); rowH[rows.length - 1] = { hpt: 22 };
+    // 품목줄
+    const firstN = rows.length + 1;                 // 엑셀 행번호(1부터)
+    on.forEach(x => {
+      const n = rows.length + 1;
+      rows.push([
+        T(dt, S.txtC),
+        T(x.name || '', S.txt),
+        T(x.spec || '', S.txtC),
+        T(x.unit || '', S.txtC),
+        N(+x.qty || 0, S.num, '#,##0.##'),
+        (priceOf(x) == null ? T('', S.num) : N(priceOf(x), S.num)),
+        N(supOf(x), S.num),
+        N(taxOf(x), S.num),
+        T('', S.num),
+        F('G' + n + '+H' + n, supOf(x) + taxOf(x), S.num),
+        T(site + (who ? '  /  ' + who : ''), S.txtC)
+      ]);
+      rowH[rows.length - 1] = { hpt: 19 };
+    });
+    const lastN = rows.length;                      // 마지막 품목의 엑셀 행번호
+    // 소계 (수식)
+    const sn = rows.length + 1;
+    const st = blankRow(S.stN);
+    st[0] = T('', S.stL); st[1] = T('소  계', S.stL);
+    st[6] = F('SUM(G' + firstN + ':G' + lastN + ')', _sup, S.stN);
+    st[7] = F('SUM(H' + firstN + ':H' + lastN + ')', _tax, S.stN);
+    st[8] = _d > 0 ? N(-_d, S.stR) : T('', S.stN);
+    st[9] = F('G' + sn + '+H' + sn + '+I' + sn, _sup + _tax - _d, S.stN);
+    st[10] = T(_d > 0 ? ('견적 할인 -' + fmtWon(_d)) : '', S.stL);
+    rows.push(st); mrg(rows.length - 1, 1, 5); rowH[rows.length - 1] = { hpt: 21 };
+    subG.push('G' + sn); subH.push('H' + sn); subI.push('I' + sn);
+    rows.push([]);
   });
-  aoa.push(['', '', '', '', '', '공급가액 합계', supply]);
-  aoa.push(['', '', '', '', '', '부가세 (10%)', vat]);
-  if (disc > 0) aoa.push(['', '', '', '', '', '할인 (D/C)', -disc]);
-  if ((+t.dc || 0) > 0) aoa.push(['', '', '', '', '', disc > 0 ? '총액 할인 (D/C)' : '할인 (D/C)', -Math.round(t.dc)]);
-  aoa.push(['', '', '', '', '', '합계금액', t.total]);
+
+  // ── 맨 아래 합계 (전부 수식)
+  const foot = (label, cell, stL) => {
+    const r = blankRow(stL); r[0] = T(label, stL); r[9] = cell;
+    rows.push(r); const i = rows.length - 1; mrg(i, 0, 8); rowH[i] = { hpt: 22 };
+    return i + 1;                                   // 엑셀 행번호
+  };
+  const nSup = foot('공급가액 합계', F('SUM(' + subG.join(',') + ')', t.supply, S.ftN), S.ftL);
+  const nVat = foot('부가세 (10%)', F('SUM(' + subH.join(',') + ')', t.vat, S.ftN), S.ftL);
+  const use = ['J' + nSup, 'J' + nVat];
+  if (t.disc > 0) use.push('J' + foot('견적 할인 (D/C)', F('SUM(' + subI.join(',') + ')', -t.disc, S.ftR), S.ftL));
+  if (t.dc > 0) use.push('J' + foot('총액 할인 (D/C)', N(-Math.round(t.dc), S.ftR), S.ftL));
+  const gr = blankRow(S.grL); gr[0] = T('합 계 금 액   (VAT 포함)', S.grL);
+  gr[9] = F(use.join('+'), t.total, S.grN);
+  rows.push(gr); mrg(rows.length - 1, 0, 8); rowH[rows.length - 1] = { hpt: 30 };
+  rows.push([]);
+  const nt = blankRow(S.note);
+  nt[0] = T('※ 소계·합계 칸은 엑셀 수식(SUM)입니다 — 수량이나 금액을 고치면 합계가 자동으로 다시 계산됩니다.', S.note);
+  rows.push(nt); mrg(rows.length - 1, 0, NC - 1);
+
+  const cols = [{ wch: 11 }, { wch: 30 }, { wch: 16 }, { wch: 7 }, { wch: 9 }, { wch: 12 }, { wch: 13 }, { wch: 12 }, { wch: 11 }, { wch: 15 }, { wch: 24 }];
   const name = '청구서_' + (client.replace(/[\\/:*?"<>|\s]/g, '') || '거래처') + '_' + todayStr() + '.xlsx';
-  return { aoa, name, check: { supply, vat, disc, total: t.total } };
+  return { rows, merges, rowH, cols, name, check: { supply: t.supply, vat: t.vat, disc: t.disc, dc: t.dc, total: t.total } };
 }
-function billEditXlsx() {
-  const r = billXlsxAoa(); if (!r) return;
-  if (typeof XLSX === 'undefined') { toast('엑셀 모듈을 불러오지 못했습니다 — 새로고침 후 다시 시도하세요'); return; }
-  const ws = XLSX.utils.aoa_to_sheet(r.aoa);
-  ws['!cols'] = [{ wch: 12 }, { wch: 26 }, { wch: 16 }, { wch: 6 }, { wch: 8 }, { wch: 12 }, { wch: 13 }, { wch: 12 }, { wch: 14 }, { wch: 26 }];
-  // 금액 칸은 천 단위 콤마로 보이게
-  const R = XLSX.utils.decode_range(ws['!ref']);
-  for (let c = 4; c <= 8; c++) for (let rr = 0; rr <= R.e.r; rr++) {
-    const cell = ws[XLSX.utils.encode_cell({ r: rr, c: c })];
-    if (cell && typeof cell.v === 'number' && c >= 5) cell.z = '#,##0';
-  }
-  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '청구서');
-  XLSX.writeFile(wb, r.name);
-  toast('엑셀 저장됨 · ' + r.name);
+async function billEditXlsx() {
+  const d = billXlsxSheet(); if (!d) return;
+  const lib = await xlsxStyleLib();
+  if (!lib) { toast('엑셀 모듈을 불러오지 못했습니다 — 새로고침 후 다시 시도하세요'); return; }
+  const ws = lib.utils.aoa_to_sheet(d.rows);
+  ws['!cols'] = d.cols;
+  ws['!rows'] = d.rowH;
+  ws['!merges'] = d.merges;
+  const wb = lib.utils.book_new(); lib.utils.book_append_sheet(wb, ws, '청구서');
+  lib.writeFile(wb, d.name);
+  toast('엑셀 저장됨 · ' + d.name);
 }
 function billEditPrint() {
   const t = billEditTotals();
