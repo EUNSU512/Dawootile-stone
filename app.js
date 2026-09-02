@@ -4204,6 +4204,17 @@ function specOfMaterial(name) {
   const pl = (state.priceList || []).find(x => _normName(x.itemName) === k);
   return (pl && pl.spec) || '';
 }
+/* 이 견적이 어느 홀딩에서 가져온 자재인지 — 저장할 때 견적에 같이 적어둔다.
+   나중에 그 견적을 '출고로 돌리면' 이 홀딩들을 확정(=목록에서 사라짐) 처리한다. */
+let _qFromHolds = [];
+/* 아직 살아있는(진행중) 홀딩만 남긴다 */
+function quoteLiveHoldIds(q) {
+  const ids = (q && Array.isArray(q.fromHoldIds)) ? q.fromHoldIds : [];
+  return ids.filter(hid => {
+    const h = (state.holdings || []).find(x => x.id === hid);
+    return h && !['해제', '확정'].includes(h.status || '홀딩');
+  });
+}
 function quoteHoldBoxHtml(client) {
   client = (client || '').trim();
   if (!client) return '<div style="font-size:12px;color:var(--t3);padding:4px 2px">거래처를 입력하면 홀딩 자재가 표시됩니다.</div>';
@@ -4213,13 +4224,15 @@ function quoteHoldBoxHtml(client) {
     const items = holdItems(h);
     const label = items.map(it => `${esc(it.materialName)} ${it.jang}장`).join(', ');
     const enc = encodeURIComponent(JSON.stringify(items.map(it => ({ name: it.materialName, qty: it.jang, spec: specOfMaterial(it.materialName) }))));   // 규격은 자재 기준으로 조회(롯트 아님)
+    const on = _qFromHolds.indexOf(h.id) >= 0;
     return `<div style="display:flex;align-items:center;gap:8px;padding:8px 6px;border-bottom:1px solid var(--soft)">
-      <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px"><i class="ti ti-lock" style="font-size:12px;color:var(--blue)"></i> ${label}</div><div style="font-size:11px;color:var(--t3)">${h.useDate ? '사용예정 ' + esc(h.useDate) : ''}${h.note ? ' · ' + esc(h.note) : ''}</div></div>
-      <button type="button" class="btn btn-sm btn-pri" onclick="quoteAddHold('${enc}')"><i class="ti ti-plus"></i>견적에 추가</button></div>`;
+      <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13px"><i class="ti ti-lock" style="font-size:12px;color:var(--blue)"></i> ${label}</div><div style="font-size:11px;color:var(--t3)">${h.useDate ? '사용예정 ' + esc(h.useDate) : ''}${h.note ? ' · ' + esc(h.note) : ''}</div>${on ? '<div style="font-size:11px;color:var(--gd);font-weight:700"><i class="ti ti-check" style="font-size:12px"></i> 이 견적에 담김 · 출고하면 홀딩이 풀립니다</div>' : ''}</div>
+      <button type="button" class="btn btn-sm ${on ? '' : 'btn-pri'}" onclick="quoteAddHold('${enc}','${esc(h.id)}')"><i class="ti ti-plus"></i>${on ? '다시 추가' : '견적에 추가'}</button></div>`;
   }).join('');
 }
-function quoteAddHold(enc) {
+function quoteAddHold(enc, hid) {
   let items = []; try { items = JSON.parse(decodeURIComponent(enc)); } catch (e) { }
+  if (hid && _qFromHolds.indexOf(hid) < 0) _qFromHolds.push(hid);   // 이 견적이 이 홀딩에서 왔다고 기억
   const c = el('q-rows'); if (!c) return;
   const rows = c.querySelectorAll('.q-row');
   if (rows.length === 1) { const nm = rows[0].querySelector('.q-mat'); if (nm && !nm.value.trim()) rows[0].remove(); }
@@ -4229,7 +4242,9 @@ function quoteAddHold(enc) {
     const mi = r.querySelector('.q-mat'); if (!mi || !(mi.value || '').trim()) return;
     try { quoteMatPick(mi); } catch (e) { }
   });
-  quoteRecalc(); toast('홀딩 자재를 견적에 추가했습니다');
+  quoteRecalc();
+  const hb = el('q-holdbox'); if (hb) hb.innerHTML = quoteHoldBoxHtml((el('q-client') && el('q-client').value || '').trim());   // '담김' 표시 갱신
+  toast('홀딩 자재를 견적에 추가했습니다 · 출고하면 이 홀딩은 풀립니다');
 }
 function quoteClientChanged() {
   const client = (el('q-client') && el('q-client').value || '').trim();
@@ -4500,6 +4515,8 @@ function renderQuoteForm() {
   const copy = !!filters.quoteCopy;
   const q = id ? (state.quotes || []).find(x => x.id === id) : null; const v = q || {};
   _qN = 0;
+  // 이 견적이 물고 있는 홀딩 — 수정이면 이어받고(복사·신규는 비운다), 아직 살아있는 것만
+  _qFromHolds = (q && !copy) ? quoteLiveHoldIds(q) : [];
   const extraSet = new Set(extraItemsList().map(x => x.name)); const savedExtra = {};
   (v.items || []).forEach(it => { if (extraSet.has(it.name)) savedExtra[it.name] = { qty: it.qty, price: it.price }; });
   const matItems = (v.items || []).filter(it => !extraSet.has(it.name));
@@ -4621,6 +4638,8 @@ async function submitQuote(id) {
     const docNo = (q && q.docNo) || quoteNextDocNo();
     const useSalesRep = !!(el('q-userep') && el('q-userep').checked);
     const data = { docNo, client, ctype, category, date, valid, attn, siteAddr, items, supply, vat, discount, total, memo, useSalesRep, by: (el('q-staff') && el('q-staff').value.trim()) || (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
+    // 홀딩에서 가져온 견적이면 그 홀딩 id 를 남긴다 → 출고로 돌릴 때 홀딩이 자동으로 풀린다
+    data.fromHoldIds = (_qFromHolds || []).filter(hid => (state.holdings || []).some(h => h.id === hid));
     if (id) await Store.update('quotes', id, data); else await Store.add('quotes', data);
     try { const cdoc = (state.clients || []).find(x => _normName(x.value) === _normName(client)); if (cdoc && (cdoc.ctype || '') !== ctype) await Store.update('clients', cdoc.id, { ctype }); } catch (e) { }   // 거래처 유형 기억
     for (const it of items) { if (it.extra) continue; try { await quoteLearnPrice(ctype, it.name, +it.price || 0); } catch (e) { } }   // 유형별 단가표 학습(부대비용 제외)
@@ -4653,8 +4672,10 @@ function quoteToShip(id) {
   try { Store.update('quotes', id, { shipped: true, shipStartedAt: Date.now() }); } catch (e) { }
   const mats = quoteMaterialItems(q);
   if (!mats.length) { toast('출고할 자재가 없습니다 (가공·운송·시공 항목만 있는 견적)'); return; }
-  openShipForm({ targetName: q.client, items: mats.map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' })) });
-  toast('견적의 자재만 출고 등록 폼에 불러왔습니다 · 확인 후 등록하세요');
+  openShipForm({ targetName: q.client, items: mats.map(it => ({ name: it.name, qty: it.qty, lot: '', pattern: '' })), quoteId: id, siteAddr: (q.siteAddr || '').trim() });
+  const _hh = quoteLiveHoldIds(q);
+  if (_hh.length) { _holdConfirm = _hh; toast('출고 등록 폼에 불러왔습니다 · 저장하면 홀딩 ' + _hh.length + '건이 풀립니다'); }
+  else toast('견적의 자재만 출고 등록 폼에 불러왔습니다 · 확인 후 등록하세요');
 }
 function quoteConfirmOrder(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
@@ -4699,7 +4720,14 @@ function quoteRegister(id) {
     const _sn = [q.siteName, q.siteAddr].map(v => String(v == null ? '' : v).trim()).find(Boolean) || '';
     openSiteForm(null, { name: _sn, client: q.client, address: q.siteAddr, quoteId: id, items: items });
     toast('가공 포함 · 현장 등록 후 자재는 자동으로 홀딩됩니다');
-  } else { openShipForm({ targetName: q.client, items: items, quoteId: id, siteAddr: (q.siteAddr || '').trim() }); toast('출고 등록으로 불러왔습니다 · 확인 후 등록'); }
+  } else {
+    openShipForm({ targetName: q.client, items: items, quoteId: id, siteAddr: (q.siteAddr || '').trim() });
+    /* ★ 이 견적이 홀딩에서 가져온 자재라면, 출고가 저장될 때 그 홀딩을 확정 처리해 목록에서 없앤다.
+         (openShipForm 뒤에 넣는다 — closeModal 이 _holdConfirm 을 비우기 때문) */
+    const _hh = quoteLiveHoldIds(q);
+    if (_hh.length) { _holdConfirm = _hh; toast('출고 등록으로 불러왔습니다 · 저장하면 홀딩 ' + _hh.length + '건이 풀립니다'); }
+    else toast('출고 등록으로 불러왔습니다 · 확인 후 등록');
+  }
   /* ★ 현장 주소만 넘긴다.
      견적서의 수신·참조(q.attn)는 '견적서를 받는 사람'이라 출고 서류에는 나오면 안 된다.
      출고지는 자재가 실제로 들어가는 '공장'이므로 견적에서 자동으로 채우지 않는다. */
@@ -4791,7 +4819,12 @@ function quoteToOrder(id) {
   } else if ((q.siteAddr || '').trim()) {
     go('sites'); setTimeout(() => { try { openSiteForm(null, { name: q.client, address: q.siteAddr, quoteId: id }); } catch (e) { } }, 90);
     toast('확정 · 현장 등록으로 이동');
-  } else { openShipForm({ targetName: q.client, items: items }); toast('확정 · 출고 등록으로 불러왔습니다 · 확인 후 등록'); }
+  } else {
+    openShipForm({ targetName: q.client, items: items, quoteId: id, siteAddr: (q.siteAddr || '').trim() });
+    const _hh = quoteLiveHoldIds(q);
+    if (_hh.length) { _holdConfirm = _hh; toast('확정 · 출고 등록으로 불러왔습니다 · 저장하면 홀딩 ' + _hh.length + '건이 풀립니다'); }
+    else toast('확정 · 출고 등록으로 불러왔습니다 · 확인 후 등록');
+  }
 }
 /* ── 세금계산서 발행 (팝빌 Popbill · CF action=taxinvoice) ── */
 function clientTaxInfo(name) { const c = (state.clients || []).find(x => _normName(x.value) === _normName(name)); return (c && c.taxInfo) || {}; }
