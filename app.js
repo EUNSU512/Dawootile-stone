@@ -5419,7 +5419,10 @@ function ledgerClientNames() {
   if (_lcNames && Date.now() - _lcAt < 4000) return _lcNames;
   const s = new Set();
   (state.quotes || []).forEach(q => { const c = (q.client || '').trim(); if (c) s.add(c); });
-  (state.clients || []).forEach(c => { const n = (c.name || '').trim(); if (n) s.add(n); });
+  /* ★ 거래처 문서의 이름 칸은 `value` 다 (`name` 이 아니다).
+       `c.name` 을 보고 있어서 거래처 940곳 중 견적이 있는 205곳만 목록에 나왔고,
+       나머지 734곳은 입금 연결 창에서 "그런 이름의 거래처가 없습니다" 로 떴다. (2026-09-02 수정) */
+  (state.clients || []).forEach(c => { const n = ((c.value || c.name) || '').trim(); if (n) s.add(n); });
   _lcAt = Date.now(); _lcNames = [...s].sort((a, b) => a.localeCompare(b, 'ko'));
   return _lcNames;
 }
