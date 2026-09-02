@@ -9121,6 +9121,7 @@ function renderBillEdit() {
         <button class="btn btn-pri" style="flex:1.5" onclick="billEditCopy()"><i class="ti ti-clipboard"></i>이미지 복사</button>
         <button class="btn btn-pri" style="flex:1.5" onclick="billEditPng()"><i class="ti ti-photo-down"></i>PNG 저장</button>
         <button class="btn" style="flex:1" onclick="billEditPrint()"><i class="ti ti-printer"></i>출력</button>
+        <button class="btn" style="flex:1" onclick="billEditXlsx()"><i class="ti ti-file-spreadsheet"></i>엑셀</button>
       </div>
       ${canTax() ? `<button class="btn" style="width:100%;margin-top:6px;border:1.5px solid var(--gd);color:var(--gd);font-weight:800" onclick="openBillTaxPreview()"><i class="ti ti-file-invoice"></i>이 내용으로 세금계산서 발행 (묶음 1장)</button>` : ''}
       <div style="font-size:10.5px;color:var(--t3);margin-top:5px;text-align:center">복사하면 카톡·문자에 바로 붙여넣을 수 있습니다${canTax() ? ' · 계산서는 <b>고른 품목 그대로</b> 한 장으로 나갑니다' : ''}</div>
@@ -9314,6 +9315,74 @@ async function submitBillTaxInvoice() {
     else { toast('발행 실패: ' + ((j && j.error) || ('HTTP ' + r.status))); }
   } catch (e) { toast('발행 오류: ' + ((e && e.message) || e)); }
   finally { setTimeout(() => { _busy = false; }, 700); }
+}
+/* ══════════════════════════════════════════════════════════
+   묶음 청구서 → 엑셀
+   인쇄물과 똑같이 '현장(견적) 단위로 묶고' 각 묶음 끝에 소계를 붙인다.
+   금액 계산 규칙도 인쇄물과 동일 — 부가세 포함으로 넣은 견적은 공급가액을 역산하고,
+   견적 할인은 넣은 금액 비율만큼만 적용한다.
+   ══════════════════════════════════════════════════════════ */
+function billXlsxAoa() {
+  if (!_billEdit) return null;
+  const t = billEditTotals();
+  if (!t.n) { toast('청구할 품목을 하나 이상 선택하세요'); return null; }
+  const qs = _billQs().filter(q => _billEdit.items.some(x => x.qid === q.id && x.on));
+  if (!qs.length) { toast('청구할 품목이 없습니다'); return null; }
+  const co = companyInfo(), client = (qs[0].client || '').trim();
+  const docNos = qs.map(q => q.docNo).filter(Boolean);
+  const sites = [...new Set(qs.map(billSiteOf).filter(Boolean))];
+  const aoa = [];
+  aoa.push(['청 구 서']);
+  aoa.push([client + ' 귀중']);
+  aoa.push(['공급자', co.name, '사업자등록번호', co.bizno || '', '', '', '출력일', todayStr()]);
+  aoa.push(['견적번호', docNos.join(', ')]);
+  aoa.push(['현장', sites.join(' / ') || '-']);
+  aoa.push([]);
+  aoa.push(['날짜', '품목명', '규격', '단위', '수량', '단가', '공급가', '부가세', '합계금액', '현장 · 담당']);
+  let supply = 0, vat = 0, disc = 0;
+  qs.forEach(q => {
+    const all = _billEdit.items.filter(x => x.qid === q.id);
+    const on = all.filter(x => x.on);
+    if (!on.length) return;
+    const supOf = x => { const raw = Math.round(+x.amt || 0); return x.vatIncl ? Math.round(raw / 1.1) : raw; };
+    const taxOf = x => { const raw = Math.round(+x.amt || 0); return x.vatIncl ? (raw - supOf(x)) : Math.round(raw * 0.1); };
+    const priceOf = x => { const p = +x.price || 0; if (!p) return ''; return x.vatIncl ? Math.round(p / 1.1) : p; };
+    const _sup = on.reduce((a, x) => a + supOf(x), 0);
+    const _tax = on.reduce((a, x) => a + taxOf(x), 0);
+    const fullSup = all.reduce((a, x) => a + supOf(x), 0);
+    const _d = Math.round((+q.discount || 0) * (fullSup > 0 ? Math.min(1, _sup / fullSup) : 1));
+    supply += _sup; vat += _tax; disc += _d;
+    const site = billSiteOf(q) || '현장 미지정';
+    const who = (q.by || '').trim();
+    const dt = qDate(q);
+    // 현장 묶음 머리줄
+    aoa.push(['◼ ' + site + (who ? '  ·  담당 ' + who : '') + '  ·  ' + (q.docNo || '') + '  ·  ' + dt + (on.length < all.length ? '  ·  일부 품목' : '')]);
+    on.forEach(x => aoa.push([dt, x.name, x.spec || '', x.unit || '', +x.qty || 0, priceOf(x), supOf(x), taxOf(x), supOf(x) + taxOf(x), site + (who ? ' / ' + who : '')]));
+    aoa.push(['', '소계', '', '', '', '', _sup, _tax, _sup + _tax - _d, _d > 0 ? ('할인 -' + _d) : '']);
+    aoa.push([]);
+  });
+  aoa.push(['', '', '', '', '', '공급가액 합계', supply]);
+  aoa.push(['', '', '', '', '', '부가세 (10%)', vat]);
+  if (disc > 0) aoa.push(['', '', '', '', '', '할인 (D/C)', -disc]);
+  if ((+t.dc || 0) > 0) aoa.push(['', '', '', '', '', disc > 0 ? '총액 할인 (D/C)' : '할인 (D/C)', -Math.round(t.dc)]);
+  aoa.push(['', '', '', '', '', '합계금액', t.total]);
+  const name = '청구서_' + (client.replace(/[\\/:*?"<>|\s]/g, '') || '거래처') + '_' + todayStr() + '.xlsx';
+  return { aoa, name, check: { supply, vat, disc, total: t.total } };
+}
+function billEditXlsx() {
+  const r = billXlsxAoa(); if (!r) return;
+  if (typeof XLSX === 'undefined') { toast('엑셀 모듈을 불러오지 못했습니다 — 새로고침 후 다시 시도하세요'); return; }
+  const ws = XLSX.utils.aoa_to_sheet(r.aoa);
+  ws['!cols'] = [{ wch: 12 }, { wch: 26 }, { wch: 16 }, { wch: 6 }, { wch: 8 }, { wch: 12 }, { wch: 13 }, { wch: 12 }, { wch: 14 }, { wch: 26 }];
+  // 금액 칸은 천 단위 콤마로 보이게
+  const R = XLSX.utils.decode_range(ws['!ref']);
+  for (let c = 4; c <= 8; c++) for (let rr = 0; rr <= R.e.r; rr++) {
+    const cell = ws[XLSX.utils.encode_cell({ r: rr, c: c })];
+    if (cell && typeof cell.v === 'number' && c >= 5) cell.z = '#,##0';
+  }
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '청구서');
+  XLSX.writeFile(wb, r.name);
+  toast('엑셀 저장됨 · ' + r.name);
 }
 function billEditPrint() {
   const t = billEditTotals();
