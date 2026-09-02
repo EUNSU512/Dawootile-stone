@@ -8647,10 +8647,11 @@ function renderQuote() {
   const view = filters.quoteView || 'all';
   const _selQs = filters.quoteBundle ? (state.quotes || []).filter(x => _qSel.has(x.id)) : [];
   const _selTotal = _selQs.reduce((a, q) => a + (+q.total || 0), 0);
-  const bundleBar = filters.quoteBundle ? `<div class="card" style="margin-bottom:10px;padding:11px 13px;border:1.5px solid var(--gd);background:#f2fbf6">
+  const _listHtml = _quoteListInner();   // ★ 먼저 만들어야 _qShownIds 가 채워진다 (묶음 바의 '전체 선택 N건' 이 이걸 본다)
+  const bundleBar = filters.quoteBundle ? `<div id="q-bundlebar" class="card" style="margin-bottom:10px;padding:11px 13px;border:1.5px solid var(--gd);background:#f2fbf6">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
         <div style="font-size:12.5px"><b style="color:var(--gd)"><i class="ti ti-stack-2"></i> 청구 묶음</b> · ${_selQs.length ? `${esc(_qSelClient)} · <b>${_selQs.length}건</b> · 합계 <b style="color:var(--gd)">${fmtWon(_selTotal)}</b>원` : '같은 거래처 견적을 2건 이상 선택하세요'}</div>
-        <div style="display:flex;gap:6px">${_selQs.length ? `<button class="btn btn-sm" onclick="qSelClear()">선택 해제</button>` : ''}<button class="btn btn-sm btn-pri" ${_selQs.length >= 2 ? '' : 'disabled style="opacity:.5"'} onclick="printCombinedBill()"><i class="ti ti-printer"></i> 합산 청구서 출력</button></div>
+        <div id="q-bundlebtns" style="display:flex;gap:6px;flex-wrap:wrap">${_qBundleBtnsHtml()}</div>
       </div>
       ${_selQs.length ? `<div style="margin-top:7px;border-top:1px dashed var(--bd);padding-top:6px;font-size:11.5px;color:var(--t2);line-height:1.7">
         ${_selQs.slice().sort((a, b) => (qDate(a) || '').localeCompare(qDate(b) || '')).map(q => `<div style="display:flex;justify-content:space-between;gap:8px">
@@ -8678,7 +8679,7 @@ function renderQuote() {
       <input id="q-search" placeholder="거래처·견적번호·자재 검색" value="${esc(filters.quoteSearch || '')}" oninput="filters.quoteSearch=this.value;quotesFilter()" autocomplete="off" lang="ko">
       ${(filters.quoteSearch || '').trim() ? `<button class="search-x" onclick="filters.quoteSearch='';el('q-search').value='';quotesFilter()"><i class="ti ti-x"></i></button>` : ''}
     </div>
-    <div id="q-listwrap">${_quoteListInner()}</div>`;
+    <div id="q-listwrap">${_listHtml}</div>`;
 }
 function _quoteListInner() {
   const qy = (filters.quoteSearch || '').trim().toLowerCase();
@@ -8719,6 +8720,7 @@ function _quoteListInner() {
   const cCat = {}; QCATS.forEach(c => cCat[c] = 0);
   baseForStat.forEach(q => { cCat[_catOf(q)]++; });
   if (fCat !== 'all') list = list.filter(q => _catOf(q) === fCat);
+  _qShownIds = list.map(q => q.id);   // 지금 화면(검색·필터 반영)에 뜬 견적 — 묶음청구 [전체 선택] 이 이걸 쓴다
   const chipK = (v, label, cnt) => `<button class="chip ${fCat === v ? 'active' : ''}" onclick="quoteSetCat('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? 'var(--gd)' : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
   const chipC = (v, label, cnt, col) => `<button class="chip ${fConf === v ? 'active' : ''}" onclick="quoteSetConf('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? (col || 'var(--t2)') : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
   const chipS = (v, label, cnt, col) => `<button class="chip ${fStat === v ? 'active' : ''}" onclick="quoteSetStat('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? (col || 'var(--red-t)') : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
@@ -8827,7 +8829,11 @@ function _quoteListInner() {
   }
   return `${statChips}${catBar}${unpaidBar}${navBar}<div id="q-list" data-keepscroll style="max-height:calc(100vh - 300px);min-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${body}</div>`;
 }
-function quotesFilter() { const w = el('q-listwrap'); if (!w) { renderQuote(); return; } w.innerHTML = _quoteListInner(); }
+function quotesFilter() {
+  const w = el('q-listwrap'); if (!w) { renderQuote(); return; }
+  w.innerHTML = _quoteListInner();                                  // 이 안에서 _qShownIds 가 갱신된다
+  const b = el('q-bundlebtns'); if (b) b.innerHTML = _qBundleBtnsHtml();   // '전체 선택 N건' 만 다시 (검색칸 커서 유지)
+}
 /* 견적 필터는 두 축을 겹쳐서 쓴다: (확정/미확정) × (결제·계산서·세면대) */
 function quoteSetCat(v) { filters.qCat = v; quotesFilter(); }
 function quoteSetConf(v) { filters.qConf = v; quotesFilter(); }
@@ -8923,7 +8929,40 @@ function printQuote(id) {
 }
 /* ===== 견적서 묶음 청구 (같은 거래처 여러 건 → 합산 청구서) ===== */
 let _qSel = new Set(); let _qSelClient = '';
+let _qShownIds = [];          // 지금 목록에 뜬 견적 id (검색·필터 반영) — [전체 선택] 이 쓴다
 function quoteToggleBundle() { filters.quoteBundle = !filters.quoteBundle; if (!filters.quoteBundle) { _qSel.clear(); _qSelClient = ''; } renderQuote(); }
+/* 지금 목록에서 '아직 안 고른' 같은 거래처 견적들 — 전체 선택 버튼의 대상 */
+function qSelAllTargets() {
+  const qs = (_qShownIds || []).map(id => (state.quotes || []).find(q => q.id === id)).filter(Boolean);
+  if (!qs.length) return { client: '', list: [] };
+  let client = _qSelClient;
+  if (!client) {   // 아직 아무것도 안 골랐으면, 목록이 한 거래처뿐일 때만 그 거래처로 본다
+    const names = [...new Set(qs.map(q => _normName(q.client || '')).filter(Boolean))];
+    if (names.length !== 1) return { client: '', list: [] };
+    client = ((qs.find(q => (q.client || '').trim()) || {}).client || '').trim();
+  }
+  return { client: client, list: qs.filter(q => _normName(q.client || '') === _normName(client) && !_qSel.has(q.id)) };
+}
+/* 묶음 바의 버튼들 — 검색·필터가 바뀌면 '전체 선택 N건' 숫자만 갈아끼운다
+   (전체 렌더를 하면 검색칸에서 커서가 빠진다) */
+function _qBundleBtnsHtml() {
+  const n = _qSel.size;
+  const t = qSelAllTargets();
+  return (t.client && t.list.length
+    ? `<button class="btn btn-sm" onclick="qSelAll()"><i class="ti ti-checks"></i> ${_qSelClient ? '이 거래처 전체 선택' : '전체 선택'} ${t.list.length}건</button>` : '')
+    + (n ? `<button class="btn btn-sm" onclick="qSelClear()">선택 해제</button>` : '')
+    + `<button class="btn btn-sm btn-pri" ${n >= 2 ? '' : 'disabled style="opacity:.5"'} onclick="printCombinedBill()"><i class="ti ti-printer"></i> 합산 청구서 출력</button>`;
+}
+/* 묶음청구 — 지금 목록에 뜬 같은 거래처 견적을 한 번에 다 고른다 */
+function qSelAll() {
+  const t = qSelAllTargets();
+  if (!t.client) { toast('먼저 견적 하나를 눌러 거래처를 정하세요 (또는 위 검색으로 한 거래처만 남기세요)'); return; }
+  if (!t.list.length) { toast('더 고를 견적이 없습니다'); return; }
+  if (!_qSelClient) _qSelClient = t.client;
+  t.list.forEach(q => _qSel.add(q.id));
+  renderQuote();
+  toast(t.client + ' · ' + t.list.length + '건 추가 · 모두 ' + _qSel.size + '건 선택됨');
+}
 function toggleQSel(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
   if (_qSel.has(id)) { _qSel.delete(id); if (_qSel.size === 0) _qSelClient = ''; }
