@@ -6175,16 +6175,24 @@ function taxPreviewInner() {
     </tr>`).join('');
   const wd = (d.writeDate || '').replace(/^(\d{4})(\d{2})(\d{2})$/, '$1-$2-$3');
   const _q = (state.quotes || []).find(x => x.id === d._quoteId) || {};
-  const _dc = +_q.discount || 0;
-  const _gap = (+_q.total || 0) - d.totalAmount;
+  const _base = d._bundle ? (+d._billTotal || 0) : (+_q.total || 0);      // 묶음이면 청구서 합계와 비교
+  const _lab = d._bundle ? '청구서' : '견적';
+  const _gap = _base - d.totalAmount;
   const warn = (Math.abs(_gap) > 1)
     ? `<div class="banner" style="margin-bottom:11px;font-size:12.5px;background:#fdf1ef;border-left:4px solid #c0341d;border-radius:0 10px 10px 0;padding:10px 13px;color:#8a2b1a">
-        <b><i class="ti ti-alert-triangle"></i> 견적 합계와 다릅니다</b><br>
-        견적 <b>${fmtWon(_q.total)}원</b> · 계산서 <b>${fmtWon(d.totalAmount)}원</b> · 차이 <b>${fmtWon(Math.abs(_gap))}원</b>
+        <b><i class="ti ti-alert-triangle"></i> ${_lab} 합계와 다릅니다</b><br>
+        ${_lab} <b>${fmtWon(_base)}원</b> · 계산서 <b>${fmtWon(d.totalAmount)}원</b> · 차이 <b>${fmtWon(Math.abs(_gap))}원</b>
         <br>아래 품목 금액을 확인하세요.
       </div>` : '';
+  const bundleBox = d._bundle
+    ? `<div class="banner" style="margin-bottom:11px;font-size:12.5px;background:#eef4ff;border-left:4px solid #2f6fed;border-radius:0 10px 10px 0;padding:10px 13px;color:#1c47a6"><span style="flex:1;min-width:0">
+        <b><i class="ti ti-stack-2"></i> 묶음 발행 · 견적 ${(d._quoteIds || []).length}건을 계산서 1장으로</b><br>
+        ${esc(d._client || '')} · ${esc((d._docNos || []).join(', '))}<br>
+        발행하면 위 견적이 <b>전부 '계산서 발행됨'</b> 으로 바뀝니다. 매출은 중복되지 않게 <b>대표 건(${esc((d._docNos || [])[0] || '')}) 한 줄</b>로 잡힙니다.
+      </span></div>` : '';
   return `
     <div class="banner info" style="margin-bottom:11px;font-size:12.5px"><i class="ti ti-info-circle"></i> 아래 내용 그대로 국세청에 전송됩니다. <b>품명·수량·단가·금액을 여기서 고칠 수 있습니다.</b> 확인 후 맨 아래 발행 버튼을 누르세요.</div>
+    ${bundleBox}
     ${warn}
     <div style="display:flex;gap:9px;flex-wrap:wrap;margin-bottom:11px">
       ${side('공급자', { name: d.invoicerCorpName, corpNum: d.invoicerCorpNum, ceo: d.invoicerCEOName, bizType: d.invoicerBizType, bizClass: d.invoicerBizClass, addr: d.invoicerAddr, email: d.invoicerEmail })}
@@ -6208,7 +6216,9 @@ function taxPreviewInner() {
     <div class="fld full" style="margin-bottom:11px"><label>비고 <span style="color:var(--t3);font-weight:500">(계산서에 표시 · 견적서의 현장명이 자동으로 들어갑니다)</span></label><input value="${esc(d.remark1 || '')}" oninput="taxPrevSetTop('remark1',this.value)" placeholder="현장명" style="${inp}"></div>
     <div class="frm-foot" style="display:flex;gap:6px">
       <button class="btn" style="flex:1" onclick="closeModal()">닫기</button>
-      <button class="btn btn-pri" style="flex:2" onclick="submitTaxInvoice('${d._quoteId}')"><i class="ti ti-file-check"></i>이 내용으로 발행</button>
+      ${d._bundle
+      ? `<button class="btn btn-pri" style="flex:2" onclick="submitBillTaxInvoice()"><i class="ti ti-file-check"></i>이 내용으로 묶음 발행 (${(d._quoteIds || []).length}건)</button>`
+      : `<button class="btn btn-pri" style="flex:2" onclick="submitTaxInvoice('${d._quoteId}')"><i class="ti ti-file-check"></i>이 내용으로 발행</button>`}
     </div>`;
 }
 /* 실제 발행 — 확인 창(_taxDraft)의 내용을 그대로 전송 */
@@ -8125,6 +8135,7 @@ function _ntsKey(v) { return String(v == null ? '' : v).replace(/[^0-9A-Za-z]/g,
 function salesFromApp(sd, ed) {
   return (state.quotes || []).filter(q => {
     if (!q.taxInvoice) return false;
+    if (q.taxBundleRef) return false;      // ★ 묶음 계산서에 포함된 건 — 대표 견적 한 줄로만 잡는다(중복 방지)
     const d = q.taxDate || qDate(q) || '';
     return d >= sd && d <= ed;
   }).map(q => {
@@ -8911,7 +8922,7 @@ function openBillEdit(qs) {
     const sumAmt = its.reduce((x, it) => x + (+it.amt || 0), 0);
     const vatIncl = Math.abs(sumAmt - (+q.supply || 0)) >= 2 && Math.abs(sumAmt - (+q.total || 0)) < 2;
     its.forEach((it, i) => items.push({
-      qid: q.id, i: i, on: true, vatIncl: vatIncl,
+      qid: q.id, i: i, on: true, vatIncl: vatIncl, extra: !!it.extra,
       name: it.name || '', spec: it.spec || '', unit: it.unit || '', stone: it.stone || '',
       qty: +it.qty || 0, price: +it.price || 0, amt: Math.round(+it.amt || 0), cat: marginCat(it.name)
     }));
@@ -9062,7 +9073,8 @@ function renderBillEdit() {
         <button class="btn btn-pri" style="flex:1.5" onclick="billEditPng()"><i class="ti ti-photo-down"></i>PNG 저장</button>
         <button class="btn" style="flex:1" onclick="billEditPrint()"><i class="ti ti-printer"></i>출력</button>
       </div>
-      <div style="font-size:10.5px;color:var(--t3);margin-top:5px;text-align:center">복사하면 카톡·문자에 바로 붙여넣을 수 있습니다</div>
+      ${canTax() ? `<button class="btn" style="width:100%;margin-top:6px;border:1.5px solid var(--gd);color:var(--gd);font-weight:800" onclick="openBillTaxPreview()"><i class="ti ti-file-invoice"></i>이 내용으로 세금계산서 발행 (묶음 1장)</button>` : ''}
+      <div style="font-size:10.5px;color:var(--t3);margin-top:5px;text-align:center">복사하면 카톡·문자에 바로 붙여넣을 수 있습니다${canTax() ? ' · 계산서는 <b>고른 품목 그대로</b> 한 장으로 나갑니다' : ''}</div>
     </div>
     ${groups}`;
 }
@@ -9128,6 +9140,131 @@ function billEditCopy() {
       .then(() => toast('이미지가 복사되었습니다 · 붙여넣기(Ctrl+V) 하세요'))
       .catch(() => toast('복사 실패 — PNG로 저장해 주세요'));
   } catch (e) { toast('복사 실패 — PNG로 저장해 주세요'); }
+}
+/* ══════════════════════════════════════════════════════════
+   묶음 청구 → 세금계산서 한 장으로 발행
+   청구 항목 편집에서 고른 그대로(뺀 품목·고친 수량/단가·할인) 계산서를 만든다.
+   거래처 정보는 폼이 없으므로 '거래처'에 저장된 세금정보를 쓴다.
+   ══════════════════════════════════════════════════════════ */
+function buildBillTaxPayload() {
+  if (!_billEdit) return null;
+  const t = billEditTotals();
+  if (!t.n) { toast('청구할 품목을 하나 이상 선택하세요'); return null; }
+  const qs = _billQs().filter(q => _billEdit.items.some(x => x.qid === q.id && x.on));
+  if (!qs.length) { toast('청구할 품목이 없습니다'); return null; }
+  const co = companyInfo();
+  if (!(co.bizno || '').trim()) { toast('공급자 사업자번호가 없습니다 — 회사 정보에서 설정하세요'); return null; }
+  const client = (qs[0].client || '').trim();
+  const ti = clientTaxInfo(client) || {};
+  if (!(ti.bizNo || '').trim()) { toast(client + ' 의 사업자등록번호가 없습니다 — 거래처에 먼저 등록해 주세요'); return null; }
+  if (!(ti.email || '').trim()) { toast(client + ' 의 담당자 이메일이 없습니다 — 거래처에 먼저 등록해 주세요'); return null; }
+  const buyer = {
+    bizNo: (ti.bizNo || '').trim(), corpName: (ti.corpName || client), ceo: ti.ceo || '', contact: ti.contact || '',
+    addr: ti.addr || '', bizType: ti.bizType || '', bizClass: ti.bizClass || '', email: (ti.email || '').trim(),
+    tel: ti.tel || '', hp: ti.hp || '', fax: ti.fax || ''
+  };
+  // 공급자 업태/종목 · 대표 전화 (단건 발행과 같은 규칙)
+  const _btRaw = (co.biztype || '').trim();
+  let _btType = '', _btClass = '';
+  if (_btRaw.indexOf('|') >= 0) { const _p = _btRaw.split('|'); _btType = (_p[0] || '').trim(); _btClass = _p.slice(1).join(' ').trim(); }
+  else { const _p = _btRaw.split(/\s+/); _btType = _p[0] || ''; _btClass = _p.slice(1).join(' ').trim(); }
+  if (!_btClass) _btClass = _btType;
+  const _telM = String(co.tel || '').match(/0\d{1,2}[-\s]?\d{3,4}[-\s]?\d{4}/);
+  const _invTel = _telM ? _telM[0].replace(/\s/g, '') : '';
+  // 품목 — 고른 줄만. 부가세 포함으로 넣은 견적의 줄은 공급가액을 역산한다(줄마다 vatIncl 이 들어있다)
+  const on = _billEdit.items.filter(x => x.on);
+  const supOf = x => { const raw = Math.round(+x.amt || 0); return x.vatIncl ? Math.round(raw / 1.1) : raw; };
+  const priceOf = x => { const p = +x.price || 0; if (!p) return x.price || ''; return x.vatIncl ? Math.round(p / 1.1) : p; };
+  const detailList = [];
+  on.filter(x => !isGagongItem(x)).forEach(x => {
+    const sc = supOf(x);
+    detailList.push({ itemName: x.name, spec: x.spec || '', qty: x.qty || '', unitCost: priceOf(x), supplyCost: sc, tax: Math.round(sc * 0.1), remark: '' });
+  });
+  const gag = on.filter(isGagongItem);
+  if (gag.length) {                       // 가공비는 '세라믹 가공' 한 줄로 합침 (단건과 동일)
+    const sc = gag.reduce((a, x) => a + supOf(x), 0);
+    const nm = [...new Set(gag.map(x => x.name))];
+    const spec = nm.length <= 3 ? nm.join(', ') : (nm.slice(0, 2).join(', ') + ' 외 ' + (nm.length - 2));
+    detailList.push({ itemName: TAX_GAGONG_NAME, spec: spec, qty: 1, unitCost: sc, supplyCost: sc, tax: Math.round(sc * 0.1), remark: '' });
+  }
+  /* 할인 = 견적별 할인(넣은 비율만큼) + 총액 D/C 를 합쳐 한 줄로.
+     세액이 공급가액의 10% 로 맞게 공급가액분/세액분으로 나눠 넣는다. */
+  const dcAll = Math.round((+t.disc || 0) + (+t.dc || 0));
+  if (dcAll > 0) {
+    const dcSup = Math.round(dcAll / 1.1);
+    detailList.push({ itemName: TAX_DC_NAME, spec: '', qty: '', unitCost: -dcSup, supplyCost: -dcSup, tax: -(dcAll - dcSup), remark: '' });
+  }
+  const supplyTotal = detailList.reduce((a, b) => a + (+b.supplyCost || 0), 0);
+  const taxTotal = detailList.reduce((a, b) => a + (+b.tax || 0), 0);
+  // 문서관리번호 — 묶음은 'B' + 첫 견적번호 를 바탕으로, 이미 쓰인 번호는 피한다
+  const _rawBase = ('B' + String(qs[0].docNo || Date.now())).replace(/[^0-9A-Za-z\-_]/g, '').slice(0, 20);
+  const mgtKey = taxFreeMgtKey(_rawBase, '');
+  const sites = [...new Set(qs.map(billSiteOf).filter(Boolean))];
+  const remark1 = sites.length ? (sites[0] + (sites.length > 1 ? ' 외 ' + (sites.length - 1) + '곳' : '')) : ('견적 ' + qs.length + '건');
+  const docNos = qs.map(q => q.docNo).filter(Boolean);
+  return {
+    _bundle: true, _quoteIds: qs.map(q => q.id), _docNos: docNos, _billTotal: t.total, _client: client, _buyer: buyer, _reN: 0,
+    invoicerCorpNum: co.bizno, mgtKey: mgtKey, writeDate: todayStr().replace(/-/g, ''), purposeType: TAX_PURPOSE_DEFAULT,
+    invoicerCorpName: co.name, invoicerCEOName: co.ceo, invoicerAddr: co.addr, invoicerBizType: _btType, invoicerBizClass: _btClass, invoicerContactName: (me && me.name) || '', invoicerTEL: _invTel, invoicerEmail: co.email,
+    invoiceeCorpNum: buyer.bizNo, invoiceeCorpName: buyer.corpName, invoiceeCEOName: buyer.ceo, invoiceeAddr: buyer.addr, invoiceeBizType: buyer.bizType, invoiceeBizClass: buyer.bizClass,
+    invoiceeContactName1: buyer.contact, invoiceeEmail1: buyer.email, invoiceeTEL1: buyer.tel || '', invoiceeHP1: buyer.hp || '',
+    invoiceeContactName: buyer.contact, invoiceeEmail: buyer.email,
+    supplyCostTotal: supplyTotal, taxTotal: taxTotal, totalAmount: supplyTotal + taxTotal, detailList: detailList,
+    remark1: remark1, memo: '견적 ' + docNos.join(', ')
+  };
+}
+function openBillTaxPreview() {
+  if (!canTax()) { toast('세금계산서 발행 권한이 없습니다 — 관리자에게 문의하세요'); return; }
+  const p = buildBillTaxPayload(); if (!p) return;
+  _taxDraft = p; taxPrevSum();
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-file-invoice"></i>묶음 계산서 · 발행 내용 확인</h3><button class="x" onclick="closeModal()">×</button></div><div id="taxprev-body">${taxPreviewInner()}</div>`);
+}
+/* 묶음 발행 — 한 장으로 보내고, 포함된 견적을 전부 '발행됨' 으로 표시한다.
+   ★ 금액은 대표 견적 한 건에만 넣는다. 견적마다 다 넣으면 정산 매출이 몇 배로 잡힌다.
+     나머지 건에는 taxBundleRef 를 달아 매출 목록에서 빠지게 한다. */
+async function submitBillTaxInvoice() {
+  const d = _taxDraft; if (!d || !d._bundle) { toast('발행할 내용이 없습니다'); return; }
+  taxPrevSum();
+  if (!d.detailList.length) { toast('품목이 없습니다'); return; }
+  if (!(d.totalAmount > 0)) { toast('합계금액이 0원입니다 — 금액을 확인하세요'); return; }
+  const ids = (d._quoteIds || []).slice(); if (!ids.length) { toast('대상 견적이 없습니다'); return; }
+  if (_busy) return; _busy = true;
+  try {
+    toast('묶음 세금계산서 발행 중… (' + ids.length + '건)');
+    const token = await auth.currentUser.getIdToken();
+    const send = async pl => {
+      const rr = await fetch(PUSH_FN + '?action=taxinvoice', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }, body: JSON.stringify(pl) });
+      return { r: rr, j: await rr.json().catch(() => ({})) };
+    };
+    let { r, j } = await send(d);
+    const _dupErr = x => /동일한\s*문서번호|이미\s*등록된\s*문서번호|11000009/.test(String((x && x.error) || ''));
+    if (!(r.ok && j.ok) && _dupErr(j)) {
+      const _base = String(d.mgtKey || '').replace(/-\d+$/, '');
+      for (let i = 2; i <= 6 && !(r.ok && j.ok) && _dupErr(j); i++) {
+        d.mgtKey = _base + '-' + i;
+        toast('문서번호가 이미 쓰였습니다 — ' + d.mgtKey + ' 로 다시 시도 중…');
+        ({ r, j } = await send(d));
+      }
+    }
+    if (r.ok && j.ok) {
+      const mainId = ids[0], today = todayStr(), key = j.mgtKey || d.mgtKey;
+      for (const qid of ids) {
+        const patch = {
+          taxInvoice: true, taxDate: today, ntsConfirmNum: j.ntsConfirmNum || '', taxMgtKey: key,
+          taxTestMode: !!j.test, taxIssuedAt: Date.now(), taxBundleIds: ids, taxBundleNos: d._docNos || []
+        };
+        if (qid === mainId) { patch.taxBundleMain = true; patch.taxSupply = d.supplyCostTotal; patch.taxVat = d.taxTotal; patch.taxTotal = d.totalAmount; }
+        else { patch.taxBundleRef = mainId; patch.taxSupply = 0; patch.taxVat = 0; patch.taxTotal = 0; }
+        try { await Store.update('quotes', qid, patch); } catch (e) { console.warn('bundle mark', qid, e); }
+      }
+      _taxDraft = null; closeModal();
+      toast('묶음 계산서 발행 완료 · 견적 ' + ids.length + '건' + (j.ntsConfirmNum ? (' · 승인 ' + j.ntsConfirmNum) : ''));
+      billEditClose();
+    }
+    else if (_dupErr(j)) { toast('문서번호가 모두 사용중입니다 — 잠시 후 다시 시도해 주세요'); }
+    else { toast('발행 실패: ' + ((j && j.error) || ('HTTP ' + r.status))); }
+  } catch (e) { toast('발행 오류: ' + ((e && e.message) || e)); }
+  finally { setTimeout(() => { _busy = false; }, 700); }
 }
 function billEditPrint() {
   const t = billEditTotals();
