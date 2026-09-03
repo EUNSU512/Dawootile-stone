@@ -29,7 +29,7 @@ function prefillEmail() {
 }
 function cref(name) { return db.collection('teams').doc(TEAM).collection(name); }
 
-const COLLS = ['members', 'sites', 'inventory', 'holdings', 'transactions', 'specs', 'factories', 'teams', 'suppliers', 'clients', 'issues', 'restocks', 'basins', 'holdRequests', 'shipments', 'chulgoReqs', 'chulgoHandlers', 'quotes', 'clientPrices', 'priceList', 'appmeta', 'expenses', 'banktx', 'purchases'];
+const COLLS = ['members', 'sites', 'inventory', 'holdings', 'transactions', 'specs', 'factories', 'teams', 'suppliers', 'clients', 'issues', 'restocks', 'basins', 'holdRequests', 'shipments', 'chulgoReqs', 'chulgoHandlers', 'quotes', 'clientPrices', 'priceList', 'appmeta', 'expenses', 'banktx', 'purchases', 'cutPlans'];
 const CTYPES = ['유통', '대리점', '인테리어', '소비자', '별도'];   // 거래처 유형 (별도 = 예외 업체 단가)
 function ctypeKey(t) { return t === '유통' ? 'dist' : (t === '대리점' ? 'agency' : (t === '인테리어' ? 'interior' : (t === '별도' ? 'special' : 'consumer'))); }
 const QCATS = ['세라믹+세면대', '석재', '통관비용'];
@@ -467,6 +467,7 @@ function onData(coll) {
   if (['holdings', 'inventory', 'transactions'].includes(coll) && me && !isCustomerRole()) scheduleAvailMirror();   // 고객 노출용 가용수량 미러 갱신(디바운스)
   if (['priceList', 'members'].includes(coll) && me && !isCustomerRole()) scheduleCustPriceSync();   // 거래처 화면에 보일 단가 미리 계산해서 거래처 문서에 기재(디바운스)
   if (coll === 'chulgoReqs') { refreshChulgoChatIfOpen(); if (me && !isCustomerRole()) chulgoAlertNew(); }   // 채팅 실시간 갱신 + 새 지시 소리 알림
+  if (coll === 'cutPlans') cutPlanListRefresh();   // 최근 커팅플랜 목록만 살짝 갱신 (입력 중인 칸은 안 건드린다)
   if (me) render();
 }
 /* 예정홀딩(및 일부 예정 품목)을 재고 여유가 생길 때 일정 빠른 순으로 자동 확보 — 재진입 방지 */
@@ -6748,12 +6749,158 @@ function runCutSim() {
       ${sc('자투리(로스)', m2(Math.max(0, sheetArea - partArea)) + ' ㎡')}
     </div>${over ? '<div style="color:#c0341d;font-size:12px;margin-bottom:8px"><i class="ti ti-alert-triangle"></i> 판재보다 큰 부재가 있습니다 — 치수를 확인하세요</div>' : ''}
     ${sheets.map((sh, i) => cutSheetSvg(sh, Ws, Hs, i + 1)).join('')}`;
+  cutPlanAutoSave(sheets.length, partArea);   // ★ 돌릴 때마다 '최근 커팅플랜'에 자동 저장
+}
+/* ══════════════════════════════════════════════════════════
+   최근 커팅플랜 — 재단 시뮬레이션을 돌릴 때마다 자동으로 남긴다
+   · 저장 위치: `cutPlans` 컬렉션. **직원끼리 전부 공유**한다
+     (Firestore 규칙은 손댈 게 없다 — 기존 '그 외 전부는 직원만' 규칙이 그대로 걸린다)
+   · 판재 규격 · 결방향 · 부재 목록 · 무늬연결까지 통째로 담았다가 한 번에 되살린다
+   · ★ 무늬연결(_cutGroups)은 화면상의 행 번호(cid)를 가리키는데 이 번호는 화면을 다시 그릴 때마다
+     달라진다. 그래서 저장할 때 **'부재 목록의 몇 번째'** 로 바꿔 담고, 불러올 때 새 번호로 되돌린다.
+   · 저장 규칙: 내용이 완전히 같으면 새로 만들지 않고 날짜만 새로 고친다.
+     같은 사람이 2분 안에 다시 돌리면 (= 값을 고쳐가며 시험하는 중) 마지막 칸을 덮어쓴다.
+   ══════════════════════════════════════════════════════════ */
+const CUT_PLAN_MAX = 40;        // ★ 고정한 것 빼고 최근 40개까지 보관
+const CUT_PLAN_REDO_MS = 120000; // 2분
+let _cutPlanAll = false;        // 목록 더보기 상태
+
+/* 지금 화면에 입력된 내용을 그대로 뜬다 (저장도 시험도 이걸로 한다) */
+function cutPlanSnapshot() {
+  const parts = _collectCutParts();
+  if (!parts.length) return null;
+  const pos = {}; parts.forEach((p, i) => { pos[String(p.cid)] = i; });   // 행번호 → 저장 순번
+  const groups = _cutGroups.map(g => ({
+    dir: g.dir,
+    at: (g.cids || []).map(c => pos[String(c)]).filter(v => v != null)
+  })).filter(g => g.at.length >= 2);
+  return {
+    sheet: { L: _numv(el('cut-sheetL') && el('cut-sheetL').value) || 3200, W: _numv(el('cut-sheetW') && el('cut-sheetW').value) || 1600 },
+    grain: !!(el('cut-grain') && el('cut-grain').checked),
+    parts: parts.map(p => ({ l: p.l, w: p.w, q: p.q, rot: !!p.rot })),
+    groups: groups
+  };
+}
+function cutPlanSig(s) { return s ? JSON.stringify([s.sheet, s.grain, s.parts, s.groups]) : ''; }
+function cutPlanTitle(s) {
+  if (!s || !s.parts || !s.parts.length) return '(빈 플랜)';
+  const first = s.parts[0], n = s.parts.length;
+  const qty = s.parts.reduce((a, p) => a + (+p.q || 0), 0);
+  return s.sheet.L + '×' + s.sheet.W + '  ·  ' + first.l + '×' + first.w + (n > 1 ? ' 외 ' + (n - 1) + '종' : '') + '  ·  ' + qty + '장';
+}
+/* 시뮬레이션을 돌리면 자동으로 저장 */
+async function cutPlanAutoSave(nSheets, partArea) {
+  if (!me || isCustomerRole()) return;
+  const s = cutPlanSnapshot(); if (!s) return;
+  const sig = cutPlanSig(s);
+  const row = Object.assign({}, s, {
+    sig: sig, title: cutPlanTitle(s), sheets: nSheets, area: Math.round(partArea || 0),
+    by: me.name || '', at: Date.now(), date: todayStr()
+  });
+  const list = (state.cutPlans || []).slice().sort((a, b) => (+b.at || 0) - (+a.at || 0));
+  try {
+    const same = list.find(x => x.sig === sig);
+    // 내용이 똑같으면 새로 만들지 않는다. '마지막으로 쓴 때'만 새로 고친다 (만든 사람은 그대로 둔다)
+    if (same) { await Store.update('cutPlans', same.id, { at: row.at, date: row.date, sheets: row.sheets, area: row.area }); return; }
+    const last = list[0];
+    if (last && !last.pinned && (last.by || '') === row.by && (Date.now() - (+last.at || 0)) < CUT_PLAN_REDO_MS) {
+      await Store.update('cutPlans', last.id, Object.assign({}, row, { name: last.name || '' }));   // 고쳐가며 시험 중 → 마지막 칸 갱신
+      return;
+    }
+    await Store.add('cutPlans', row);
+    // 오래된 것 정리 (★ 고정한 건 절대 안 지운다)
+    const free = (state.cutPlans || []).filter(x => !x.pinned).sort((a, b) => (+b.at || 0) - (+a.at || 0));
+    for (const old of free.slice(CUT_PLAN_MAX)) { try { await Store.remove('cutPlans', old.id); } catch (e) { } }
+  } catch (e) { console.warn('cutPlan save', e); }
+}
+function cutPlanSorted() {
+  return (state.cutPlans || []).slice().sort((a, b) =>
+    (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0) || (+b.at || 0) - (+a.at || 0));
+}
+function cutPlanListInner() {
+  const all = cutPlanSorted();
+  if (!all.length) return `<div style="font-size:12px;color:var(--t3);padding:4px 2px">아직 저장된 플랜이 없습니다 — 아래에서 <b>[재단 시뮬레이션 실행]</b>을 누르면 여기에 자동으로 쌓입니다.</div>`;
+  const show = _cutPlanAll ? all : all.slice(0, 6);
+  const inp = 'font-size:12px;padding:4px 7px;border:1px solid var(--bd2);border-radius:7px;width:118px;background:#fff';
+  const rows = show.map(p => {
+    const when = (p.date || '').slice(5) + (p.at ? ' ' + new Date(p.at).toTimeString().slice(0, 5) : '');
+    return `<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:7px 9px;border:1px solid ${p.pinned ? '#f0d9a8' : 'var(--bd)'};background:${p.pinned ? '#fffaf0' : '#fff'};border-radius:10px;margin-bottom:6px">
+      <button class="btn btn-sm btn-ghost" title="${p.pinned ? '고정 해제' : '고정 (오래돼도 안 지워짐)'}" style="color:${p.pinned ? '#d69e2e' : 'var(--t3)'};flex:none" onclick="cutPlanPin('${p.id}')"><i class="ti ti-star${p.pinned ? '-filled' : ''}"></i></button>
+      <div style="min-width:0;flex:1">
+        <div style="font-size:12.5px;font-weight:700">${esc(p.title || cutPlanTitle(p))}</div>
+        <div style="font-size:10.5px;color:var(--t3)">${esc(when)} · ${esc(p.by || '')}${p.sheets ? ' · 판재 ' + p.sheets + '장' : ''}${p.grain ? ' · 결방향' : ''}${(p.groups || []).length ? ' · 무늬연결 ' + p.groups.length : ''}</div>
+      </div>
+      <input placeholder="이름 (선택)" value="${esc(p.name || '')}" style="${inp}" onchange="cutPlanRename('${p.id}',this.value)">
+      <button class="btn btn-sm btn-pri" style="flex:none" onclick="cutPlanLoad('${p.id}')"><i class="ti ti-download"></i>불러오기</button>
+      ${_cutPlanDelId === p.id
+        ? `<button class="btn btn-sm btn-danger" style="flex:none" onclick="cutPlanDel('${p.id}')"><i class="ti ti-trash"></i>정말 삭제?</button>`
+        : `<button class="btn btn-sm btn-ghost" style="color:var(--red-t);flex:none" title="삭제 (두 번 눌러야 지워집니다)" onclick="cutPlanDel('${p.id}')"><i class="ti ti-trash"></i></button>`}
+    </div>`;
+  }).join('');
+  const more = all.length > 6 ? `<button class="btn btn-sm btn-block" onclick="cutPlanToggleAll()">${_cutPlanAll ? '접기' : '더보기 (모두 ' + all.length + '개)'}</button>` : '';
+  return rows + more;
+}
+function cutPlanListRefresh() { const b = el('cut-recent'); if (b) b.innerHTML = cutPlanListInner(); }
+function cutPlanToggleAll() { _cutPlanAll = !_cutPlanAll; cutPlanListRefresh(); }
+async function cutPlanPin(id) {
+  const p = (state.cutPlans || []).find(x => x.id === id); if (!p) return;
+  try { await Store.update('cutPlans', id, { pinned: !p.pinned }); toast(p.pinned ? '고정 해제' : '고정됨 — 오래돼도 지워지지 않습니다'); } catch (e) { }
+}
+async function cutPlanRename(id, v) {
+  try { await Store.update('cutPlans', id, { name: String(v || '').trim().slice(0, 40) }); } catch (e) { }
+}
+/* 삭제는 두 번 눌러야 지워진다 (한 번 누르면 «정말 삭제?» 로 바뀌고, 5초 지나면 원래대로) */
+let _cutPlanDelId = '', _cutPlanDelT = null;
+async function cutPlanDel(id) {
+  if (_cutPlanDelId !== id) {
+    _cutPlanDelId = id; cutPlanListRefresh();
+    clearTimeout(_cutPlanDelT);
+    _cutPlanDelT = setTimeout(() => { _cutPlanDelId = ''; cutPlanListRefresh(); }, 5000);
+    toast('한 번 더 누르면 삭제됩니다');
+    return;
+  }
+  clearTimeout(_cutPlanDelT); _cutPlanDelId = '';
+  try { await Store.remove('cutPlans', id); toast('삭제됨'); } catch (e) { toast('삭제 실패'); }
+  cutPlanListRefresh();
+}
+/* 저장한 플랜을 화면에 되살린다 */
+function cutPlanLoad(id) {
+  const p = (state.cutPlans || []).find(x => x.id === id);
+  if (!p) { toast('플랜을 찾을 수 없습니다'); return; }
+  if (!el('cut-parts')) { openCutSim(); setTimeout(() => cutPlanApply(p), 80); return; }   // 시뮬레이터가 닫혀 있으면 먼저 연다
+  cutPlanApply(p);
+}
+function cutPlanApply(p) {
+  const box = el('cut-parts'); if (!box) { toast('재단 시뮬레이션 화면을 먼저 열어주세요'); return; }
+  const sh = (p && p.sheet) || {};
+  if (el('cut-sheetL')) el('cut-sheetL').value = sh.L || 3200;
+  if (el('cut-sheetW')) el('cut-sheetW').value = sh.W || 1600;
+  _cutSheet = { L: sh.L || 3200, W: sh.W || 1600 };
+  if (el('cut-grain')) el('cut-grain').checked = !!p.grain;
+  // 부재 목록 다시 깔기 — 행 번호를 새로 매기고, 그 번호를 무늬연결에 다시 이어 준다
+  const cids = [];
+  box.innerHTML = (p.parts || []).map(x => { const cid = ++_cutCid; cids.push(String(cid)); return cutRowHtml({ cid: cid, l: x.l, w: x.w, q: x.q, rot: x.rot }); }).join('')
+    || cutRowHtml({}) + cutRowHtml({});
+  _cutGroups = (p.groups || []).map(g => ({
+    dir: g.dir, cids: (g.at || []).map(i => cids[i]).filter(Boolean)
+  })).filter(g => g.cids.length >= 2);
+  const gb = el('cut-groups'); if (gb) gb.innerHTML = cutGroupsInner();
+  runCutSim();
+  toast('불러왔습니다 — ' + (p.name ? p.name + ' · ' : '') + (p.title || ''));
+  const r = el('cut-result'); if (r && r.scrollIntoView) r.scrollIntoView({ block: 'start', behavior: 'smooth' });
 }
 /* 재단 시뮬레이터 본문 HTML — 견적서 화면(전체) / 견적 작성 모달 양쪽에서 재사용 */
 function cutSimBodyHtml() {
   const inp = 'width:110px;font-size:15px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px;text-align:center';
   const rows = cutRowHtml({}) + cutRowHtml({}) + cutRowHtml({});
   return `
+    <div class="card" style="padding:13px 15px;margin-bottom:12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-weight:700;font-size:13.5px"><i class="ti ti-history"></i> 최근 커팅플랜</div>
+        <div style="font-size:10.5px;color:var(--t3)">실행하면 자동 저장 · 직원 모두 공유 · ★는 안 지워짐</div>
+      </div>
+      <div id="cut-recent">${cutPlanListInner()}</div>
+    </div>
     <div class="card" style="padding:13px 15px;margin-bottom:12px">
       <div style="font-weight:700;font-size:13.5px;margin-bottom:9px">판재 규격</div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
