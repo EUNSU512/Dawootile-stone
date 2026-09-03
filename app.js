@@ -4668,6 +4668,206 @@ async function quoteMarkPaid(id) {
   toast(paid ? '결제완료' : (amt > 0 ? ('입금 ' + fmtWon(amt) + ' · 미수 ' + fmtWon(total - amt)) : '미결제'));
 }
 async function quoteMarkTax(id) { const q = (state.quotes || []).find(x => x.id === id); if (!q) return; const t = !q.taxInvoice; await Store.update('quotes', id, { taxInvoice: t, taxDate: t ? todayStr() : '' }); toast(t ? '세금계산서 발행 표시' : '표시 해제'); }
+/* ══════════════════════════════════════════════════════════
+   앱 밖에서 끊은 계산서를 '발행 완료' 로 돌리기
+   ─────────────────────────────────────────────────────────
+   홈택스·팝빌에서 직접 끊은 계산서는 앱이 모른다. 예전에는 배지를 눌러
+   `taxInvoice: true` 로 표시만 했는데, 그러면 발행일이 '누른 날'이 되고
+   승인번호가 없어서 **정산 › 매출에서 홈택스 자료와 짝이 안 지어진다**
+   (= 목록에 «확인 필요» 로 남는다).
+   그래서 홈택스에서 수집한 그 계산서를 견적에 **직접 연결**한다:
+     · 발행일 · 승인번호 · 공급가 · 세액 · 합계를 국세청 기록 그대로 가져온다
+     · `taxExtId` 로 어느 계산서인지 못 박아 둔다 → 이름·금액이 달라도 100% 짝이 맞는다
+     · 홈택스 쪽 문서에는 `saleQid` 를 남겨 두 번 연결되는 걸 막는다
+   ══════════════════════════════════════════════════════════ */
+function _htSells() { return (state.purchases || []).filter(p => (p.kind || '') === 'SELL'); }
+function taxLinkedSale(q) { return (q && q.taxExtId) ? _htSells().find(p => p.id === q.taxExtId) : null; }
+/* 계산서 배지를 누르면 뜨는 선택창 */
+function openTaxMark(qid) {
+  const q = (state.quotes || []).find(x => x.id === qid); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
+  const linked = taxLinkedSale(q);
+  const nHt = _htSells().length;
+  const row = (ic, col, title, desc, onclick) => `<button class="btn btn-block" style="text-align:left;display:flex;align-items:flex-start;gap:10px;padding:11px 12px;margin-bottom:8px;height:auto" onclick="${onclick}">
+      <i class="ti ${ic}" style="font-size:19px;color:${col};flex:none;margin-top:1px"></i>
+      <span style="flex:1;min-width:0"><span style="display:block;font-size:13.5px;font-weight:700">${title}</span>
+      <span style="display:block;font-size:11.5px;color:var(--t3);font-weight:500;line-height:1.5;margin-top:2px">${desc}</span></span></button>`;
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-file-invoice"></i>계산서 발행 표시</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div style="font-size:12.5px;color:var(--t2);margin-bottom:10px"><b>${esc(q.client || '')}</b> · ${esc(q.docNo || '')} · ${fmtWon(q.total)}원</div>
+    ${linked ? `<div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-link"></i><span style="flex:1;min-width:0">
+        홈택스 계산서와 연결되어 있습니다 — <b>${esc(linked.date || '')}</b> · ${esc((linked.item || '').slice(0, 24))} · <b>${fmtWon(linked.total)}원</b>
+        ${linked.nts ? `<div style="font-size:10.5px;color:var(--t3);margin-top:2px">승인 ${esc(linked.nts)}</div>` : ''}</span></div>`
+      : (q.taxInvoice ? `<div class="banner warn" style="margin-bottom:10px;font-size:12px"><i class="ti ti-help-circle"></i><span style="flex:1;min-width:0">
+        지금은 <b>표시만</b> 되어 있습니다${q.taxDate ? ' (' + esc(q.taxDate) + ')' : ''}. 홈택스 계산서와 연결하면 정산 매출에서 «확인 필요» 가 사라집니다.</span></div>` : '')}
+    ${row('ti-link', '#2f6fed', '홈택스 계산서 연결' + (linked ? ' (다시 고르기)' : ''),
+      nHt ? ('수집해 둔 매출 계산서 ' + nHt + '건 중에서 고릅니다. 발행일·승인번호·금액을 국세청 기록 그대로 가져옵니다.')
+        : '아직 홈택스에서 가져온 매출 계산서가 없습니다. 정산 › 매출에서 <b>홈택스에서 불러오기</b>를 먼저 눌러주세요.',
+      "openTaxLink('" + qid + "')")}
+    ${q.taxInvoice ? '' : row('ti-check', 'var(--gd)', '계산서 없이 «발행» 표시만',
+      '오늘 날짜로 발행 표시만 합니다. 홈택스 자료와는 짝이 안 지어져 정산에서 «확인 필요» 로 남습니다.',
+      "taxMarkOnly('" + qid + "')")}
+    ${q.taxInvoice ? row('ti-arrow-back-up', 'var(--red-t)', linked ? '연결 해제 · 미발행으로' : '발행 표시 해제',
+      linked ? '연결을 끊고 «계산서 미발행» 으로 되돌립니다. 홈택스 자료 자체는 그대로 남습니다.' : '«계산서 미발행» 으로 되돌립니다.',
+      "taxUnmark('" + qid + "')") : ''}`);
+}
+async function taxMarkOnly(qid) {
+  try { await Store.update('quotes', qid, { taxInvoice: true, taxDate: todayStr() }); toast('발행 표시했습니다 (홈택스 연결 없음)'); } catch (e) { toast('저장 실패'); }
+  closeModal();
+}
+async function taxUnmark(qid) {
+  const q = (state.quotes || []).find(x => x.id === qid); if (!q) return;
+  try {
+    if (q.taxExtId) { const p = _htSells().find(x => x.id === q.taxExtId); if (p) await Store.update('purchases', p.id, { saleQid: '', saleDocNo: '' }); }
+    await Store.update('quotes', qid, {
+      taxInvoice: false, taxDate: '', ntsConfirmNum: '', taxExtId: '', taxExtSrc: '',
+      taxSupply: null, taxVat: null, taxTotal: null
+    });
+    toast('계산서 미발행으로 되돌렸습니다');
+  } catch (e) { toast('저장 실패'); }
+  closeModal();
+}
+/* ── 홈택스 계산서 고르기 ── */
+let _txlQid = '', _txlSearch = '';
+function openTaxLink(qid) {
+  const q = (state.quotes || []).find(x => x.id === qid); if (!q) return;
+  _txlQid = qid; _txlSearch = '';
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-link"></i>홈택스 계산서 연결</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div style="font-size:12.5px;color:var(--t2);margin-bottom:8px"><b>${esc(q.client || '')}</b> · ${esc(q.docNo || '')} · 견적 <b>${fmtWon(q.total)}원</b></div>
+    <div class="banner info" style="margin-bottom:9px;font-size:11.5px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0">
+      같은 거래처 · 금액이 가까운 순서로 보여줍니다. 이미 다른 견적에 연결된 계산서는 빠집니다.</span></div>
+    <div class="search-box" style="margin-bottom:9px"><i class="ti ti-search"></i>
+      <input id="txl-search" placeholder="상호 · 품목 · 금액 · 승인번호 검색" oninput="taxLinkSearch(this.value)" autocomplete="off" lang="ko"></div>
+    <div id="txl-list">${taxLinkRows()}</div>`);
+}
+function taxLinkSearch(v) { _txlSearch = String(v || '').trim().toLowerCase(); const b = el('txl-list'); if (b) b.innerHTML = taxLinkRows(); }
+function taxLinkRows() {
+  const q = (state.quotes || []).find(x => x.id === _txlQid); if (!q) return '';
+  const qt = +q.total || 0, qd = qDate(q) || todayStr();
+  const dd = (a, b) => Math.abs((new Date(a + 'T00:00:00') - new Date(b + 'T00:00:00')) / 86400000) || 0;
+  let list = _htSells().filter(p => !p.saleQid || p.saleQid === _txlQid);
+  if (_txlSearch) {
+    const s = _txlSearch;
+    list = list.filter(p => ((p.buyer || '') + ' ' + (p.item || '') + ' ' + (p.nts || '') + ' ' + (p.total || '') + ' ' + (p.date || '')).toLowerCase().includes(s));
+  }
+  const same = p => _bankKey(p.buyer || '') === _bankKey(q.client || '');
+  list = list.slice().sort((a, b) =>
+    (same(b) ? 1 : 0) - (same(a) ? 1 : 0)
+    || Math.abs((+a.total || 0) - qt) - Math.abs((+b.total || 0) - qt)
+    || dd(a.date || qd, qd) - dd(b.date || qd, qd));
+  const show = list.slice(0, 40);
+  if (!show.length) return `<div style="font-size:12.5px;color:var(--t3);padding:12px 4px;text-align:center">${_txlSearch ? '검색 결과가 없습니다' : '연결할 수 있는 홈택스 매출 계산서가 없습니다.<br>정산 › 매출에서 <b>홈택스에서 불러오기</b>를 먼저 눌러주세요.'}</div>`;
+  return show.map(p => {
+    const exact = Math.abs((+p.total || 0) - qt) <= 2;
+    const cur = p.saleQid === _txlQid;
+    return `<div style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:8px 10px;border:1px solid ${exact ? '#b8e0c8' : 'var(--bd)'};background:${exact ? '#f4fbf6' : '#fff'};border-radius:10px;margin-bottom:6px">
+      <div style="min-width:0;flex:1">
+        <div style="font-size:12.5px;font-weight:700">${esc(p.buyer || '(상호없음)')}${same(p) ? '' : ` <span class="pill p-gray" style="font-size:9px;padding:0 5px">상호 다름</span>`}${exact ? ` <span class="pill p-done" style="font-size:9px;padding:0 5px">금액 일치</span>` : ''}${cur ? ` <span class="pill p-prog" style="font-size:9px;padding:0 5px">현재 연결</span>` : ''}</div>
+        <div style="font-size:10.5px;color:var(--t3)">${esc(p.date || '')} · ${esc((p.item || '').slice(0, 30))}${p.nts ? ' · 승인 ' + esc(String(p.nts).slice(-8)) : ''}</div>
+      </div>
+      <div style="text-align:right;flex:none">
+        <div style="font-size:13.5px;font-weight:800;color:var(--gd)">${fmtWon(p.total)}</div>
+        <div style="font-size:10px;color:var(--t3)">공급 ${fmtWon(p.supply)} · 세 ${fmtWon(p.vat)}</div>
+      </div>
+      <button class="btn btn-sm btn-pri" style="flex:none" onclick="taxLinkDo('${esc(p.id)}')"><i class="ti ti-link"></i>연결</button>
+    </div>`;
+  }).join('') + (list.length > 40 ? `<div style="font-size:11px;color:var(--t3);text-align:center;padding:4px">…앞 40건만 보여줍니다. 검색으로 좁혀 보세요.</div>` : '');
+}
+async function taxLinkDo(pid) {
+  const qid = _txlQid;
+  const q = (state.quotes || []).find(x => x.id === qid);
+  const p = _htSells().find(x => x.id === pid);
+  if (!q || !p) { toast('대상을 찾을 수 없습니다'); return; }
+  try {
+    if (q.taxExtId && q.taxExtId !== pid) {           // 예전 연결은 풀어 준다
+      const old = _htSells().find(x => x.id === q.taxExtId);
+      if (old) await Store.update('purchases', old.id, { saleQid: '', saleDocNo: '' });
+    }
+    await Store.update('quotes', qid, {
+      taxInvoice: true, taxDate: p.date || todayStr(), ntsConfirmNum: p.nts || '',
+      taxSupply: +p.supply || 0, taxVat: +p.vat || 0, taxTotal: +p.total || 0,
+      taxExtId: p.id, taxExtSrc: 'hometax', taxTestMode: false
+    });
+    await Store.update('purchases', p.id, { saleQid: qid, saleDocNo: q.docNo || '' });
+    toast('연결됨 · ' + (p.date || '') + ' ' + fmtWon(p.total) + '원');
+  } catch (e) { toast('연결 실패: ' + ((e && e.message) || e)); }
+  closeModal();
+}
+/* ── 한꺼번에 자동 연결 ──────────────────────────────────────
+   «앱에서 발행 표시했는데 홈택스에 짝이 없는» 건들을 금액으로 찾아 준다.
+   규칙(보수적으로):
+     · 아직 아무 견적에도 안 붙은 홈택스 매출 계산서 중에서
+     · 합계 금액이 2원 이내로 같고, 날짜가 45일 안쪽인 것
+     · 상호가 같으면 바로 후보 / 상호가 다르면 **그런 후보가 딱 하나일 때만** 후보
+   → 사람이 목록을 보고 체크를 풀 수 있게 미리보기부터 띄운다. */
+let _txaPairs = [];
+function taxAutoPairs(ym) {
+  const sd = ym + '-01', ed = _ymd(new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0));
+  const rows = salesRows(sd, ed).filter(r => r.src === 'app' && r.unconfirmed && !r.test);
+  const quotes = state.quotes || [];
+  const usedNts = new Set(quotes.map(q => _ntsKey(q.ntsConfirmNum)).filter(Boolean));
+  const usedExt = new Set(quotes.map(q => q.taxExtId).filter(Boolean));
+  let pool = _htSells().filter(p => !p.saleQid && !usedExt.has(p.id) && !(p.nts && usedNts.has(_ntsKey(p.nts))));
+  const taken = new Set();
+  const dd = (a, b) => { if (!a || !b) return 999; return Math.abs((new Date(a + 'T00:00:00') - new Date(b + 'T00:00:00')) / 86400000); };
+  const out = [];
+  rows.slice().sort((a, b) => (+b.total || 0) - (+a.total || 0)).forEach(a => {
+    const cands = pool.filter(p => !taken.has(p.id) && Math.abs((+p.total || 0) - (+a.total || 0)) <= 2 && dd(p.date, a.date) <= 45);
+    if (!cands.length) return;
+    const sameName = cands.filter(p => _bankKey(p.buyer || '') === _bankKey(a.client || ''));
+    let pick = null, why = '';
+    if (sameName.length === 1) { pick = sameName[0]; why = '상호·금액 일치'; }
+    else if (sameName.length > 1) { pick = sameName.slice().sort((x, y) => dd(x.date, a.date) - dd(y.date, a.date))[0]; why = '상호·금액 일치 (후보 ' + sameName.length + '건 중 날짜가 가장 가까운 것)'; }
+    else if (cands.length === 1) { pick = cands[0]; why = '금액 일치 · 상호 표기 다름'; }
+    else return;                                  // 상호가 다른데 후보가 여럿 → 사람이 직접 고르게 둔다
+    taken.add(pick.id);
+    out.push({ qid: a.qid, docNo: a.docNo, client: a.client, adate: a.date, atotal: a.total, pid: pick.id, p: pick, why: why });
+  });
+  return out;
+}
+function openTaxAutoLink(ym) {
+  if (!isAdmin()) { toast('관리자만 가능합니다'); return; }
+  _txaPairs = taxAutoPairs(ym);
+  const sd = ym + '-01', ed = _ymd(new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0));
+  const nUnc = salesRows(sd, ed).filter(r => r.src === 'app' && r.unconfirmed && !r.test).length;
+  const body = _txaPairs.length ? _txaPairs.map((x, i) => `
+    <label style="display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:8px 10px;border:1px solid var(--bd);border-radius:10px;margin-bottom:6px;cursor:pointer">
+      <input type="checkbox" class="txa-ck" data-i="${i}" checked style="width:17px;height:17px;flex:none">
+      <div style="min-width:0;flex:1">
+        <div style="font-size:12.5px;font-weight:700">${esc(x.client || '')} <span style="color:var(--t3);font-weight:500">${esc(x.docNo || '')}</span></div>
+        <div style="font-size:10.5px;color:var(--t3)">앱 ${esc(x.adate || '')} → 홈택스 <b>${esc(x.p.date || '')}</b> · ${esc((x.p.item || '').slice(0, 26))}${x.p.nts ? ' · 승인 ' + esc(String(x.p.nts).slice(-8)) : ''}</div>
+        <div style="font-size:10.5px;color:${x.why.includes('표기 다름') ? '#b45309' : 'var(--gd)'};font-weight:700;margin-top:1px">${esc(x.why)}${x.p.buyer && _bankKey(x.p.buyer) !== _bankKey(x.client || '') ? ' — 홈택스 상호 «' + esc(x.p.buyer) + '»' : ''}</div>
+      </div>
+      <div style="font-size:13.5px;font-weight:800;color:var(--gd);flex:none">${fmtWon(x.p.total)}</div>
+    </label>`).join('')
+    : `<div style="font-size:12.5px;color:var(--t3);padding:14px 4px;text-align:center">금액으로 짝을 찾을 수 있는 건이 없습니다.<br>견적 카드의 «계산서» 배지에서 하나씩 직접 연결할 수 있습니다.</div>`;
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-wand"></i>홈택스 계산서 자동 연결</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div class="banner info" style="margin-bottom:9px;font-size:11.5px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0">
+      «확인 필요» ${nUnc}건 중 <b>${_txaPairs.length}건</b>의 짝을 찾았습니다.
+      합계 금액이 같고 날짜가 45일 안쪽인 것만 고릅니다. 연결하면 발행일·승인번호·금액이 <b>국세청 기록 기준</b>으로 바뀝니다.</span></div>
+    <div style="max-height:52vh;overflow:auto;margin-bottom:9px">${body}</div>
+    <div class="frm-foot"><button class="btn" style="flex:1" onclick="closeModal()">취소</button>
+      <button class="btn btn-pri" style="flex:2" ${_txaPairs.length ? '' : 'disabled style="opacity:.5"'} onclick="taxAutoLinkRun()"><i class="ti ti-link"></i>체크한 것 연결</button></div>`);
+}
+async function taxAutoLinkRun() {
+  const picks = [...document.querySelectorAll('.txa-ck')].filter(c => c.checked).map(c => _txaPairs[+c.getAttribute('data-i')]).filter(Boolean);
+  if (!picks.length) { toast('연결할 건을 하나 이상 고르세요'); return; }
+  let ok = 0, ng = 0;
+  for (const x of picks) {
+    const q = (state.quotes || []).find(y => y.id === x.qid); const p = x.p;
+    if (!q || !p) { ng++; continue; }
+    try {
+      await Store.update('quotes', x.qid, {
+        taxInvoice: true, taxDate: p.date || q.taxDate || todayStr(), ntsConfirmNum: p.nts || '',
+        taxSupply: +p.supply || 0, taxVat: +p.vat || 0, taxTotal: +p.total || 0,
+        taxExtId: p.id, taxExtSrc: 'hometax', taxTestMode: false
+      });
+      await Store.update('purchases', p.id, { saleQid: x.qid, saleDocNo: q.docNo || '' });
+      ok++;
+    } catch (e) { ng++; console.warn('autolink', x.docNo, e); }
+  }
+  closeModal();
+  toast('연결 완료 ' + ok + '건' + (ng ? ' · 실패 ' + ng + '건' : ''));
+  try { renderSettle(); } catch (e) { }
+}
 function quoteToShip(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
   try { Store.update('quotes', id, { shipped: true, shipStartedAt: Date.now() }); } catch (e) { }
@@ -7341,7 +7541,9 @@ function quoteCardHtml(q) {
   const _pa = +q.paidAmount || 0; const _tt = +q.total || 0; const _rem = Math.max(0, _tt - _pa);
   const _cRem = clientRemOf(q.client);        // 이 거래처가 우리한테 갚아야 할 총액 (원장 기준)
   const paidPill = (_tt > 0 && _pa >= _tt) ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 수정"><i class="ti ti-cash"></i> 결제완료</button>` : (_pa > 0 ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 수정"><i class="ti ti-cash"></i> 입금 ${fmtWon(_pa)} · 미수 ${fmtWon(_rem)}</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 입력"><i class="ti ti-cash"></i> 미결제</button>`);
-  const taxPill = q.taxInvoice ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="클릭 시 해제"><i class="ti ti-file-check"></i> 계산서 발행${q.taxDate ? ' ' + esc(q.taxDate.slice(5)) : ''}</button>` : `<button class="pill p-gray" style="border:none;cursor:pointer" onclick="quoteMarkTax('${q.id}')" title="발행으로 표시"><i class="ti ti-file-off"></i> 계산서 미발행</button>`;
+  const taxPill = q.taxInvoice
+    ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="openTaxMark('${q.id}')" title="계산서 표시·연결 바꾸기"><i class="ti ti-file-check"></i> 계산서 발행${q.taxDate ? ' ' + esc(q.taxDate.slice(5)) : ''}${q.taxExtId ? ' <i class="ti ti-link" style="font-size:11px"></i>' : ''}</button>`
+    : `<button class="pill p-gray" style="border:none;cursor:pointer" onclick="openTaxMark('${q.id}')" title="발행으로 표시 · 홈택스 계산서 연결"><i class="ti ti-file-off"></i> 계산서 미발행</button>`;
   const _shipD = q.shipped ? quoteShipDate(q) : '';
   const shipBadge = q.shipped ? `<span class="pill p-done"><i class="ti ti-truck-delivery"></i> 출고 완료${_shipD ? ' ' + esc(_shortDate(_shipD)) : ''}</span>` : '';
   /* 현장 등록 완료 배지 — 누르면 그 현장 상세가 열린다 (현장명도 같이 보여준다) */
@@ -8377,7 +8579,7 @@ function salesFromApp(sd, ed) {
       key: 'Q' + q.id, date: q.taxDate || qDate(q) || '', client: (q.client || '').trim(),
       docNo: q.docNo || '', supply: sup, vat: vat, total: tot,
       nts: q.ntsConfirmNum || '', mgt: q.taxMgtKey || '', test: !!q.taxTestMode,
-      src: 'app', qid: q.id, item: ''
+      src: 'app', qid: q.id, item: '', extId: q.taxExtId || ''   // ★ 손으로 이어 붙인 홈택스 계산서 id
     };
   });
 }
@@ -8401,13 +8603,16 @@ function salesRows(sd, ed) {
   const usedH = new Set();
   const out = [];
   const _dd = (a, b) => Math.abs((new Date(a + 'T00:00:00') - new Date(b + 'T00:00:00')) / 86400000);
+  /* ★ 사람이 직접 이어 붙인 건(taxExtId)이 가장 확실하다 — 상호나 금액이 달라도 이걸 먼저 본다 */
+  const findByExt = a => { const k = a.extId; if (!k) return -1; return ht.findIndex((h, i) => !usedH.has(i) && h.key === 'H' + k); };
   const findByNts = a => { const k = _ntsKey(a.nts); if (!k) return -1; return ht.findIndex((h, i) => !usedH.has(i) && _ntsKey(h.nts) === k); };
   const findByAmt = a => ht.findIndex((h, i) => !usedH.has(i)
     && _bankKey(h.client) === _bankKey(a.client)
     && Math.abs((+h.total || 0) - (+a.total || 0)) <= 2
     && _dd(h.date, a.date) <= 7);
   app.forEach(a => {
-    let i = findByNts(a);
+    let i = findByExt(a);
+    if (i < 0) i = findByNts(a);
     if (i < 0 && !a.test) i = findByAmt(a);          // 테스트 발행 건은 홈택스에 있을 리 없으니 대조하지 않는다
     if (i >= 0) {
       usedH.add(i);
@@ -8639,7 +8844,8 @@ function _saleParts(ym) {
     ${nTest ? `<div class="banner warn" style="margin-bottom:9px;font-size:12px"><i class="ti ti-flask"></i><span style="flex:1;min-width:0"><b>테스트 모드로 발행된 건이 ${nTest}건</b> 있습니다. 국세청에 전송되지 않은 건이라 <b>위 합계와 부가세에서 빼두었습니다</b>. 목록에는 그대로 보입니다.</span></div>` : ''}
     ${nUnc ? `<div class="banner warn" style="margin-bottom:9px;font-size:12px"><i class="ti ti-help-circle"></i><span style="flex:1;min-width:0">
       앱에서 <b>발행함</b>으로 표시했는데 홈택스에는 같은 건이 없는 게 <b>${nUnc}건 (${fmtWon(uncAmt)}원)</b> 있습니다 — 목록에 <b>확인 필요</b>로 표시했습니다.<br>
-      실제로 끊은 건이라면 홈택스 수집 기간을 넓혀 다시 불러오세요. 계산서 없이 표시만 해둔 거라면 그대로 두시면 됩니다.</span></div>` : ''}
+      홈택스·팝빌에서 직접 끊은 건이면 아래 <b>자동 연결</b>로 이어 주세요. 계산서 없이 표시만 해둔 거라면 그대로 두시면 됩니다.
+      ${admin ? `<div style="margin-top:7px"><button class="btn btn-sm btn-pri" onclick="openTaxAutoLink('${ym}')"><i class="ti ti-wand"></i>홈택스 계산서 자동 연결</button></div>` : ''}</span></div>` : ''}
     <div style="font-size:11px;color:var(--t3);line-height:1.6;margin-bottom:9px">
       · 출처 — <b>앱 발행</b> ${nApp}건 · <b>홈택스</b> ${nHt}건 · <b>양쪽</b> ${nBoth}건 (승인번호가 같으면 한 줄로 합치고 금액은 홈택스 기준을 씁니다)
       ${nHt + nBoth === 0 ? '<br>· 홈택스에서 아직 안 가져왔습니다. <b>홈택스에서 불러오기</b>를 누르면 앱 밖에서 발행한 건까지 다 들어옵니다.' : ''}</div>`;
