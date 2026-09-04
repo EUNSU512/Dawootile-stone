@@ -4385,7 +4385,35 @@ function quoteRecalc() {
   if (el('q-dcshow')) el('q-dcshow').textContent = dc > 0 ? ('-' + fmtWon(dc)) : '0';
   if (el('q-total')) el('q-total').textContent = fmtWon(total);
   if (el('q-total-foot')) el('q-total-foot').textContent = fmtWon(total) + '원';
+  // 계약금 — 합계금액의 몇 %
+  const dpe = el('q-dp'), dbox = el('q-dpbox');
+  if (dpe && dbox) {
+    const pct = _numv(dpe.value);
+    if (pct > 0 && pct < 100 && total > 0) {
+      const amt = Math.round(total * pct / 100);
+      dbox.style.display = '';
+      if (el('q-dp-amt')) el('q-dp-amt').textContent = fmtWon(amt) + '원';
+      if (el('q-dp-rest')) el('q-dp-rest').textContent = fmtWon(total - amt) + '원';
+      if (el('q-dp-lab')) el('q-dp-lab').textContent = '계약금 ' + _pctTxt(pct) + '%';
+    } else {
+      dbox.style.display = 'none';
+      if (pct >= 100 && el('q-dp-lab')) el('q-dp-lab').textContent = '계약금';
+    }
+  }
 }
+/* ── 계약금 (선금) ────────────────────────────────────────────
+   합계금액(부가세 포함)의 몇 % 를 계약금으로 잡는다. 견적서에 계약금·잔금을 같이 적어 준다.
+   견적에는 비율(`depositPct`)과 그때 계산한 금액(`depositAmt`)을 같이 저장한다.
+   ※ 금액은 저장값이 아니라 **지금 합계로 다시 계산**해서 보여준다 — 나중에 금액을 고쳐도 어긋나지 않게. */
+function quoteDeposit(q) {
+  const pct = +((q && q.depositPct) || 0);
+  const total = Math.round(+((q && q.total) || 0));
+  if (!(pct > 0) || pct >= 100 || !(total > 0)) return null;
+  const amt = Math.round(total * pct / 100);
+  return { pct: pct, amt: amt, rest: total - amt, total: total };
+}
+function _pctTxt(p) { const n = Math.round((+p || 0) * 10) / 10; return String(n); }
+function quoteSetDeposit(p) { const e2 = el('q-dp'); if (!e2) return; e2.value = p ? String(p) : ''; quoteRecalc(); }
 function quoteTruncate(place) {
   const rem = (_qRawTotal || 0) % place;
   if (el('q-dc')) el('q-dc').value = rem;
@@ -4587,6 +4615,24 @@ function renderQuoteForm() {
             <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 8px;font-size:11.5px" onclick="quoteDcClear()">해제</button>
           </div>
           <div style="display:flex;justify-content:space-between;font-size:17px;border-top:1px solid var(--bd2);padding-top:8px"><span style="font-weight:700">합계금액</span><b id="q-total" style="color:var(--gd)">0</b></div>
+          <div style="border-top:1px dashed var(--bd2);margin-top:9px;padding-top:8px">
+            <div style="display:flex;justify-content:space-between;align-items:center;font-size:13.5px;margin-bottom:6px">
+              <span style="color:var(--t2)">계약금 <span style="font-size:10.5px;color:var(--t3)">(합계금액 기준)</span></span>
+              <span style="display:inline-flex;align-items:center;gap:4px">
+                <input id="q-dp" inputmode="decimal" value="${esc(editing ? ((+v.depositPct || 0) > 0 ? v.depositPct : '') : '')}" oninput="quoteRecalc()" placeholder="0" style="width:64px;text-align:right;font-size:14px;padding:6px 8px;border:1.5px solid var(--bd2);border-radius:8px;color:#1a56b8;font-weight:700">
+                <b style="color:var(--t2)">%</b></span>
+            </div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:flex-end;margin-bottom:7px">
+              <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 9px;font-size:11.5px" onclick="quoteSetDeposit(10)">10%</button>
+              <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 9px;font-size:11.5px" onclick="quoteSetDeposit(30)">30%</button>
+              <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 9px;font-size:11.5px" onclick="quoteSetDeposit(50)">50%</button>
+              <button type="button" class="btn btn-ghost btn-sm" style="padding:3px 9px;font-size:11.5px" onclick="quoteSetDeposit(0)">해제</button>
+            </div>
+            <div id="q-dpbox" style="display:none;background:#fff;border:1.5px solid #cfe0ff;border-radius:10px;padding:8px 11px">
+              <div style="display:flex;justify-content:space-between;align-items:center"><span id="q-dp-lab" style="font-size:12.5px;color:#1a56b8;font-weight:700">계약금</span><b id="q-dp-amt" style="font-size:15px;color:#1a56b8">0원</b></div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;padding-top:4px;border-top:1px dashed var(--bd2)"><span style="font-size:12px;color:var(--t2)">잔금</span><b id="q-dp-rest" style="font-size:13.5px">0원</b></div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="frm-foot" style="position:sticky;bottom:calc(66px + env(safe-area-inset-bottom));z-index:30;margin-top:14px;background:var(--card);border:1.5px solid var(--bd2);border-radius:13px;box-shadow:0 5px 20px rgba(0,0,0,.13);padding:9px 11px;display:flex;align-items:center;gap:7px">
@@ -4632,13 +4678,17 @@ async function submitQuote(id) {
   const category = (el('q-cat') && el('q-cat').value) || '세라믹+세면대';
   const memo = (el('q-memo') && el('q-memo').value || '').trim();
   const supply = items.reduce((a, b) => a + (+b.amt || 0), 0); const vat = Math.round(supply * 0.1); const discount = el('q-dc') ? _numv(el('q-dc').value) : 0; const total = supply + vat - discount;
+  // 계약금 — 합계금액(부가세 포함)의 몇 %. 0 이거나 100 이상이면 없는 것으로 본다
+  let depositPct = el('q-dp') ? _numv(el('q-dp').value) : 0;
+  if (!(depositPct > 0) || depositPct >= 100) depositPct = 0;
+  const depositAmt = depositPct > 0 ? Math.round(total * depositPct / 100) : 0;
   if (_busy) return; _busy = true;
   try {
     await ensureClient(client);
     const q = id ? (state.quotes || []).find(x => x.id === id) : null;
     const docNo = (q && q.docNo) || quoteNextDocNo();
     const useSalesRep = !!(el('q-userep') && el('q-userep').checked);
-    const data = { docNo, client, ctype, category, date, valid, attn, siteAddr, items, supply, vat, discount, total, memo, useSalesRep, by: (el('q-staff') && el('q-staff').value.trim()) || (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
+    const data = { docNo, client, ctype, category, date, valid, attn, siteAddr, items, supply, vat, discount, total, depositPct, depositAmt, memo, useSalesRep, by: (el('q-staff') && el('q-staff').value.trim()) || (me && me.name) || '', createdAt: (q && q.createdAt) || Date.now(), updatedAt: Date.now() };
     // 홀딩에서 가져온 견적이면 그 홀딩 id 를 남긴다 → 출고로 돌릴 때 홀딩이 자동으로 풀린다
     data.fromHoldIds = (_qFromHolds || []).filter(hid => (state.holdings || []).some(h => h.id === hid));
     if (id) await Store.update('quotes', id, data); else await Store.add('quotes', data);
@@ -7552,6 +7602,8 @@ function quoteCardHtml(q) {
   const siteBadge = q.siteDone ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="event.stopPropagation();quoteOpenSite('${q.id}')" title="${_qSite ? '현장 정보 보기' : '연결된 현장을 찾지 못했습니다'}"><i class="ti ti-building-community"></i> 현장 등록 완료${_qSiteNm ? ' · ' + esc(_qSiteNm) : ''}${_qSite ? ' <i class="ti ti-chevron-right" style="font-size:11px;vertical-align:-1px"></i>' : ''}</button>` : '';
   const basinBadge = q.basinDone ? `<span class="pill p-done"><i class="ti ti-bath"></i> 세면대 발주 완료</span>` : '';
   const doneBadge = q.manualDone ? `<span class="pill p-done"><i class="ti ti-checks"></i> 완료</span>` : '';
+  const _dep = quoteDeposit(q);
+  const depBadge = _dep ? `<span class="pill" style="background:#eaf2ff;color:#1a56b8;border:1px solid #cfe0ff" title="잔금 ${fmtWon(_dep.rest)}원"><i class="ti ti-percentage"></i> 계약금 ${_pctTxt(_dep.pct)}% · ${fmtWon(_dep.amt)}</span>` : '';
   return `<div class="card" style="margin-bottom:10px;padding:12px 14px${_bundle && _selQ ? ';border:2px solid var(--gd);background:#f2fbf6' : ''}">
       ${_bundle ? `<label style="display:flex;align-items:center;gap:8px;margin-bottom:9px;cursor:pointer;font-size:12.5px;font-weight:700;color:${_selQ ? 'var(--gd)' : 'var(--t2)'}"><input type="checkbox" ${_selQ ? 'checked' : ''} onchange="toggleQSel('${q.id}')" style="width:17px;height:17px"> 청구 묶음에 포함</label>` : ''}
       <div onclick="openQuoteView('${q.id}')" title="눌러서 견적 내용 보기" style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;cursor:pointer">
@@ -7564,7 +7616,7 @@ function quoteCardHtml(q) {
            <div style="font-size:10.5px;color:var(--t3);margin-top:3px;white-space:nowrap;border-top:1px dashed var(--bd);padding-top:3px">${_rem > 0 ? `이 건 미수 ${fmtWon(_rem)}` : (_pa > 0 ? '<span style="color:var(--gd);font-weight:700">이 건 결제완료</span>' : '이 건 미결제')}</div>`
         : (_pa > 0 ? `<div style="font-size:12px;font-weight:700;color:var(--gd);margin-top:6px"><i class="ti ti-check"></i> 결제완료</div>` : (_rem > 0 ? `<div style="font-size:13.5px;font-weight:800;color:var(--red-t);margin-top:6px">미수 ${fmtWon(_rem)}</div>` : ''))}</div>
       </div>
-      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${shipBadge}${siteBadge}${basinBadge}${doneBadge}${canLedger() && _cRem > 0 ? `<button class="pill p-issue" style="border:none;cursor:pointer" onclick="openLedgerFor(${JSON.stringify(q.client || '').replace(/"/g, '&quot;')})" title="이 거래처 원장 보기"><i class="ti ti-book"></i> 거래처 미수 ${fmtWon(_cRem)}</button>` : ''}</div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${depBadge}${shipBadge}${siteBadge}${basinBadge}${doneBadge}${canLedger() && _cRem > 0 ? `<button class="pill p-issue" style="border:none;cursor:pointer" onclick="openLedgerFor(${JSON.stringify(q.client || '').replace(/"/g, '&quot;')})" title="이 거래처 원장 보기"><i class="ti ti-book"></i> 거래처 미수 ${fmtWon(_cRem)}</button>` : ''}</div>
       <div class="frm-foot" style="margin-top:9px;display:flex;align-items:center;gap:5px;flex-wrap:wrap">
         ${(q.shipped || q.siteDone || q.basinDone) ? '' : (q.manualDone ? (isAdmin() ? `<button class="btn btn-sm" style="color:var(--t3)" onclick="quoteUnmarkDone('${q.id}')" title="완료 취소"><i class="ti ti-arrow-back-up"></i>완료 취소</button>` : '') : (q.ordered ? `<button class="btn btn-sm btn-pri" onclick="quoteRegister('${q.id}')"><i class="ti ${_regIcon}"></i>${_regLabel}</button><button class="btn btn-sm" onclick="quoteLinkSite('${q.id}')" title="이미 등록된 현장에 연결"><i class="ti ti-link"></i>현장 연결</button>${isAdmin() ? `<button class="btn btn-sm" style="color:#0f766e;border-color:#0f766e" onclick="quoteMarkDone('${q.id}')" title="바로 완료 처리 (관리자)"><i class="ti ti-checks"></i>완료 처리</button>` : ''}<button class="btn btn-sm" style="color:var(--t3)" onclick="quoteCancelOrder('${q.id}')" title="확정 주문 취소"><i class="ti ti-arrow-back-up"></i>확정취소</button>` : `<button class="btn btn-sm btn-pri" onclick="quoteConfirmOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>`))}
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}')"><i class="ti ti-edit"></i>수정</button>
@@ -7630,6 +7682,8 @@ function openQuoteView(id) {
       ${sumRow('부가세', fmtWon(q.vat) + '원')}
       ${(+q.discount || 0) ? sumRow('할인', '-' + fmtWon(q.discount) + '원') : ''}
       ${sumRow('합계', fmtWon(_tt) + '원', true)}
+      ${(() => { const d = quoteDeposit(q); return d ? `<div style="display:flex;justify-content:space-between;align-items:center;padding:5px 0;margin-top:4px;border-top:1px dashed var(--bd2)"><span style="font-size:12px;color:#1a56b8;font-weight:700">계약금 ${_pctTxt(d.pct)}%</span><span style="font-size:14px;font-weight:800;color:#1a56b8">${fmtWon(d.amt)}원</span></div>
+      <div style="display:flex;justify-content:space-between;padding:3px 0"><span style="font-size:12px;color:var(--t2);font-weight:500">잔금</span><span style="font-size:13px;font-weight:700">${fmtWon(d.rest)}원</span></div>` : ''; })()}
       ${_pa > 0 ? sumRow('입금', fmtWon(_pa) + '원') : ''}
       ${_rem > 0 ? `<div style="display:flex;justify-content:space-between;padding:3px 0"><span style="font-size:12px;color:var(--t2);font-weight:500">미수</span><span style="font-size:14px;font-weight:800;color:var(--red-t)">${fmtWon(_rem)}원</span></div>` : ''}
       ${_cRem > 0 ? `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0 0;margin-top:5px;border-top:1px dashed var(--bd2)"><span style="font-size:11.5px;color:var(--t3)">이 거래처 총 미수 <span style="color:var(--t2)">(원장 기준)</span></span><span style="display:flex;gap:6px;align-items:center"><span style="font-size:14px;font-weight:800;color:var(--red-t)">${fmtWon(_cRem)}원</span>${canLedger() ? `<button class="btn btn-sm" style="padding:2px 7px;font-size:11px" onclick="openLedgerFor(${JSON.stringify(q.client || '').replace(/"/g, '&quot;')})"><i class="ti ti-book"></i>원장</button>` : ''}</span></div>` : ''}
@@ -9278,6 +9332,7 @@ function quoteDocHtml(q) {
 .sum .k{color:#8a8178;font-weight:500}.sum .v{text-align:right;font-weight:600;color:#201c17}
 .sum .tot td{background:#201c17;color:#fff;font-size:15px;font-weight:700;border:none;padding:13px 14px;letter-spacing:1px}
 .sum .tot td:last-child{color:#e2c48c}
+.sum .dep td{background:#f7f3ea;font-weight:700}.sum .dep .k{color:#1a56b8}.sum .dep .v{color:#1a56b8}
 .notice{margin-top:15px;border:1px solid #cbb089;border-radius:2px;overflow:hidden}
 .notice .nh{background:#8a7350;color:#fff;font-weight:700;font-size:11.5px;padding:8px 13px;letter-spacing:1px}
 .notice ul{margin:0;padding:10px 12px 10px 30px;font-size:11px;line-height:1.75;color:#6b5a3c;font-weight:500;background:#faf6ee}
@@ -9302,6 +9357,8 @@ function quoteDocHtml(q) {
       <tr><td class="k">부가세 (10%)</td><td class="v">${fmtWon(q.vat)} 원</td></tr>
       ${(+q.discount || 0) > 0 ? `<tr><td class="k">할인 (D/C)</td><td class="v" style="color:#c0341d">- ${fmtWon(q.discount)} 원</td></tr>` : ''}
       <tr class="tot"><td>합계금액</td><td style="text-align:right">${fmtWon(q.total)} 원</td></tr>
+      ${(() => { const d = quoteDeposit(q); return d ? `<tr class="dep"><td class="k">계약금 (${_pctTxt(d.pct)}%)</td><td class="v">${fmtWon(d.amt)} 원</td></tr>
+      <tr><td class="k">잔금</td><td class="v">${fmtWon(d.rest)} 원</td></tr>` : ''; })()}
     </table>
   </div>
   ${hasBasinItems(items) ? `<div class="notice"><div class="nh">⚠ 세면대 주문제작 특이사항 (필독)</div><ul>${BASIN_NOTICE.map(l => `<li>${e(l)}</li>`).join('')}</ul></div>` : ''}
@@ -10045,6 +10102,7 @@ function combinedBillDocHtml(qs, picked, extraDc) {
 .sum .k{color:#8a8178;font-weight:500}.sum .v{text-align:right;font-weight:600;color:#201c17}
 .sum .tot td{background:#201c17;color:#fff;font-size:15px;font-weight:700;border:none;padding:13px 14px;letter-spacing:1px}
 .sum .tot td:last-child{color:#e2c48c}
+.sum .dep td{background:#f7f3ea;font-weight:700}.sum .dep .k{color:#1a56b8}.sum .dep .v{color:#1a56b8}
 .notice{margin-top:15px;border:1px solid #cbb089;border-radius:2px;overflow:hidden}
 .notice .nh{background:#8a7350;color:#fff;font-weight:700;font-size:11.5px;padding:8px 13px;letter-spacing:1px}
 .notice ul{margin:0;padding:10px 12px 10px 30px;font-size:11px;line-height:1.75;color:#6b5a3c;font-weight:500;background:#faf6ee}
@@ -10198,7 +10256,9 @@ function _quoteSheetXml(q) {
   span(rr, 0, 4, 10, '공급가액', 's'); put(rr, 5, 11, Math.round(+q.supply || 0), 'n'); rr++;
   span(rr, 0, 4, 10, '부가세 (10%)', 's'); put(rr, 5, 11, Math.round(+q.vat || 0), 'n'); rr++;
   if ((+q.discount || 0) > 0) { span(rr, 0, 4, 10, '할인 (D/C)', 's'); put(rr, 5, 11, -Math.round(+q.discount || 0), 'n'); rr++; }
-  span(rr, 0, 4, 12, '합계금액', 's'); put(rr, 5, 13, Math.round(+q.total || 0), 'n'); rowH[rr] = 26; rr += 2;
+  span(rr, 0, 4, 12, '합계금액', 's'); put(rr, 5, 13, Math.round(+q.total || 0), 'n'); rowH[rr] = 26; rr++;
+  { const d = quoteDeposit(q); if (d) { span(rr, 0, 4, 10, '계약금 (' + _pctTxt(d.pct) + '%)', 's'); put(rr, 5, 11, d.amt, 'n'); rr++; span(rr, 0, 4, 10, '잔금', 's'); put(rr, 5, 11, d.rest, 'n'); rr++; } }
+  rr++;
   if (q.memo) { span(rr, 0, 5, 14, '비고 : ' + q.memo, 's'); rowH[rr] = 44; rr++; }
   if (hasBasinItems(items)) { span(rr, 0, 5, 15, '⚠ 세면대 주문제작 특이사항 (필독)', 's'); rowH[rr] = 22; rr++; (typeof BASIN_NOTICE !== 'undefined' ? BASIN_NOTICE : []).forEach(l => { span(rr, 0, 5, 16, '· ' + l, 's'); rr++; }); }
   const maxRow = rr;
