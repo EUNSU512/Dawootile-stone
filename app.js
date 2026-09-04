@@ -9118,17 +9118,83 @@ function renderQuote() {
     ${toggle}
     ${bundleBar}
     <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i>
-      <input id="q-search" placeholder="거래처·견적번호·자재 검색" value="${esc(filters.quoteSearch || '')}" oninput="filters.quoteSearch=this.value;quotesFilter()" autocomplete="off" lang="ko">
+      <input id="q-search" placeholder="거래처·견적번호·자재·금액 검색 (예: 220만, 1000만~3000만, 500만이상)" value="${esc(filters.quoteSearch || '')}" oninput="filters.quoteSearch=this.value;quotesFilter()" autocomplete="off" lang="ko">
       ${(filters.quoteSearch || '').trim() ? `<button class="search-x" onclick="filters.quoteSearch='';el('q-search').value='';quotesFilter()"><i class="ti ti-x"></i></button>` : ''}
     </div>
     <div id="q-listwrap">${_listHtml}</div>`;
+}
+/* ══════════════════════════════════════════════════════════
+   견적 검색 — 금액으로도 찾기
+   ─────────────────────────────────────────────────────────
+   검색칸에 숫자를 치면 합계금액·공급가액에서도 찾는다. 글자 검색은 그대로 두고 **더해서** 찾는다
+   (그래야 견적번호 «Q20260803-11» 처럼 숫자가 든 것도 계속 잘 잡힌다).
+   쓸 수 있는 모양:
+     2200000 · 2,200,000 · 220만 · 1.5억 · 1억2000만   → 그 숫자가 든 금액
+     1000만~3000만 · 1000000~3000000                  → 범위 (물결표 ~ 만 씀. 빼기표는 견적번호와 헷갈려서 안 씀)
+     1000만이상 · >=1000만 · 500만이하 · <500만        → 크거나 작은 것
+   ══════════════════════════════════════════════════════════ */
+function _amtOf(tok) {
+  const t = String(tok == null ? '' : tok).replace(/[\s,원]/g, '');
+  if (!t || !/^[0-9.억만천]+$/.test(t)) return null;
+  let sum = 0, unit = false, plain = null, g;
+  const re = /([0-9]*\.?[0-9]+)(억|만|천)?/g;
+  while ((g = re.exec(t)) !== null) {
+    const n = parseFloat(g[1]); if (!isFinite(n)) continue;
+    if (g[2] === '억') { sum += n * 1e8; unit = true; }
+    else if (g[2] === '만') { sum += n * 1e4; unit = true; }
+    else if (g[2] === '천') { sum += n * 1e3; unit = true; }
+    else plain = n;
+  }
+  if (unit) return Math.round(sum + (plain != null ? plain : 0));
+  return plain != null ? Math.round(plain) : null;
+}
+function quoteAmtPred(qy) {
+  const s = String(qy == null ? '' : qy).replace(/\s/g, '');
+  if (!s) return null;
+  const NUM = '[0-9.,억만천원]+';
+  /* 범위·이상·이하는 **합계금액만** 본다 (공급가까지 보면 «3000만 이하» 에 3300만짜리가 걸려서 헷갈린다).
+     딱 떨어지는 금액·숫자 포함 찾기는 공급가액도 같이 본다 (공급가로 기억하는 경우가 있어서). */
+  const tot = q => [Math.round(+q.total || 0)];
+  const vals = q => [Math.round(+q.total || 0), Math.round(+q.supply || 0)];
+  let m;
+  // 범위 — 1000만~3000만
+  m = s.match(new RegExp('^(' + NUM + ')[~～](' + NUM + ')$'));
+  if (m) {
+    const a = _amtOf(m[1]), b = _amtOf(m[2]);
+    if (a != null && b != null) { const lo = Math.min(a, b), hi = Math.max(a, b);
+      return { label: fmtWon(lo) + ' ~ ' + fmtWon(hi) + '원', test: q => tot(q).some(v => v >= lo && v <= hi) }; }
+  }
+  // 이상 / 초과 / 이하 / 미만
+  const cmp = [
+    [new RegExp('^(?:>=|=>|≥)(' + NUM + ')$'), 'gte'], [new RegExp('^(' + NUM + ')이상$'), 'gte'],
+    [new RegExp('^>(' + NUM + ')$'), 'gt'], [new RegExp('^(' + NUM + ')초과$'), 'gt'],
+    [new RegExp('^(?:<=|=<|≤)(' + NUM + ')$'), 'lte'], [new RegExp('^(' + NUM + ')이하$'), 'lte'],
+    [new RegExp('^<(' + NUM + ')$'), 'lt'], [new RegExp('^(' + NUM + ')미만$'), 'lt']
+  ];
+  for (const [re, op] of cmp) {
+    const mm = s.match(re); if (!mm) continue;
+    const n = _amtOf(mm[1]); if (n == null) continue;
+    const f = { gte: v => v >= n, gt: v => v > n, lte: v => v <= n, lt: v => v < n }[op];
+    const lab = { gte: ' 이상', gt: ' 초과', lte: ' 이하', lt: ' 미만' }[op];
+    return { label: fmtWon(n) + '원' + lab, test: q => tot(q).some(f) };
+  }
+  // 그냥 숫자 — 금액 안에 그 숫자가 들어 있으면 (2 자리 이상일 때만)
+  const n = _amtOf(s);
+  if (n == null || n < 10) return null;
+  const key = String(n);
+  const exact = /[억만천]/.test(s);            // 220만 처럼 단위를 붙였으면 '딱 그 금액' 으로 본다
+  return {
+    label: exact ? (fmtWon(n) + '원') : (fmtWon(n) + ' 들어간 금액'),
+    test: q => vals(q).some(v => exact ? v === n : String(v).includes(key))
+  };
 }
 function _quoteListInner() {
   const qy = (filters.quoteSearch || '').trim().toLowerCase();
   const all = (state.quotes || []);
   const ym = todayStr().slice(0, 7);
   let list = all.slice().sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
-  if (qy) list = list.filter(q => (q.client || '').toLowerCase().includes(qy) || (q.docNo || '').toLowerCase().includes(qy) || (q.items || []).some(it => (it.name || '').toLowerCase().includes(qy)));
+  const _amtP = qy ? quoteAmtPred(filters.quoteSearch) : null;      // 금액 검색 (글자 검색과 '또는' 으로 합친다)
+  if (qy) list = list.filter(q => (q.client || '').toLowerCase().includes(qy) || (q.docNo || '').toLowerCase().includes(qy) || (q.items || []).some(it => (it.name || '').toLowerCase().includes(qy)) || (_amtP ? _amtP.test(q) : false));
   // ── 상태 필터: 2단 (확정/미확정) × (계산서·결제·세면대) 를 겹쳐서 본다 ──
   const fConf = filters.qConf || 'all';    // all | conf | pending
   const fStat = filters.qStat || 'all';    // all | notax | tax | paid | unpaid | basin
@@ -9163,6 +9229,16 @@ function _quoteListInner() {
   baseForStat.forEach(q => { cCat[_catOf(q)]++; });
   if (fCat !== 'all') list = list.filter(q => _catOf(q) === fCat);
   _qShownIds = list.map(q => q.id);   // 지금 화면(검색·필터 반영)에 뜬 견적 — 묶음청구 [전체 선택] 이 이걸 쓴다
+  // 검색 결과 요약 — 몇 건인지, 합계가 얼마인지 바로 보이게
+  const searchBar = qy ? (() => {
+    const n = list.length, sum = list.reduce((a, q) => a + (+q.total || 0), 0);
+    const rem = list.reduce((a, q) => a + Math.max(0, (+q.total || 0) - (+q.paidAmount || 0)), 0);
+    return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#eef4ff;border:1px solid #cfe0ff;border-radius:11px;padding:9px 12px;margin-bottom:10px">
+      <span style="color:#2f6fed;font-weight:800;font-size:12.5px"><i class="ti ti-search"></i> 검색 «${esc(filters.quoteSearch || '')}» · ${n}건</span>
+      ${_amtP ? `<span class="pill" style="background:#dbeafe;color:#1a56b8;border:1px solid #bfd8ff;font-size:10.5px"><i class="ti ti-currency-won"></i> 금액 ${esc(_amtP.label)}</span>` : ''}
+      <span style="margin-left:auto;text-align:right"><b style="font-size:15px;color:var(--gd)">${fmtWon(sum)}</b><span style="font-size:11.5px;color:var(--t2)">원</span>${rem > 0 ? `<span style="font-size:11.5px;color:var(--red-t);font-weight:700;margin-left:8px">미수 ${fmtWon(rem)}원</span>` : ''}</span>
+    </div>` ;
+  })() : '';
   const chipK = (v, label, cnt) => `<button class="chip ${fCat === v ? 'active' : ''}" onclick="quoteSetCat('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? 'var(--gd)' : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
   const chipC = (v, label, cnt, col) => `<button class="chip ${fConf === v ? 'active' : ''}" onclick="quoteSetConf('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? (col || 'var(--t2)') : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
   const chipS = (v, label, cnt, col) => `<button class="chip ${fStat === v ? 'active' : ''}" onclick="quoteSetStat('${v}')">${label}${cnt != null ? ` <b style="color:${cnt > 0 ? (col || 'var(--red-t)') : 'var(--t3)'}">${cnt}</b>` : ''}</button>`;
@@ -9269,7 +9345,7 @@ function _quoteListInner() {
   } else {
     body = list.length ? list.map(quoteCardHtml).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${qy ? '검색 결과가 없습니다' : '작성한 견적이 없습니다. 견적 작성으로 시작하세요.'}</div>`;
   }
-  return `${statChips}${catBar}${unpaidBar}${navBar}<div id="q-list" data-keepscroll style="max-height:calc(100vh - 300px);min-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${body}</div>`;
+  return `${statChips}${searchBar}${catBar}${unpaidBar}${navBar}<div id="q-list" data-keepscroll style="max-height:calc(100vh - 300px);min-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${body}</div>`;
 }
 function quotesFilter() {
   const w = el('q-listwrap'); if (!w) { renderQuote(); return; }
