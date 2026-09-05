@@ -71,6 +71,13 @@ function quoteCatSplit(q) {
   if (!its.length) { add(QCATS.indexOf(c0) >= 0 ? c0 : '세라믹', sup0, tot0); return out; }
   let sumAll = 0; its.forEach(it => sumAll += Math.round(+it.amt || 0));
   its.forEach(it => { const amt = Math.round(+it.amt || 0); add(itemCategory(it.name), amt, sumAll ? Math.round(tot0 * (amt / sumAll)) : 0); });
+  /* 나눠 담다 생긴 1~2원 오차는 금액이 가장 큰 분류에 얹어서 «분류별 합 = 견적 합계» 를 맞춘다 */
+  const ks = Object.keys(out);
+  if (ks.length) {
+    let got = 0; ks.forEach(c => got += out[c].tot);
+    const diff = tot0 - got;
+    if (diff) { let big = ks[0]; ks.forEach(c => { if (out[c].tot > out[big].tot) big = c; }); out[big].tot += diff; }
+  }
   return out;
 }
 /* 이 견적에 들어 있는 분류들 (섞여 있으면 여러 개) */
