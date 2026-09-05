@@ -11180,21 +11180,39 @@ function basinCnUpload() {
   };
   inp.click();
 }
-/* 엑셀 줄 ↔ 앱 세면대 품목 맞추기 */
+/* 상호 견주기용 이름 — 괄호 안(OHNEW·I&K …)·주식회사·(주)·띄어쓰기·기호를 떼고 비교한다
+   → «오뉴(OHNEW)디자인» = «오뉴디자인», «(주)이화동서타일» = «이화동서타일» */
+function _cnVendorKey(s) {
+  return String(s == null ? '' : s)
+    .replace(/[（(][^）)]*[）)]/g, '')
+    .replace(/주식회사|유한회사|㈜|\(주\)/g, '')
+    .replace(/[\s.,·\-_'"]/g, '')
+    .toLowerCase();
+}
+/* 엑셀 줄 ↔ 앱 세면대 품목 맞추기
+   ★ 저절로 체크되는 조건은 일부러 빡빡하게 잡았다:
+     규격이 **정확히** 같고 + 상호가 같거나 한쪽이 다른 쪽에 들어있고 + 재고용 발주가 아닐 때만.
+     (규격만 같고 상호가 다르면 엉뚱한 발주에 붙는다 — 실제로 «제이디디자인그룹 → 에이아이디자인»,
+      «다우세라믹앤석재(재고) → 루비타일» 로 잘못 붙는 걸 확인했다) */
 function basinCnMakePlan() {
   const flat = [];
   (state.basins || []).forEach(b => basinItems(b).forEach((it, i) => flat.push({ bid: b.id, i: i, b: b, it: it })));
   const used = new Set();
-  const doneIdx = BASIN_STAGES.indexOf('출항');
   _cnPlan = _cnRows.filter(r => !r.cancelled && r.spec && r.stone).map(r => {
+    const rk = _cnVendorKey(r.client);
+    const vs = f => {                                  // 상호 점수 0 / 2 / 3
+      const a = _cnVendorKey(f.b.vendor || '');
+      if (!a || !rk) return 0;
+      if (a === rk) return 3;
+      if (a.indexOf(rk) >= 0 || rk.indexOf(a) >= 0) return 2;
+      return 0;
+    };
     const cands = flat.filter(f => !used.has(f.bid + '#' + f.i)
       && _normName(f.it.stone || '') === _normName(r.stone)
       && (_cnSpecSame(f.it.spec, r.spec, 0) || _cnSpecSame(f.it.spec, r.spec, 5)));
     const score = f => {
-      let s = 0;
-      s += _cnSpecSame(f.it.spec, r.spec, 0) ? 4 : 2;
-      if (_normName(f.b.vendor || '') === _normName(r.client)) s += 3;
-      else if (_normName(f.b.vendor || '').indexOf(_normName(r.client)) >= 0 || _normName(r.client).indexOf(_normName(f.b.vendor || '')) >= 0) s += 2;
+      let s = _cnSpecSame(f.it.spec, r.spec, 0) ? 4 : 2;
+      s += vs(f);
       if ((parseInt(f.it.qty, 10) || 1) === r.qty) s += 1;
       const d = f.b.orderDate || '';
       if (d && r.date && Math.abs((new Date(d + 'T00:00') - new Date(r.date + 'T00:00')) / 86400000) <= 30) s += 1;
@@ -11203,9 +11221,9 @@ function basinCnMakePlan() {
     cands.sort((a, b) => score(b) - score(a));
     const best = cands[0] || null;
     const sc = best ? score(best) : 0;
-    const sure = !!best && (sc >= 7 || (sc >= 5 && cands.length === 1));
+    const sure = !!best && !r.stock && vs(best) > 0 && _cnSpecSame(best.it.spec, r.spec, 0);
     if (best && sure) used.add(best.bid + '#' + best.i);
-    return { r: r, best: best, cands: cands.length, score: sc, sure: sure, on: sure || !best, isNew: !best };
+    return { r: r, best: best, cands: cands.length, score: sc, sure: sure, on: sure || (!best && !r.stock), isNew: !best };
   });
 }
 function basinCnChanges(p) {                 // 이 줄이 바꿀 내용 (글자로)
@@ -11238,6 +11256,7 @@ function basinCnPreview() {
       <div style="flex:1;min-width:0">
         <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">${badge}
           <b style="font-size:12.5px">${esc(r.client || '(거래처 없음)')}</b>
+          ${r.stock ? `<span class="pill p-gray" style="font-size:9.5px">재고용 발주</span>` : ''}
           <span style="font-size:11.5px;color:var(--t2)">${esc(r.stone)} · ${esc(r.spec)}${r.bowl ? ' · ' + esc(r.bowl) : ''} ×${r.qty}</span>
           <span style="font-size:10.5px;color:var(--t3)">엑셀 ${r.row}줄 · ${esc(r.date)}${r.orderNo ? ' · ' + esc(r.orderNo) : ''}</span></div>
         <div style="font-size:11px;color:var(--t3);margin-top:2px">→ ${to}</div>
