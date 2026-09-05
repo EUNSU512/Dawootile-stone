@@ -2484,8 +2484,8 @@ function siteTableHtml(list) {
     return `<tr style="cursor:pointer${done ? ';opacity:.62' : ''}" onclick="openSiteDetail('${s.id}')">
       <td style="white-space:nowrap"><b>${esc(_shortDate(s.constructDate) || '미정')}</b></td>
       <td style="white-space:nowrap">${pill(s.stage || '접수')}</td>
-      <td><b>${iss ? `<span title="미해결 이슈 ${iss}건" style="color:var(--red-t)">●</span> ` : ''}${esc(s.name || '-')}</b>${s.region ? `<span style="color:var(--t3);font-size:11px"> · ${esc(s.region)}</span>` : ''}</td>
-      <td style="white-space:nowrap">${esc(s.client || '-')}</td>
+      <td style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.name || '')}"><b>${iss ? `<span title="미해결 이슈 ${iss}건" style="color:var(--red-t)">●</span> ` : ''}${esc(s.name || '-')}</b>${s.region ? `<span style="color:var(--t3);font-size:11px"> · ${esc(s.region)}</span>` : ''}</td>
+      <td style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(s.client || '')}">${esc(s.client || '-')}</td>
       <td style="white-space:nowrap">${esc(s.manager || '-')}</td>
       <td style="white-space:nowrap">${esc(s.team || '-')}</td>
       <td style="white-space:nowrap">${esc(s.factory || '-')}</td>
@@ -10942,7 +10942,7 @@ function basinTableHtml(list) {
     return `<tr style="cursor:pointer${done ? ';opacity:.62' : ''}" onclick="openBasinForm('${b.id}')">
       <td style="white-space:nowrap">${sameAsPrev ? '' : `<b>${esc(_shortDate(b.orderDate) || '-')}</b>`}</td>
       <td style="white-space:nowrap">${sameAsPrev ? '' : basinPill(b.stage || '견적')}</td>
-      <td style="white-space:nowrap">${sameAsPrev ? `<span style="color:var(--t3)">〃</span>` : `<b>${esc(b.vendor || '(업체미정)')}</b>${r.n > 1 ? `<span style="color:var(--t3);font-size:10.5px"> ·${r.n}품목</span>` : ''}`}</td>
+      <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(b.vendor || '')}">${sameAsPrev ? `<span style="color:var(--t3)">〃</span>` : `<b>${esc(b.vendor || '(업체미정)')}</b>${r.n > 1 ? `<span style="color:var(--t3);font-size:10.5px"> ·${r.n}품목</span>` : ''}`}</td>
       <td style="white-space:nowrap">${esc(it.stone || '-')}</td>
       <td style="white-space:nowrap">${esc(it.spec || '-')}</td>
       <td style="text-align:right;white-space:nowrap">${it.qty ? esc(it.qty) + '개' : '-'}</td>
