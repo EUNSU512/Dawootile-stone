@@ -32,18 +32,56 @@ function cref(name) { return db.collection('teams').doc(TEAM).collection(name); 
 const COLLS = ['members', 'sites', 'inventory', 'holdings', 'transactions', 'specs', 'factories', 'teams', 'suppliers', 'clients', 'issues', 'restocks', 'basins', 'holdRequests', 'shipments', 'chulgoReqs', 'chulgoHandlers', 'quotes', 'clientPrices', 'priceList', 'appmeta', 'expenses', 'banktx', 'purchases', 'cutPlans'];
 const CTYPES = ['유통', '대리점', '인테리어', '소비자', '별도'];   // 거래처 유형 (별도 = 예외 업체 단가)
 function ctypeKey(t) { return t === '유통' ? 'dist' : (t === '대리점' ? 'agency' : (t === '인테리어' ? 'interior' : (t === '별도' ? 'special' : 'consumer'))); }
-const QCATS = ['세라믹+세면대', '석재', '통관비용'];
+/* ── 분류 (세라믹 / 세면대 / 석재 / 통관비용) ──
+   예전에는 '세라믹+세면대' 한 칸이었는데 둘을 갈라 달라는 요청으로 나눴다.
+   예전에 저장된 견적·단가표에는 아직 '세라믹+세면대' 가 남아 있으므로
+   읽을 때마다 qcatNorm() 을 거쳐 '세라믹' 으로 바꿔서 본다 (데이터는 그대로 둔다). */
+const QCATS = ['세라믹', '세면대', '석재', '통관비용'];
+const QCAT_LEGACY = { '세라믹+세면대': '세라믹' };
+const QCAT_ICON = { '세라믹': 'grid-dots', '세면대': 'bath', '석재': 'diamond', '통관비용': 'ship' };
+const QCAT_COL = { '세라믹': 'var(--gd)', '세면대': '#0e7490', '석재': '#7c3aed', '통관비용': '#b45309' };
+function qcatNorm(c) { const s = String(c == null ? '' : c).trim(); return QCAT_LEGACY[s] || s; }
 const CUSTOMS_LINES = ['관세', '부가가치세', '지원가산세', '통관수수료', 'D/O CHG (선사비용)', '적출료', 'SHUTTLE CHG', '경과보관료', '제주선임', '운송료', '취급수수료', '기타경비'];
 function itemCategory(name) {
   const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(name));
-  if (pl && pl.cat) return pl.cat;
+  if (pl && pl.cat) { const c = qcatNorm(pl.cat); if (QCATS.indexOf(c) >= 0) return c; }
   const t = (name || '').replace(/\s/g, '');
   if (/통관|관세|clearance/i.test(t)) return '통관비용';
+  /* 세면대 판별 — 세면대 본체는 물론 부속(브라켓·폽업+트랩)도 세면대로 본다.
+     실측: 견적에 쓰인 품목 183개 중 세면대로 잡히는 건 9개, 오판 0개.
+     '인덕션 타공·싱크볼 타공' 같은 세라믹 가공은 여기에 안 걸린다. */
+  if (/세면대|세면볼|폽업|팝업/.test(t)) return '세면대';
   /* 석재 판별 — 돌 이름(포천석·사비석·해남고홍석…)과 석재 가공 용어(잔다듬·버너·혼드…)까지 본다.
      세라믹 슬라브 이름(타지마할·로마팬텀 등)에는 이런 말이 안 들어가서 섞이지 않는다.
      실측: 견적에 쓰인 품목 154개 중 9개가 새로 석재로 잡히고 오판은 0개. */
   if (/석재|대리석|화강|천연석|현무암|점판암|사비석|고흥석|고홍석|포천석|디딤석|잔석|잔다듬|버너|혼드|물갈기|정다듬|도드락/i.test(t)) return '석재';
-  return '세라믹+세면대';
+  return '세라믹';
+}
+/* ── 견적 한 건을 분류별 금액으로 쪼갠다 ──
+   → { '세라믹': {sup, tot}, '세면대': {sup, tot}, … }  (그 견적에 있는 분류만 들어간다)
+   공급가(sup)는 품목 금액을 그대로 더하고, 합계(tot, 부가세·할인 반영)는 품목 금액 비율대로 나눈다.
+   품목이 하나도 없으면 견적서에 고른 분류칸으로 통째로 넣는다. */
+function quoteCatSplit(q) {
+  const out = {};
+  const add = (c, sup, tot) => { const o = out[c] || (out[c] = { sup: 0, tot: 0 }); o.sup += sup; o.tot += tot; };
+  const c0 = qcatNorm(q && q.category);
+  const its = ((q && q.items) || []).filter(it => (it.name || '').trim());
+  const sup0 = Math.round(+((q && q.supply) || 0)), tot0 = Math.round(+((q && q.total) || 0));
+  if (c0 === '통관비용') { add('통관비용', sup0, tot0); return out; }   // 통관 견적은 통째로 통관비용
+  if (!its.length) { add(QCATS.indexOf(c0) >= 0 ? c0 : '세라믹', sup0, tot0); return out; }
+  let sumAll = 0; its.forEach(it => sumAll += Math.round(+it.amt || 0));
+  its.forEach(it => { const amt = Math.round(+it.amt || 0); add(itemCategory(it.name), amt, sumAll ? Math.round(tot0 * (amt / sumAll)) : 0); });
+  return out;
+}
+/* 이 견적에 들어 있는 분류들 (섞여 있으면 여러 개) */
+function quoteCatSet(q) { return Object.keys(quoteCatSplit(q)); }
+/* 견적서 폼에 처음 띄울 분류 — 옛 '세라믹+세면대' 로 저장된 건은 품목을 보고 정한다 */
+function quoteFormCat(v) {
+  const c = qcatNorm(v && v.category);
+  if (c === '통관비용' || c === '석재' || c === '세면대') return c;
+  const set = quoteCatSet(v);
+  if (set.indexOf('세면대') >= 0 && set.indexOf('세라믹') < 0) return '세면대';
+  return QCATS.indexOf(c) >= 0 ? c : '세라믹';
 }
 async function saveItemCat(name, cat) { const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(name)); if (pl) await Store.update('priceList', pl.id, { cat: cat }); else await Store.add('priceList', { itemName: name, cat: cat, dist: 0, agency: 0, interior: 0, consumer: 0 }); }
 
@@ -4833,7 +4871,7 @@ function renderQuoteForm() {
   const matItems = (v.items || []).filter(it => !extraSet.has(it.name));
   const rows = (matItems.length ? matItems : [{}]).map(qRowHtml).join('');
   const editing0 = q && !copy;
-  const _formCat = filters.quoteCat || (editing0 && v.category) || '세라믹+세면대';
+  const _formCat = filters.quoteCat || (editing0 ? quoteFormCat(v) : '') || '세라믹';
   if (_formCat === '통관비용') { renderCustomsForm(q, copy); return; }
   const matOpts = quotePriceItems().map(i => `<option value="${esc(i.name)}">`).join('');   // 재고 + 단가표 통합
   const editing = q && !copy;
@@ -4957,7 +4995,7 @@ async function submitQuote(id) {
   const valid = (el('q-valid') && el('q-valid').value || '').trim();
   const attn = (el('q-attn') && el('q-attn').value || '').trim();
   const siteAddr = (el('q-site') && el('q-site').value || '').trim();
-  const category = (el('q-cat') && el('q-cat').value) || '세라믹+세면대';
+  const category = (el('q-cat') && el('q-cat').value) || '세라믹';
   const memo = (el('q-memo') && el('q-memo').value || '').trim();
   const supply = items.reduce((a, b) => a + (+b.amt || 0), 0); const vat = Math.round(supply * 0.1); const discount = el('q-dc') ? _numv(el('q-dc').value) : 0; const total = supply + vat - discount;
   // 계약금 — 합계금액(부가세 포함)의 몇 %. 0 이거나 100 이상이면 없는 것으로 본다
@@ -6016,15 +6054,29 @@ function ledgerRange() {
 /* ── 거래처 한 곳의 원장 줄 만들기 ──
    매출(확정 견적) → 잔액 +   /   결제 → 잔액 −   /   세금계산서 → 표시만(잔액 무관)
    결제는 ① 은행 입금 중 그 견적에 연결된 것 ② 나머지 수기 입력분 — 둘을 합치면 정확히 견적의 입금액이 된다 */
-function ledgerRows(client) {
+function ledgerRows(client, cat) {
+  /* cat 을 주면 그 분류 몫만 뽑는다 (세라믹만·세면대만 보기).
+     ★ 입금은 «어느 분류의 대금인지» 은행 기록에 안 적혀 있어서 나눌 수가 없다.
+       그래서 분류를 고르면 매출·계산서 줄만 보여주고 입금·잔액은 빼둔다. */
+  const CAT = (cat && cat !== 'all') ? cat : '';
   const qs = (state.quotes || []).filter(q => !!q.ordered && (q.client || '').trim() === client);
   if (!qs.length && !(state.banktx || []).some(t => txClientOf(t) === client)) return [];
   const qid = {}; qs.forEach(q => qid[q.id] = q);
   const rows = [];
   qs.forEach(q => {
-    rows.push({ d: q.date || '', k: 'sale', amt: +q.total || 0, docNo: q.docNo || '', site: (q.siteName || q.siteAddr || q.attn || '').trim(), id: q.id });
-    if (q.taxInvoice) rows.push({ d: q.taxDate || q.date || '', k: 'tax', amt: (+q.taxTotal || +q.total || 0), docNo: q.docNo || '', id: q.id, nts: q.ntsConfirmNum || '', mgt: q.taxMgtKey || '' });
+    const tot = Math.round(+q.total || 0);
+    let amt = tot, taxA = (+q.taxTotal || tot || 0), mixed = false;
+    if (CAT) {
+      const sp = quoteCatSplit(q), mine = sp[CAT];
+      if (!mine) return;                                   // 이 분류가 없는 견적은 건너뛴다
+      mixed = Object.keys(sp).length > 1;
+      amt = mine.tot;
+      taxA = tot ? Math.round(taxA * (mine.tot / tot)) : taxA;
+    }
+    rows.push({ d: q.date || '', k: 'sale', amt: amt, full: tot, part: mixed, docNo: q.docNo || '', site: (q.siteName || q.siteAddr || q.attn || '').trim(), id: q.id });
+    if (q.taxInvoice) rows.push({ d: q.taxDate || q.date || '', k: 'tax', amt: taxA, part: mixed, docNo: q.docNo || '', id: q.id, nts: q.ntsConfirmNum || '', mgt: q.taxMgtKey || '' });
   });
+  if (CAT) { rows.sort((a, b) => (a.d || '').localeCompare(b.d || '') || ((a.k === 'sale' ? 0 : 1) - (b.k === 'sale' ? 0 : 1)) || (a.docNo || '').localeCompare(b.docNo || '')); return rows; }
   const allocQ = {};   // 견적별 은행 연결 금액
   (state.banktx || []).forEach(t => {
     if (!Array.isArray(t.alloc) || !t.alloc.length) return;
@@ -6082,15 +6134,16 @@ function clientRemOf(c) { return clientRemMap()[(c || '').trim()] || 0; }
 function openLedgerFor(c) {
   if (!canLedger()) { toast('거래처 원장 권한이 없습니다 — 관리자에게 문의하세요'); return; }
   closeModal(); qListSave();
-  filters.ledger = true; filters.ledgerClient = (c || '').trim(); filters.ledgerRange = 'all'; filters.ledgerFix = false;
+  filters.ledger = true; filters.ledgerClient = (c || '').trim(); filters.ledgerRange = 'all'; filters.ledgerFix = false; filters.ledgerCat = 'all';
   go('quote');
 }
 function openLedger() { if (!canLedger()) { toast('거래처 원장 권한이 없습니다 — 관리자에게 문의하세요'); return; } qListSave(); filters.ledger = true; filters.ledgerClient = ''; go('quote'); }
 function ledgerClose() { filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; renderQuote(); qListRestore(); }
 function ledgerSetRange(v) { filters.ledgerRange = v; renderLedger(); }
 function ledgerSetSort(v) { filters.ledgerSort = v; renderLedger(); }
-function ledgerOpen(c) { filters.ledgerClient = c; renderLedger(); }
-function ledgerBack() { filters.ledgerClient = ''; filters.ledgerFix = false; renderLedger(); }
+function ledgerSetCat(v) { filters.ledgerCat = v; renderLedger(); }
+function ledgerOpen(c) { filters.ledgerClient = c; filters.ledgerCat = 'all'; renderLedger(); }
+function ledgerBack() { filters.ledgerClient = ''; filters.ledgerFix = false; filters.ledgerCat = 'all'; renderLedger(); }
 function ledgerFix() { filters.ledgerFix = true; filters.ledgerClient = ''; renderLedger(); }
 function renderLedger() {
   const root = el('pg-quote'); if (!root) return;
@@ -6102,6 +6155,19 @@ function renderLedger() {
   const totUn = A.rows.reduce((s, r) => s + r.unAlloc, 0);
   const sc = (v, l) => `<button class="chip ${(filters.ledgerSort || 'rem') === v ? 'active' : ''}" onclick="ledgerSetSort('${v}')">${l}</button>`;
   const pmN = payMatchCount();
+  /* 확정 매출을 분류(세라믹·세면대·석재·통관비용)로 쪼갠 총합 — 한 견적에 섞여 있으면 품목 금액 비율대로 */
+  const lgCat = {}; QCATS.forEach(c => lgCat[c] = { sum: 0, n: 0 });
+  (state.quotes || []).forEach(q => { if (!q.ordered) return; const sp = quoteCatSplit(q); Object.keys(sp).forEach(c => { if (lgCat[c]) { lgCat[c].sum += sp[c].tot; lgCat[c].n++; } }); });
+  const lgCatBar = `<div class="card" style="margin-bottom:10px;padding:11px 13px">
+    <div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:8px"><i class="ti ti-chart-pie"></i> 분류별 확정 매출 <span style="font-weight:500">· 품목 기준 (한 견적에 섞여 있으면 나눠서 셉니다)</span></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px">
+      ${QCATS.map(c => `<div style="padding:9px 8px;background:var(--soft);border-radius:10px;text-align:center">
+        <div style="font-size:11px;color:var(--t2);margin-bottom:3px"><i class="ti ti-${QCAT_ICON[c] || 'tag'}"></i> ${esc(c)}</div>
+        <div style="font-size:16px;font-weight:800;color:${QCAT_COL[c]}">${fmtWon(lgCat[c].sum)}</div>
+        <div style="font-size:10.5px;color:var(--t3);margin-top:2px">${lgCat[c].n}건</div>
+      </div>`).join('')}
+    </div>
+  </div>`;
   root.innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-book"></i>거래처 원장</h2><p>매출 · 결제 · 미수를 자동으로 계산합니다</p></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
@@ -6114,6 +6180,7 @@ function renderLedger() {
       <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:18px;color:var(--red-t)">${fmtWon(totRem)}</div><div class="l">미수금</div><div class="s">거래처 ${A.rows.filter(r => r.rem > 0).length}곳</div></div>
       <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v" style="font-size:18px">${fmtWon(totNoTax)}</div><div class="l">계산서 미발행</div><div class="s">${A.rows.reduce((s, r) => s + r.noTaxN, 0)}건</div></div>
     </div>
+    ${lgCatBar}
     ${pmN ? `<button class="card" style="width:100%;text-align:left;display:block;padding:10px 13px;margin-bottom:9px;border:1.5px solid var(--gd);background:var(--gl2,#f4fbf8);cursor:pointer" onclick="openPayMatch()">
       <span style="font-size:12.5px"><i class="ti ti-link" style="color:var(--gd)"></i> 금액이 맞는 <b>입금 ${pmN}건</b>이 아직 결제로 안 잡혔습니다 — 반영하면 미수가 그만큼 줄어듭니다 <i class="ti ti-chevron-right"></i></span></button>` : ''}
     ${A.unassigned ? `<div class="banner warn" style="margin-bottom:9px;font-size:12.5px"><i class="ti ti-alert-triangle"></i><span style="flex:1;min-width:0">거래처를 못 찾은 입금 <b>${A.unassigned}건 · ${fmtWon(A.unassignedSum)}원</b>
@@ -6154,17 +6221,36 @@ function _ledgerListInner(A) {
 /* ── 거래처 한 곳의 원장 (잔액이 굴러간다) ── */
 function ledgerDetailHtml(client) {
   const R = ledgerRange();
-  const all = ledgerRows(client);
+  const CAT = filters.ledgerCat || 'all';
+  const catOn = CAT !== 'all' && QCATS.indexOf(CAT) >= 0;
+  const full = ledgerRows(client);                       // 전체 (요약·미수는 늘 전체 기준)
+  const all = catOn ? ledgerRows(client, CAT) : full;
   const un = ledgerUnalloc(client);
-  const sale = all.filter(r => r.k === 'sale').reduce((s, r) => s + r.amt, 0);
-  const pay = all.filter(r => r.k === 'pay').reduce((s, r) => s + r.amt, 0);
+  const sale = full.filter(r => r.k === 'sale').reduce((s, r) => s + r.amt, 0);
+  const pay = full.filter(r => r.k === 'pay').reduce((s, r) => s + r.amt, 0);
   const rem = sale - pay;
-  const taxAmt = all.filter(r => r.k === 'tax').reduce((s, r) => s + r.amt, 0);
+  const taxAmt = full.filter(r => r.k === 'tax').reduce((s, r) => s + r.amt, 0);
   const noTaxAmt = (state.quotes || []).filter(q => !!q.ordered && (q.client || '').trim() === client && !q.taxInvoice).reduce((s, q) => s + (+q.total || 0), 0);
   const inR = d => (d || '') >= R.sd && (d || '') <= R.ed;
   const shown = all.filter(r => inR(r.d));
   const before = all.filter(r => !inR(r.d) && (r.d || '') < R.sd);
-  const openBal = before.length ? before[before.length - 1].bal : 0;
+  const openBal = (!catOn && before.length) ? before[before.length - 1].bal : 0;
+  /* ── 분류별 매출 (세라믹 / 세면대 / 석재 / 통관비용) ──
+     한 견적에 세라믹과 세면대가 같이 있으면 품목 금액 비율대로 나눠 담는다. */
+  const cSplit = {}; QCATS.forEach(c => cSplit[c] = { sum: 0, n: 0 });
+  (state.quotes || []).filter(q => !!q.ordered && (q.client || '').trim() === client).forEach(q => {
+    const sp = quoteCatSplit(q);
+    Object.keys(sp).forEach(c => { if (cSplit[c]) { cSplit[c].sum += sp[c].tot; cSplit[c].n++; } });
+  });
+  const catsHere = QCATS.filter(c => cSplit[c].n > 0);
+  const kc = (v, l, o) => `<button class="chip ${CAT === v ? 'active' : ''}" onclick="ledgerSetCat('${v}')" style="${CAT === v ? '' : ''}">${o ? `<i class="ti ti-${QCAT_ICON[v] || 'tag'}" style="color:${QCAT_COL[v]}"></i> ` : ''}${l}${o ? ` <b style="color:${QCAT_COL[v]}">${fmtWon(o.sum)}</b> <span style="color:var(--t3)">${o.n}건</span>` : ` <b>${fmtWon(sale)}</b>`}</button>`;
+  const catChips = catsHere.length > 1 ? `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:9px">
+      <span style="font-size:11px;color:var(--t3);width:38px;flex:none">분류</span>
+      ${kc('all', '전체')}${catsHere.map(c => kc(c, c, cSplit[c])).join('')}
+    </div>` : '';
+  const catNote = catOn ? `<div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0;display:block">
+      <b>${esc(CAT)}</b> 몫만 보고 있습니다 — 매출·계산서 금액은 그 견적의 <b>${esc(CAT)} 품목 금액 비율</b>만큼입니다.
+      입금은 은행 기록에 «무슨 품목 대금인지»가 안 적혀 있어 분류로 나눌 수 없으므로, <b>입금·잔액(미수)은 «전체»에서만 보입니다.</b></span></div>` : '';
   const rc = (v, l) => `<button class="chip ${(filters.ledgerRange || 'all') === v ? 'active' : ''}" onclick="ledgerSetRange('${v}')">${l}</button>`;
   const money = (v, col) => `<td style="text-align:right;white-space:nowrap${col ? ';color:' + col : ''}">${v ? fmtWon(v) : '<span style="color:var(--bd2)">·</span>'}</td>`;
   const row = r => {
@@ -6187,8 +6273,32 @@ function ledgerDetailHtml(client) {
       ${money(0)}<td style="text-align:right;white-space:nowrap;font-weight:700;color:var(--gd)">${fmtWon(r.amt)}</td>
       <td style="text-align:right;white-space:nowrap;font-weight:700">${fmtWon(r.bal)}</td></tr>`;
   };
+  /* 분류를 골랐을 때의 줄 — 매출·계산서만, 잔액 칸 없이 */
+  const rowCat = r => {
+    const mix = r.part ? ` <span class="pill" style="background:#fff7e6;color:#b45309;border:1px solid #f0d9a8;font-size:10px">섞임 · 전체 ${fmtWon(r.full || 0)}</span>` : '';
+    if (r.k === 'sale') return `<tr>
+      <td style="white-space:nowrap;color:var(--t3)">${esc((r.d || '').slice(2))}</td>
+      <td><span class="pill p-gray">매출</span></td>
+      <td style="cursor:pointer" onclick="openQuoteView('${r.id}')"><b>${esc(r.docNo)}</b>${r.site ? ` <span style="color:var(--t3)">· ${esc(r.site)}</span>` : ''}${mix}</td>
+      <td style="text-align:right;white-space:nowrap;font-weight:700">${fmtWon(r.amt)}</td></tr>`;
+    return `<tr style="background:#fbfaf7">
+      <td style="white-space:nowrap;color:var(--t3)">${esc((r.d || '').slice(2))}</td>
+      <td><span class="pill p-prog">계산서</span></td>
+      <td style="color:var(--t2)">${esc(r.docNo)} 발행${r.nts ? ` <span style="color:var(--t3)">· 승인 ${esc(r.nts)}</span>` : ''}${r.mgt ? ` <button class="btn btn-sm btn-ghost" style="padding:1px 5px" onclick="taxOpenDoc('${esc(r.mgt)}')"><i class="ti ti-external-link"></i></button>` : ''}</td>
+      <td style="text-align:right;white-space:nowrap;color:var(--t3)">(${fmtWon(r.amt)})</td></tr>`;
+  };
+  const catTable = `<div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th style="width:58px">날짜</th><th style="width:56px">구분</th><th>내용</th>
+        <th style="text-align:right;width:110px">${esc(CAT)} 금액</th></tr></thead>
+      <tbody>
+        ${shown.length ? shown.map(rowCat).join('') : `<tr><td colspan="4" style="text-align:center;color:var(--t3);padding:18px">이 기간에 ${esc(CAT)} 내역이 없습니다</td></tr>`}
+        <tr style="background:var(--soft);font-weight:800"><td colspan="3">합계 (매출)</td>
+          <td style="text-align:right;color:${QCAT_COL[CAT] || 'var(--gd)'}">${fmtWon(shown.filter(r => r.k === 'sale').reduce((s, r) => s + r.amt, 0))}</td></tr>
+      </tbody>
+    </table></div>
+    <div style="font-size:11.5px;color:var(--t3);margin-top:7px">«섞임» 은 세라믹·세면대 등이 한 견적에 같이 든 경우로, 품목 금액 비율만큼만 잡은 금액입니다.</div>`;
   return `
-    <div class="ph"><div><h2><i class="ti ti-book"></i>${esc(client)}</h2><p>${esc(R.label)} · 매출 ${all.filter(r => r.k === 'sale').length}건 · 입금 ${all.filter(r => r.k === 'pay').length}건</p></div>
+    <div class="ph"><div><h2><i class="ti ti-book"></i>${esc(client)}</h2><p>${esc(R.label)} · 매출 ${full.filter(r => r.k === 'sale').length}건 · 입금 ${full.filter(r => r.k === 'pay').length}건${catOn ? ` · <b style="color:${QCAT_COL[CAT]}">${esc(CAT)}만 보는 중</b>` : ''}</p></div>
       <button class="btn btn-sm" onclick="ledgerBack()"><i class="ti ti-arrow-left"></i>거래처 목록</button></div>
     <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:11px">
       <div class="stat"><div class="ic g"><i class="ti ti-file-text"></i></div><div class="v" style="font-size:18px">${fmtWon(sale)}</div><div class="l">확정 매출</div></div>
@@ -6205,8 +6315,10 @@ function ledgerDetailHtml(client) {
             <button class="btn btn-sm btn-ghost" style="padding:1px 5px" title="거래처 바꾸기" onclick="txReassign('${t.id}')"><i class="ti ti-switch-horizontal"></i></button></span></div>`).join('')}
         ${un.length > 40 ? `<div style="padding:6px 9px;font-size:11.5px;color:var(--t3)">외 ${un.length - 40}건</div>` : ''}</div>
       <div style="margin-top:7px"><button class="btn btn-sm" onclick="openPayMatch()"><i class="ti ti-link"></i>결제 반영 화면 열기</button></div></span></div>` : ''}
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px">${rc('all', '전체')}${rc('3m', '최근 3개월')}${rc('tm', '이번 달')}${rc('lm', '지난 달')}</div>
-    <div class="tbl-wrap"><table class="tbl">
+    ${catChips}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:9px">${catChips ? '<span style="font-size:11px;color:var(--t3);width:38px;flex:none">기간</span>' : ''}${rc('all', '전체')}${rc('3m', '최근 3개월')}${rc('tm', '이번 달')}${rc('lm', '지난 달')}</div>
+    ${catNote}
+    ${catOn ? catTable : `<div class="tbl-wrap"><table class="tbl">
       <thead><tr><th style="width:58px">날짜</th><th style="width:56px">구분</th><th>내용</th>
         <th style="text-align:right;width:92px">매출</th><th style="text-align:right;width:92px">입금</th><th style="text-align:right;width:98px">잔액(미수)</th></tr></thead>
       <tbody>
@@ -6219,7 +6331,7 @@ function ledgerDetailHtml(client) {
           <td style="text-align:right;color:${rem > 0 ? 'var(--red-t)' : 'var(--gd)'}">${fmtWon(all.length ? all[all.length - 1].bal : 0)}</td></tr>
       </tbody>
     </table></div>
-    <div style="font-size:11.5px;color:var(--t3);margin-top:7px">잔액 = 확정 매출 누계 − 입금 누계. 세금계산서 줄은 발행 사실만 표시하고 잔액에는 영향을 주지 않습니다.</div>`;
+    <div style="font-size:11.5px;color:var(--t3);margin-top:7px">잔액 = 확정 매출 누계 − 입금 누계. 세금계산서 줄은 발행 사실만 표시하고 잔액에는 영향을 주지 않습니다.</div>`}`;
 }
 /* 입금 건의 계산서 발행 여부 표시 토글 */
 async function txToggleTax(id) {
@@ -7683,7 +7795,7 @@ function renderQuoteSettings() {
     </div>`;
 }
 /* 분류 바꾸기.
-   ★ '세라믹+세면대' 와 '석재' 는 입력 폼이 완전히 똑같다 — 다시 그리면 입력하던
+   ★ '세라믹'·'세면대'·'석재' 는 입력 폼이 완전히 똑같다 — 다시 그리면 입력하던
      거래처·품목이 통째로 지워지므로 다시 그리지 않는다.
      '통관비용' 만 아예 다른 폼이라 그때만 다시 그리고, 거래처는 이어서 넣어준다. */
 function quoteCatChanged(v) {
@@ -7729,7 +7841,7 @@ function renderCustomsForm(q, copy) {
     <div id="qform-root" class="card" style="padding:15px 17px">
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
         <div class="fld" style="flex:2;min-width:180px;margin:0"><label>거래처 (TO) <span class="req">*</span></label>${searchBox('cx-client', '업체명 검색·입력', v.client || '', 'companyNames', '')}</div>
-        <div class="fld" style="flex:1;min-width:130px;margin:0"><label>분류</label><select onchange="quoteCatChanged(this.value)" style="${inp}"><option>통관비용</option><option>세라믹+세면대</option><option>석재</option></select></div>
+        <div class="fld" style="flex:1;min-width:130px;margin:0"><label>분류</label><select onchange="quoteCatChanged(this.value)" style="${inp}">${QCATS.map(cc => `<option ${cc === '통관비용' ? 'selected' : ''}>${cc}</option>`).join('')}</select></div>
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px">
         <div class="fld" style="flex:1;min-width:130px;margin:0"><label>견적일 (DATE)</label><input type="date" id="cx-date" value="${esc((editing && v.date) || todayStr())}" style="${inp}"></div>
@@ -7884,6 +7996,8 @@ function quoteCardHtml(q) {
   const siteBadge = q.siteDone ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="event.stopPropagation();quoteOpenSite('${q.id}')" title="${_qSite ? '현장 정보 보기' : '연결된 현장을 찾지 못했습니다'}"><i class="ti ti-building-community"></i> 현장 등록 완료${_qSiteNm ? ' · ' + esc(_qSiteNm) : ''}${_qSite ? ' <i class="ti ti-chevron-right" style="font-size:11px;vertical-align:-1px"></i>' : ''}</button>` : '';
   const basinBadge = q.basinDone ? `<span class="pill p-done"><i class="ti ti-bath"></i> 세면대 발주 완료</span>` : '';
   const doneBadge = q.manualDone ? `<span class="pill p-done"><i class="ti ti-checks"></i> 완료</span>` : '';
+  /* 분류 배지 — 세라믹인지 세면대인지 한눈에 (섞인 견적은 둘 다 붙는다) */
+  const catBadge = quoteCatSet(q).map(c => `<span class="pill" style="background:#fff;color:${QCAT_COL[c]};border:1px solid ${QCAT_COL[c]};font-weight:700"><i class="ti ti-${QCAT_ICON[c] || 'tag'}"></i> ${esc(c)}</span>`).join('');
   const _dep = quoteDeposit(q);
   const depBadge = _dep ? `<span class="pill" style="background:#eaf2ff;color:#1a56b8;border:1px solid #cfe0ff" title="잔금 ${fmtWon(_dep.rest)}원"><i class="ti ti-percentage"></i> 계약금 ${_pctTxt(_dep.pct)}% · ${fmtWon(_dep.amt)}</span>` : '';
   return `<div class="card" style="margin-bottom:10px;padding:12px 14px${_bundle && _selQ ? ';border:2px solid var(--gd);background:#f2fbf6' : ''}">
@@ -7898,7 +8012,7 @@ function quoteCardHtml(q) {
            <div style="font-size:10.5px;color:var(--t3);margin-top:3px;white-space:nowrap;border-top:1px dashed var(--bd);padding-top:3px">${_rem > 0 ? `이 건 미수 ${fmtWon(_rem)}` : (_pa > 0 ? '<span style="color:var(--gd);font-weight:700">이 건 결제완료</span>' : '이 건 미결제')}</div>`
         : (_pa > 0 ? `<div style="font-size:12px;font-weight:700;color:var(--gd);margin-top:6px"><i class="ti ti-check"></i> 결제완료</div>` : (_rem > 0 ? `<div style="font-size:13.5px;font-weight:800;color:var(--red-t);margin-top:6px">미수 ${fmtWon(_rem)}</div>` : ''))}</div>
       </div>
-      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${paidPill}${taxPill}${depBadge}${shipBadge}${siteBadge}${basinBadge}${doneBadge}${canLedger() && _cRem > 0 ? `<button class="pill p-issue" style="border:none;cursor:pointer" onclick="openLedgerFor(${JSON.stringify(q.client || '').replace(/"/g, '&quot;')})" title="이 거래처 원장 보기"><i class="ti ti-book"></i> 거래처 미수 ${fmtWon(_cRem)}</button>` : ''}</div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:7px">${catBadge}${paidPill}${taxPill}${depBadge}${shipBadge}${siteBadge}${basinBadge}${doneBadge}${canLedger() && _cRem > 0 ? `<button class="pill p-issue" style="border:none;cursor:pointer" onclick="openLedgerFor(${JSON.stringify(q.client || '').replace(/"/g, '&quot;')})" title="이 거래처 원장 보기"><i class="ti ti-book"></i> 거래처 미수 ${fmtWon(_cRem)}</button>` : ''}</div>
       <div class="frm-foot" style="margin-top:9px;display:flex;align-items:center;gap:5px;flex-wrap:wrap">
         ${(q.shipped || q.siteDone || q.basinDone) ? '' : (q.manualDone ? (isAdmin() ? `<button class="btn btn-sm" style="color:var(--t3)" onclick="quoteUnmarkDone('${q.id}')" title="완료 취소"><i class="ti ti-arrow-back-up"></i>완료 취소</button>` : '') : (q.ordered ? `<button class="btn btn-sm btn-pri" onclick="quoteRegister('${q.id}')"><i class="ti ${_regIcon}"></i>${_regLabel}</button><button class="btn btn-sm" onclick="quoteLinkSite('${q.id}')" title="이미 등록된 현장에 연결"><i class="ti ti-link"></i>현장 연결</button>${isAdmin() ? `<button class="btn btn-sm" style="color:#0f766e;border-color:#0f766e" onclick="quoteMarkDone('${q.id}')" title="바로 완료 처리 (관리자)"><i class="ti ti-checks"></i>완료 처리</button>` : ''}<button class="btn btn-sm" style="color:var(--t3)" onclick="quoteCancelOrder('${q.id}')" title="확정 주문 취소"><i class="ti ti-arrow-back-up"></i>확정취소</button>` : `<button class="btn btn-sm btn-pri" onclick="quoteConfirmOrder('${q.id}')"><i class="ti ti-clipboard-check"></i>확정주문</button>`))}
         <button class="btn btn-sm" onclick="openQuoteInline('${q.id}')"><i class="ti ti-edit"></i>수정</button>
@@ -7953,7 +8067,7 @@ function openQuoteView(id) {
     </div>
     <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:11px">${badges}</div>
     <div style="background:var(--soft);border-radius:11px;padding:7px 12px;margin-bottom:12px">
-      ${meta('분류', q.category)}${meta('단가 유형', q.ctype)}${meta('유효기간', q.valid)}${meta('담당자', q.by)}${meta('수신·참조', q.attn)}${meta('현장 주소', q.siteAddr)}
+      ${meta('분류', quoteCatSet(q).join(' · '))}${meta('단가 유형', q.ctype)}${meta('유효기간', q.valid)}${meta('담당자', q.by)}${meta('수신·참조', q.attn)}${meta('현장 주소', q.siteAddr)}
     </div>
     <div class="sec-label"><i class="ti ti-list-details"></i>견적 품목 <span style="font-weight:500;color:var(--t3)">${items.length}건</span></div>
     <div class="tbl-wrap" style="margin-bottom:12px"><table class="tbl">
@@ -9366,8 +9480,8 @@ function renderQuote() {
   const noTax = all.filter(q => !q.taxInvoice).length;
   const monthSum = all.filter(q => (q.date || '').startsWith(ym)).reduce((a, b) => a + (+b.total || 0), 0);
   const catAgg = {}; QCATS.forEach(c => catAgg[c] = { sum: 0, cnt: 0 });
-  all.forEach(q => { if (q.category && catAgg[q.category]) { catAgg[q.category].sum += (+q.supply || 0); catAgg[q.category].cnt++; } else { const cs = {}; (q.items || []).forEach(it => { const c = itemCategory(it.name); if (catAgg[c]) { catAgg[c].sum += Math.round(+it.amt || 0); cs[c] = 1; } }); Object.keys(cs).forEach(c => catAgg[c].cnt++); } });
-  const catBreak = `<div class="card" style="margin-bottom:12px;padding:11px 14px"><div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:8px"><i class="ti ti-chart-pie"></i> 분류별 매출 · 견적건</div><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px">${QCATS.map(c => `<div style="text-align:center;padding:7px 4px;background:var(--soft);border-radius:9px"><div style="font-size:10.5px;color:var(--t2);margin-bottom:2px">${c}</div><div style="font-size:14.5px;font-weight:800;color:var(--gd)">${fmtWon(catAgg[c].sum)}</div><div style="font-size:10px;color:var(--t3)">${catAgg[c].cnt}건</div></div>`).join('')}</div></div>`;
+  all.forEach(q => { const sp = quoteCatSplit(q); Object.keys(sp).forEach(c => { if (catAgg[c]) { catAgg[c].sum += sp[c].sup; catAgg[c].cnt++; } }); });
+  const catBreak = `<div class="card" style="margin-bottom:12px;padding:11px 14px"><div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:8px"><i class="ti ti-chart-pie"></i> 분류별 매출 · 견적건 <span style="font-weight:500">· 품목 기준</span></div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(105px,1fr));gap:8px">${QCATS.map(c => `<div style="text-align:center;padding:7px 4px;background:var(--soft);border-radius:9px"><div style="font-size:10.5px;color:var(--t2);margin-bottom:2px"><i class="ti ti-${QCAT_ICON[c]}"></i> ${c}</div><div style="font-size:14.5px;font-weight:800;color:${QCAT_COL[c]}">${fmtWon(catAgg[c].sum)}</div><div style="font-size:10px;color:var(--t3)">${catAgg[c].cnt}건</div></div>`).join('')}</div></div>`;
   const view = filters.quoteView || 'all';
   const _selQs = filters.quoteBundle ? (state.quotes || []).filter(x => _qSel.has(x.id)) : [];
   const _selTotal = _selQs.reduce((a, q) => a + (+q.total || 0), 0);
@@ -9501,15 +9615,14 @@ function _quoteListInner() {
   const cBasin = baseForStat.filter(_isBasinPend).length;
   if (_confFn[fConf]) list = list.filter(_confFn[fConf]);
   if (_statFn[fStat]) list = list.filter(_statFn[fStat]);
-  /* ── 분류 축 (세라믹+세면대 / 석재 / 통관비용) ──
-     걸러내는 기준은 견적서에 고른 '분류'칸(q.category).
-     금액은 품목마다 따로 재는데(itemCategory), 한 견적에 석재와 세라믹이 섞여 있어도
-     각각 제 몫만큼 잡히게 하기 위해서다. */
+  /* ── 분류 축 (세라믹 / 세면대 / 석재 / 통관비용) ──
+     ★ 기준은 견적서의 '분류'칸이 아니라 그 안에 든 품목이다(quoteCatSet).
+       세라믹과 세면대가 같이 든 견적은 두 칩 어디를 눌러도 나온다 — 빠지는 게 없다.
+       그래서 칩의 건수를 다 더하면 전체 건수보다 조금 많을 수 있다(섞인 견적이 두 번 세어져서). */
   const fCat = filters.qCat || 'all';
-  const _catOf = q => { const c = (q.category || '').trim(); return QCATS.indexOf(c) >= 0 ? c : '세라믹+세면대'; };
   const cCat = {}; QCATS.forEach(c => cCat[c] = 0);
-  baseForStat.forEach(q => { cCat[_catOf(q)]++; });
-  if (fCat !== 'all') list = list.filter(q => _catOf(q) === fCat);
+  baseForStat.forEach(q => quoteCatSet(q).forEach(c => { if (cCat[c] != null) cCat[c]++; }));
+  if (fCat !== 'all') list = list.filter(q => quoteCatSet(q).indexOf(fCat) >= 0);
   _qShownIds = list.map(q => q.id);   // 지금 화면(검색·필터 반영)에 뜬 견적 — 묶음청구 [전체 선택] 이 이걸 쓴다
   // 검색 결과 요약 — 몇 건인지, 합계가 얼마인지 바로 보이게
   const searchBar = qy ? (() => {
@@ -9549,28 +9662,15 @@ function _quoteListInner() {
      분류칸만 보면 한쪽으로 몰린다. 그래서 금액만은 품목 기준으로 쪼갠다. */
   const catAmt = {}; QCATS.forEach(c => catAmt[c] = { sup: 0, tot: 0, n: 0 });
   list.forEach(q => {
-    const its = (q.items || []).filter(it => (it.name || '').trim());
-    if (!its.length) { const c = _catOf(q); catAmt[c].sup += (+q.supply || 0); catAmt[c].tot += (+q.total || 0); catAmt[c].n++; return; }
-    const seen = {};
-    let sumAll = 0; its.forEach(it => sumAll += Math.round(+it.amt || 0));
-    its.forEach(it => {
-      const c = itemCategory(it.name); if (!catAmt[c]) return;
-      const amt = Math.round(+it.amt || 0);
-      catAmt[c].sup += amt;
-      // 합계(부가세·할인 반영)는 품목 금액 비율만큼 나눠 준다
-      catAmt[c].tot += sumAll ? Math.round((+q.total || 0) * (amt / sumAll)) : 0;
-      seen[c] = 1;
-    });
-    Object.keys(seen).forEach(c => catAmt[c].n++);
+    const sp = quoteCatSplit(q);
+    Object.keys(sp).forEach(c => { if (!catAmt[c]) return; catAmt[c].sup += sp[c].sup; catAmt[c].tot += sp[c].tot; catAmt[c].n++; });
   });
-  const _catIcon = { '세라믹+세면대': 'grid-dots', '석재': 'diamond', '통관비용': 'ship' };
-  const _catCol = { '세라믹+세면대': 'var(--gd)', '석재': '#7c3aed', '통관비용': '#b45309' };
   const catBar = `<div class="card" style="margin-bottom:10px;padding:11px 13px">
     <div style="font-size:11.5px;color:var(--t3);font-weight:700;margin-bottom:8px"><i class="ti ti-chart-pie"></i> 분류별 금액 <span style="font-weight:500">· 품목 기준 (한 견적에 섞여 있으면 나눠서 셉니다)</span></div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px">
       ${QCATS.map(c => `<div style="padding:9px 8px;background:var(--soft);border-radius:10px;text-align:center">
-        <div style="font-size:11px;color:var(--t2);margin-bottom:3px"><i class="ti ti-${_catIcon[c] || 'tag'}"></i> ${esc(c)}</div>
-        <div style="font-size:16px;font-weight:800;color:${_catCol[c]}">${fmtWon(catAmt[c].tot)}</div>
+        <div style="font-size:11px;color:var(--t2);margin-bottom:3px"><i class="ti ti-${QCAT_ICON[c] || 'tag'}"></i> ${esc(c)}</div>
+        <div style="font-size:16px;font-weight:800;color:${QCAT_COL[c]}">${fmtWon(catAmt[c].tot)}</div>
         <div style="font-size:10.5px;color:var(--t3);margin-top:2px">공급가 ${fmtWon(catAmt[c].sup)} · ${catAmt[c].n}건</div>
       </div>`).join('')}
     </div>
