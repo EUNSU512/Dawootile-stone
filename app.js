@@ -10826,6 +10826,7 @@ function renderBasin() {
       <button class="btn btn-sm" style="flex:2" onclick="basinPackingUpload()"><i class="ti ti-file-spreadsheet"></i> 인보이스 업로드 → 출항</button>
       <button class="btn btn-sm" style="flex:1" onclick="openBasinStats()"><i class="ti ti-chart-bar"></i> 수주 통계</button>
     </div>
+    <button class="btn btn-sm btn-block" style="margin-bottom:10px;color:#1a56b8;border-color:#b8cdf0" onclick="basinCnUpload()"><i class="ti ti-table-import"></i> 중국 발주표 올리기 <span style="color:var(--t3);font-weight:500">(主恩石材一体盆跟踪表 · 단가·발주번호·발송일 반영)</span></button>
     <button class="btn btn-sm btn-block" style="margin-bottom:10px;color:#b42318;border-color:#e6a9a9" onclick="openBasinIssueForm()"><i class="ti ti-alert-triangle"></i> 세면대 이슈 등록 <span style="color:var(--t3);font-weight:500">(파손·납기지연 등)</span></button>
     <div style="font-size:12px;color:var(--t3);margin:2px 0 8px">검색 결과 <b id="basin-count" style="color:var(--t1)">${list.length}건</b></div>
     <div class="site-grid" id="basin-list">${basinListHtml(list)}</div>`;
@@ -11071,6 +11072,264 @@ async function basinPackingApply(ids) {
   let n = 0;
   for (const id of ids) { try { await basinSetStage(id, '출항'); n++; } catch (e) { } }
   toast(n + '건을 출항 단계로 이동했습니다');
+}
+/* ══════════════════════════════════════════════════════════
+   중국 사무실 발주표(主恩石材一体盆跟踪表) 올리기
+   ─────────────────────────────────────────────────────────
+   중국에서 정리해 주는 엑셀을 그대로 올리면 앱 세면대 발주에 붙여 준다.
+     · 시트 «发货明细» 의 머리글(日期 …) 줄을 찾아 그 아래를 읽는다
+     · 客户名称(거래처)이 빈 칸이면 **윗줄과 같은 거래처** 다 (한 업체가 여러 품목)
+     · 금액만 있는 줄(소계)·빈 줄은 건너뛴다. 备注/客户名称 에 取消 면 취소 건
+     · 内容描述 «罗马印记（화이트 트라버티노）/中方盆» → 석종 + 볼 종류
+       괄호 안 한글이 있으면 그걸 쓰고, 없으면 BASIN_STONES 의 중국어 이름(c)으로 찾는다
+   반영하는 것: **중국 단가(¥) · 발주번호 · 발송일 · 목적항 · 단계(출항)**
+   ★ 바로 저장하지 않는다 — 무엇이 어떻게 바뀌는지 미리보기에서 체크한 것만 반영한다.
+   ══════════════════════════════════════════════════════════ */
+const BASIN_CN_ALIAS = { '巴格克灰洞': '巴洛克灰洞', '宝格丽': '宝格丽紫', '塞浦路斯白': '塞浦路斯' };
+const BASIN_CN_BOWL = { '中方盆': '중방볼', '左方盆': '좌방볼', '右方盆': '우방볼', '椭圆盆': '타원볼', '水滴盆': '물방울볼', '双方盆': '기타(2볼)', '方盆': '중방볼', '平板': '평판', '柱盆': '기둥볼' };
+function basinCnStone(cnRaw, krRaw) {
+  const kr = String(krRaw || '').trim();
+  if (kr) { const h = BASIN_STONES.find(s => _normName(s.k) === _normName(kr)); if (h) return h.k; }
+  let cn = String(cnRaw || '').trim(); cn = BASIN_CN_ALIAS[cn] || cn;
+  if (cn) {
+    const h = BASIN_STONES.find(s => s.c && s.c === cn); if (h) return h.k;
+    const p = BASIN_STONES.find(s => s.c && (cn.indexOf(s.c) >= 0 || s.c.indexOf(cn) >= 0)); if (p) return p.k;
+  }
+  return kr || '';
+}
+function _cnYmd(v) {                       // 8/27/26 → 2026-08-27
+  const m = String(v == null ? '' : v).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if (!m) { const d = String(v || '').trim(); return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : ''; }
+  let y = +m[3]; if (y < 100) y += 2000;
+  return y + '-' + String(+m[1]).padStart(2, '0') + '-' + String(+m[2]).padStart(2, '0');
+}
+function _cnShip(v, baseYmd) {             // '  8-30 KLK' / '9.7 DW' → { date, by }
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return { date: '', by: '' };
+  const m = s.match(/(\d{1,2})\s*[-.]\s*(\d{1,2})/);
+  if (!m) return { date: '', by: s };
+  const y = baseYmd ? +baseYmd.slice(0, 4) : +todayStr().slice(0, 4);
+  return { date: y + '-' + String(+m[1]).padStart(2, '0') + '-' + String(+m[2]).padStart(2, '0'), by: s.replace(m[0], '').trim() };
+}
+function basinCnParse(wb) {
+  const name = wb.SheetNames.find(n => /发货/.test(n)) || wb.SheetNames[0];
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, defval: '', raw: false, blankrows: true });
+  const h = aoa.findIndex(r => (r || []).some(c => String(c).trim() === '日期'));
+  if (h < 0) return null;
+  const head = aoa[h].map(c => String(c).trim());
+  const ci = k => head.indexOf(k);
+  const C = { date: ci('日期'), no: ci('下单编号'), client: ci('客户名称'), desc: ci('内容描述'), spec: ci('尺寸/MM'), qty: ci('数量'), price: ci('单价'), real: ci('实际发货时间'), port: ci('目的港'), plan: ci('预计发货时间'), note: ci('备注') };
+  const g = (r, i) => (i >= 0 ? String(r[i] == null ? '' : r[i]).trim() : '');
+  const rows = []; let last = '';
+  for (let i = h + 1; i < aoa.length; i++) {
+    const r = aoa[i] || [];
+    const date = g(r, C.date), desc = g(r, C.desc);
+    if (!date && !desc) { last = ''; continue; }      // 빈 줄 → 묶음이 끊긴다
+    if (!desc) continue;                              // 소계 줄 (금액만 있음)
+    let client = g(r, C.client);
+    if (client) last = client; else client = last;    // 빈 칸 = 윗줄과 같은 거래처
+    const note = g(r, C.note);
+    const cancelled = /取消/.test(note) || /取消/.test(client);
+    const s = String(desc).trim();
+    const par = s.match(/[（(]([^）)]+)[）)]/);
+    const noPar = s.replace(/[（(][^）)]*[）)]/, '');
+    const parts = noPar.split('/');
+    const ymd = _cnYmd(date);
+    const real = _cnShip(g(r, C.real), ymd), plan = _cnShip(g(r, C.plan), ymd);
+    rows.push({
+      row: i + 1, date: ymd, orderNo: g(r, C.no), client: cancelled ? '' : client,
+      stone: basinCnStone((parts[0] || '').trim(), par ? par[1] : ''),
+      stoneCn: (parts[0] || '').trim(),
+      bowl: BASIN_CN_BOWL[(parts[1] || '').trim()] || (parts[1] || '').trim(),
+      spec: g(r, C.spec).replace(/\s/g, ''), qty: Math.max(1, Math.round(_numv(g(r, C.qty))) || 1),
+      priceCny: _numv(g(r, C.price)),
+      shipDate: real.date, shipBy: real.by, port: g(r, C.port),
+      planDate: plan.date, planBy: plan.by,
+      note: note, cancelled: cancelled, stock: /库存/.test(note)
+    });
+  }
+  return rows;
+}
+/* 규격 비교 — 숫자만 뽑아 큰 것부터 줄세워 견준다 (1600*550*180 ↔ 550*1600*180 도 같은 것으로) */
+function _cnNums(s) { return (String(s || '').match(/\d+/g) || []).map(Number).filter(x => x >= 10).sort((a, b) => b - a); }
+function _cnSpecSame(a, b, tol) {
+  const A = _cnNums(a), B = _cnNums(b);
+  if (!A.length || A.length !== B.length) return false;
+  return A.every((v, i) => Math.abs(v - B[i]) <= (tol || 0));
+}
+let _cnRows = [], _cnPlan = [], _cnFileName = '';
+function basinCnUpload() {
+  if (isCustomerRole()) { toast('권한이 없습니다'); return; }
+  if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후 다시'); return; }
+  const inp = document.createElement('input');
+  inp.type = 'file'; inp.accept = '.xlsx,.xls';
+  inp.onchange = () => {
+    const f = inp.files && inp.files[0]; if (!f) return;
+    _cnFileName = f.name;
+    const rd = new FileReader();
+    rd.onload = e => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: 'array' });
+        const rows = basinCnParse(wb);
+        if (!rows) { toast('«发货明细» 시트의 머리글(日期)을 찾지 못했습니다'); return; }
+        if (!rows.length) { toast('읽을 줄이 없습니다'); return; }
+        _cnRows = rows; basinCnMakePlan(); basinCnPreview();
+      } catch (err) { toast('파일을 읽지 못했습니다: ' + ((err && err.message) || err)); }
+    };
+    rd.readAsArrayBuffer(f);
+  };
+  inp.click();
+}
+/* 엑셀 줄 ↔ 앱 세면대 품목 맞추기 */
+function basinCnMakePlan() {
+  const flat = [];
+  (state.basins || []).forEach(b => basinItems(b).forEach((it, i) => flat.push({ bid: b.id, i: i, b: b, it: it })));
+  const used = new Set();
+  const doneIdx = BASIN_STAGES.indexOf('출항');
+  _cnPlan = _cnRows.filter(r => !r.cancelled && r.spec && r.stone).map(r => {
+    const cands = flat.filter(f => !used.has(f.bid + '#' + f.i)
+      && _normName(f.it.stone || '') === _normName(r.stone)
+      && (_cnSpecSame(f.it.spec, r.spec, 0) || _cnSpecSame(f.it.spec, r.spec, 5)));
+    const score = f => {
+      let s = 0;
+      s += _cnSpecSame(f.it.spec, r.spec, 0) ? 4 : 2;
+      if (_normName(f.b.vendor || '') === _normName(r.client)) s += 3;
+      else if (_normName(f.b.vendor || '').indexOf(_normName(r.client)) >= 0 || _normName(r.client).indexOf(_normName(f.b.vendor || '')) >= 0) s += 2;
+      if ((parseInt(f.it.qty, 10) || 1) === r.qty) s += 1;
+      const d = f.b.orderDate || '';
+      if (d && r.date && Math.abs((new Date(d + 'T00:00') - new Date(r.date + 'T00:00')) / 86400000) <= 30) s += 1;
+      return s;
+    };
+    cands.sort((a, b) => score(b) - score(a));
+    const best = cands[0] || null;
+    const sc = best ? score(best) : 0;
+    const sure = !!best && (sc >= 7 || (sc >= 5 && cands.length === 1));
+    if (best && sure) used.add(best.bid + '#' + best.i);
+    return { r: r, best: best, cands: cands.length, score: sc, sure: sure, on: sure || !best, isNew: !best };
+  });
+}
+function basinCnChanges(p) {                 // 이 줄이 바꿀 내용 (글자로)
+  const r = p.r, out = [];
+  if (p.isNew) { out.push('새 발주로 등록'); return out; }
+  const it = p.best.it, b = p.best.b;
+  const cur = _numv(it.priceCny);
+  if (r.priceCny > 0 && Math.abs(cur - r.priceCny) > 0.01) out.push('단가 ¥' + (cur ? fmtWon(cur) : '없음') + ' → <b>¥' + r.priceCny.toLocaleString() + '</b>');
+  if (r.orderNo && (it.orderNo || '') !== r.orderNo) out.push('발주번호 <b>' + esc(r.orderNo) + '</b>');
+  if (r.shipDate && basinStageIndex(b) < BASIN_STAGES.indexOf('출항')) out.push('단계 ' + esc(b.stage || '견적') + ' → <b>출항</b> (' + esc(r.shipDate) + ')');
+  else if (r.shipDate && !(b.history || {})['출항']) out.push('출항일 <b>' + esc(r.shipDate) + '</b>');
+  if (r.planDate && !r.shipDate) out.push('출항 예정 <b>' + esc(r.planDate) + (r.planBy ? ' ' + esc(r.planBy) : '') + '</b>');
+  if (r.port && (b.shipPort || '') !== r.port) out.push('목적항 ' + esc(r.port));
+  return out.length ? out : ['바뀌는 값 없음'];
+}
+function basinCnPreview() {
+  const nNew = _cnPlan.filter(p => p.isNew).length;
+  const nSure = _cnPlan.filter(p => !p.isNew && p.sure).length;
+  const nMaybe = _cnPlan.filter(p => !p.isNew && !p.sure).length;
+  const nCancel = _cnRows.filter(r => r.cancelled).length;
+  const rowHtml = (p, i) => {
+    const r = p.r;
+    const badge = p.isNew ? `<span class="pill" style="background:#eaf2ff;color:#1a56b8">새로 만들기</span>`
+      : p.sure ? `<span class="pill p-done">연결됨</span>`
+        : `<span class="pill p-wait">확인 필요</span>`;
+    const to = p.isNew ? '<span style="color:var(--t3)">앱에 같은 규격·석종이 없습니다</span>'
+      : `${esc(p.best.b.vendor || '')} <span style="color:var(--t3)">· ${esc(p.best.it.spec || '')} · ${esc(p.best.b.stage || '')}</span>${p.cands > 1 ? ` <span style="color:var(--amber-t)">· 후보 ${p.cands}건</span>` : ''}`;
+    return `<label style="display:flex;gap:9px;align-items:flex-start;padding:8px 10px;border:1px solid ${p.on ? 'var(--bd2)' : 'var(--bd)'};background:${p.on ? '#fff' : '#fafbfa'};border-radius:10px;margin-bottom:5px;cursor:pointer">
+      <input type="checkbox" class="cn-ck" data-i="${i}" ${p.on ? 'checked' : ''} style="width:17px;height:17px;flex:none;margin-top:2px">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;gap:7px;align-items:center;flex-wrap:wrap">${badge}
+          <b style="font-size:12.5px">${esc(r.client || '(거래처 없음)')}</b>
+          <span style="font-size:11.5px;color:var(--t2)">${esc(r.stone)} · ${esc(r.spec)}${r.bowl ? ' · ' + esc(r.bowl) : ''} ×${r.qty}</span>
+          <span style="font-size:10.5px;color:var(--t3)">엑셀 ${r.row}줄 · ${esc(r.date)}${r.orderNo ? ' · ' + esc(r.orderNo) : ''}</span></div>
+        <div style="font-size:11px;color:var(--t3);margin-top:2px">→ ${to}</div>
+        <div style="font-size:11.5px;color:#1a56b8;margin-top:2px">${basinCnChanges(p).join(' · ')}</div>
+      </div></label>`;
+  };
+  const sec = (title, list, note) => list.length ? `<div style="font-size:11.5px;font-weight:800;color:var(--t2);margin:10px 0 5px">${title} <span style="color:var(--t3);font-weight:500">${note || ''}</span></div>` + list.map(x => rowHtml(x.p, x.i)).join('') : '';
+  const idx = _cnPlan.map((p, i) => ({ p: p, i: i }));
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-table-import"></i>중국 발주표 반영</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div class="banner info" style="margin-bottom:9px;font-size:11.5px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0">
+      <b>${esc(_cnFileName)}</b> — 읽은 줄 <b>${_cnRows.length}</b>건
+      (연결됨 ${nSure} · 확인 필요 ${nMaybe} · 새로 만들기 ${nNew}${nCancel ? ' · 취소 ' + nCancel + '건은 건너뜀' : ''})<br>
+      반영하는 값: <b>중국 단가(¥) · 발주번호 · 발송일 · 목적항 · 단계</b>. 체크한 줄만 저장합니다.</span></div>
+    <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px">
+      <button class="btn btn-sm" onclick="basinCnPick('all')">전체 선택</button>
+      <button class="btn btn-sm" onclick="basinCnPick('none')">전체 해제</button>
+      <button class="btn btn-sm" onclick="basinCnPick('sure')">연결된 것만</button>
+      <button class="btn btn-sm" onclick="basinCnPick('nonew')">새로 만들기 빼고</button>
+    </div>
+    <div style="max-height:50vh;overflow:auto;padding-right:2px">
+      ${sec('✔ 연결됨', idx.filter(x => !x.p.isNew && x.p.sure), '· 규격·석종·업체가 맞아떨어진 건')}
+      ${sec('⚠ 확인 필요', idx.filter(x => !x.p.isNew && !x.p.sure), '· 규격은 맞는데 업체가 다르거나 후보가 여럿 — 보고 체크하세요')}
+      ${sec('＋ 새로 만들기', idx.filter(x => x.p.isNew), '· 같은 거래처·같은 날짜끼리 한 건으로 묶어 등록합니다')}
+    </div>
+    <div class="frm-foot"><button class="btn" style="flex:1" onclick="closeModal()">취소</button>
+      <button class="btn btn-pri" style="flex:2" onclick="basinCnApply()"><i class="ti ti-check"></i>체크한 것 반영</button></div>`);
+}
+function basinCnPick(mode) {
+  document.querySelectorAll('.cn-ck').forEach(c => {
+    const p = _cnPlan[+c.getAttribute('data-i')]; if (!p) return;
+    c.checked = mode === 'all' ? true : mode === 'none' ? false : mode === 'sure' ? (!p.isNew && p.sure) : /* nonew */ !p.isNew;
+  });
+}
+async function basinCnApply() {
+  const picks = [...document.querySelectorAll('.cn-ck')].filter(c => c.checked).map(c => _cnPlan[+c.getAttribute('data-i')]).filter(Boolean);
+  if (!picks.length) { toast('반영할 줄을 하나 이상 고르세요'); return; }
+  if (_busy) return; _busy = true;
+  let upd = 0, made = 0, fail = 0;
+  try {
+    // ① 이미 있는 발주에 붙이기 — 한 발주에 여러 줄이 붙을 수 있으니 발주별로 모아서 한 번에 저장
+    const byB = {};
+    picks.filter(p => !p.isNew).forEach(p => { (byB[p.best.bid] = byB[p.best.bid] || []).push(p); });
+    for (const bid of Object.keys(byB)) {
+      const b = (state.basins || []).find(x => x.id === bid); if (!b) { fail++; continue; }
+      const items = basinItems(b).map(x => Object.assign({}, x));
+      const patch = {};
+      let ship = '', port = '', plan = '', planBy = '', shipBy = '';
+      byB[bid].forEach(p => {
+        const it = items[p.best.i]; if (!it) return;
+        if (p.r.priceCny > 0) it.priceCny = String(p.r.priceCny);
+        if (p.r.orderNo) it.orderNo = p.r.orderNo;
+        if (p.r.shipDate && p.r.shipDate > ship) { ship = p.r.shipDate; shipBy = p.r.shipBy || ''; }
+        if (p.r.port) port = p.r.port;
+        if (p.r.planDate && p.r.planDate > plan) { plan = p.r.planDate; planBy = p.r.planBy || ''; }
+      });
+      patch.items = items;
+      if (port) patch.shipPort = port;
+      if (plan) { patch.shipPlanDate = plan; patch.shipPlanBy = planBy; }
+      patch.cnSyncAt = Date.now();
+      if (ship) {
+        const hist = Object.assign({}, b.history || {});
+        if (!hist['출항']) hist['출항'] = ship;
+        patch.history = hist; patch.shipVessel = shipBy;
+        if (basinStageIndex(b) < BASIN_STAGES.indexOf('출항')) patch.stage = '출항';
+      }
+      try { await Store.update('basins', bid, patch); upd++; } catch (e) { fail++; console.warn('cn upd', bid, e); }
+    }
+    // ② 새로 만들기 — 같은 거래처 + 같은 날짜끼리 한 건으로 묶는다
+    const grp = {};
+    picks.filter(p => p.isNew).forEach(p => { const k = _normName(p.r.client) + '|' + p.r.date; (grp[k] = grp[k] || []).push(p.r); });
+    for (const k of Object.keys(grp)) {
+      const rs = grp[k], f = rs[0];
+      if (!f.client) { fail++; continue; }
+      const ship = rs.map(r => r.shipDate).filter(Boolean).sort().pop() || '';
+      const plan = rs.map(r => r.planDate).filter(Boolean).sort().pop() || '';
+      const port = (rs.find(r => r.port) || {}).port || '';
+      const stage = ship ? '출항' : '발주';
+      const hist = {}; hist['발주'] = f.date || todayStr(); if (ship) hist['출항'] = ship;
+      const obj = {
+        vendor: f.client, orderDate: f.date || todayStr(), stage: stage, history: hist,
+        address: '', note: ['중국 발주표에서 등록'].concat(rs.map(r => r.bowl).filter(Boolean).filter((v, i, a) => a.indexOf(v) === i)).join(' · '),
+        items: rs.map(r => ({ stone: r.stone, spec: r.spec, qty: String(r.qty), orderNo: r.orderNo || '', quoteNo: '', priceCny: r.priceCny ? String(r.priceCny) : '', priceKrw: '' })),
+        shipDate: '', shipPort: port, cnSyncAt: Date.now(),
+        orderNo: '', stone: '', spec: '', qty: '', quoteNo: '', price: ''
+      };
+      if (plan && !ship) { obj.shipPlanDate = plan; obj.shipPlanBy = (rs.find(r => r.planBy) || {}).planBy || ''; }
+      try { await ensureClient(f.client); } catch (e) { }
+      try { await Store.add('basins', obj); made++; } catch (e) { fail++; console.warn('cn new', f.client, e); }
+    }
+  } finally { setTimeout(() => { _busy = false; }, 500); }
+  closeModal();
+  toast('반영 완료 · 기존 발주 ' + upd + '건 갱신 · 새 발주 ' + made + '건' + (fail ? ' · 실패 ' + fail : ''));
 }
 /* ===== 세면대 수주 통계 (석종별 / 사이즈별) ===== */
 function basinSizeBucket(spec) {
