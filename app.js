@@ -6250,7 +6250,8 @@ function ledgerDetailHtml(client) {
     Object.keys(sp).forEach(c => { if (cSplit[c]) { cSplit[c].sum += sp[c].tot; cSplit[c].n++; } });
   });
   const catsHere = QCATS.filter(c => cSplit[c].n > 0);
-  const kc = (v, l, o) => `<button class="chip ${CAT === v ? 'active' : ''}" onclick="ledgerSetCat('${v}')" style="${CAT === v ? '' : ''}">${o ? `<i class="ti ti-${QCAT_ICON[v] || 'tag'}" style="color:${QCAT_COL[v]}"></i> ` : ''}${l}${o ? ` <b style="color:${QCAT_COL[v]}">${fmtWon(o.sum)}</b> <span style="color:var(--t3)">${o.n}건</span>` : ` <b>${fmtWon(sale)}</b>`}</button>`;
+  const kc = (v, l, o) => { const on = CAT === v, col = on ? 'inherit' : QCAT_COL[v], sub = on ? 'inherit' : 'var(--t3)';
+    return `<button class="chip ${on ? 'active' : ''}" onclick="ledgerSetCat('${v}')">${o ? `<i class="ti ti-${QCAT_ICON[v] || 'tag'}" style="color:${col}"></i> ` : ''}${l}${o ? ` <b style="color:${col}">${fmtWon(o.sum)}</b> <span style="color:${sub}">${o.n}건</span>` : ` <b>${fmtWon(sale)}</b>`}</button>`; };
   const catChips = catsHere.length > 1 ? `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:9px">
       <span style="font-size:11px;color:var(--t3);width:38px;flex:none">분류</span>
       ${kc('all', '전체')}${catsHere.map(c => kc(c, c, cSplit[c])).join('')}
