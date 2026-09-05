@@ -3835,15 +3835,36 @@ function parseThick(name, spec) {
   if (parts.length >= 2) { const last = parseInt(parts[parts.length - 1], 10); if (!isNaN(last) && last > 0 && last <= 50) return last + 'T'; }   // 타일 두께로 볼 만한 값(≤50mm)만
   return '';
 }
+/* 자재명 → 재고 품목 (두께 판정에 규격이 필요해 자주 찾는다. 4초 캐시) */
+let _invByName = null, _invByNameAt = 0;
+function invByName(n) {
+  if (!_invByName || Date.now() - _invByNameAt > 4000) {
+    _invByName = {}; (state.inventory || []).forEach(i => { _invByName[_normName(i.name)] = i; }); _invByNameAt = Date.now();
+  }
+  return _invByName[_normName(n || '')] || null;
+}
+/* 출고 한 줄의 두께 칸 이름 — '12T' · '6T' · '세면대' · '기타' */
+function txThickKey(t) {
+  const it = invByName(t.itemName);
+  const spec = t.spec || (it ? it.spec : '') || '';
+  const isBasin = /세면대/.test(t.itemName || '') || (it && itemCat(it) === '세면대');
+  return isBasin ? '세면대' : (parseThick(t.itemName, spec) || '기타');
+}
+/* 두께 칸 줄세우기 — 두꺼운 것부터, 세면대·기타는 뒤로 */
+function thickOrder(a, b) {
+  const n = k => { const m = String(k).match(/^(\d+)T$/); return m ? +m[1] : -1; };
+  const na = n(a), nb = n(b);
+  if (na >= 0 && nb >= 0) return nb - na;
+  if (na >= 0) return -1; if (nb >= 0) return 1;
+  if (a === '세면대') return -1; if (b === '세면대') return 1;
+  return String(a).localeCompare(String(b));
+}
 /* 출고 두께별 장수 집계 (조건: 날짜 predicate). 두께는 명칭·규격에서 파악, 세면대는 별도(개) */
 function shipThickAgg(pred) {
   const m = {}; let total = 0;
   (state.transactions || []).forEach(t => {
     if (t.type !== 'out') return; if (!pred(t.date || '')) return; const j = +t.jang || 0; if (j <= 0) return;
-    const it = (state.inventory || []).find(i => _normName(i.name) === _normName(t.itemName));
-    let spec = t.spec || ''; if (!spec && it) spec = it.spec || '';
-    const isBasin = /세면대/.test(t.itemName || '') || (it && itemCat(it) === '세면대');
-    const key = isBasin ? '세면대' : (parseThick(t.itemName, spec) || '기타');
+    const key = txThickKey(t);
     m[key] = (m[key] || 0) + j; total += j;
   });
   return { total, m };
@@ -3868,12 +3889,12 @@ function renderShip() {
   const monthHebe = monthOut.reduce((a, b) => a + (+b.hebe || 0), 0);
   const _today = todayStr();
   const todayAgg = shipThickAgg(d => d === _today), monthAgg = shipThickAgg(d => d.startsWith(ym));
-  const year = now.getFullYear();
+  const year = shipYear();
   const monthly = Array.from({ length: 12 }, (_, m) => outs.filter(t => (t.date || '').startsWith(year + '-' + String(m + 1).padStart(2, '0'))).reduce((a, b) => a + (+b.hebe || 0), 0));
   const maxM = Math.max(1, ...monthly);
-  const selM = filters.shipStatMonth || '';   // 'YYYY-MM' 선택 시 상위 제품·업체를 그 달로 필터, 없으면 전체
-  const statSrc = selM ? outs.filter(t => (t.date || '').startsWith(selM)) : outs;
-  const selMLabel = selM ? (+selM.slice(5) + '월') : '전체';
+  const selM = filters.shipStatMonth || '';   // 'YYYY-MM' 선택 시 그 달, 없으면 보고 있는 연도 전체
+  const statSrc = outs.filter(t => (t.date || '').startsWith(selM || (year + '-')));
+  const selMLabel = selM ? (+selM.slice(5) + '월') : (year + '년 전체');
   // 상위 제품 (선택 월 기준)
   const byItem = {}; statSrc.forEach(t => { byItem[t.itemName] = (byItem[t.itemName] || 0) + (+t.hebe || 0); });
   const top = Object.entries(byItem).sort((a, b) => b[1] - a[1]).slice(0, 6); const maxT = Math.max(1, ...top.map(t => t[1]));
@@ -3939,7 +3960,12 @@ function renderShip() {
       </div>
     </div>
     <div class="card ship-sec" data-tab="stats" style="${shd('stats')}">
-      <div class="card-h"><h3><i class="ti ti-chart-bar"></i>월별 출고 현황</h3><span class="more" style="font-size:11.5px;color:var(--t3)">${year}년 · 월 클릭 시 아래 분석 필터${selM ? ` <a onclick="filters.shipStatMonth='';renderShip()" style="color:#2f6fed;cursor:pointer">전체보기</a>` : ''}</span></div>
+      <div class="card-h"><h3><i class="ti ti-chart-bar"></i>월별 출고 현황</h3>
+        <span class="more" style="display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--t3)">
+          <button class="btn btn-sm btn-ghost" style="padding:2px 6px" onclick="shipYearNav(-1)"><i class="ti ti-chevron-left"></i></button>
+          <b style="font-size:13px;color:var(--t1)">${year}년</b>
+          <button class="btn btn-sm btn-ghost" style="padding:2px 6px" ${year >= now.getFullYear() ? 'disabled style="padding:2px 6px;opacity:.35"' : ''} onclick="shipYearNav(1)"><i class="ti ti-chevron-right"></i></button>
+          <span>· 월을 누르면 아래 분석이 그 달로</span>${selM ? ` <a onclick="filters.shipStatMonth='';renderShip()" style="color:#2f6fed;cursor:pointer">그 해 전체</a>` : ''}</span></div>
       <div class="mchart">${monthly.map((v, i) => { const mk = year + '-' + String(i + 1).padStart(2, '0'); const on = selM === mk; return `<div class="mcol" onclick="shipPickStatMonth(${i})" style="cursor:pointer"><div class="val">${v ? v.toFixed(0) : ''}</div><div class="bb ${i === now.getMonth() ? 'cur' : ''}" style="height:${Math.max(2, v / maxM * 100)}%;${on ? 'background:#2f6fed;box-shadow:0 0 0 2px #2f6fed inset' : ''}"></div><div class="lb" style="${on ? 'color:#2f6fed;font-weight:800' : ''}">${i + 1}월</div></div>`; }).join('')}</div>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
         <button class="btn btn-sm" onclick="downloadMonthlyChart()"><i class="ti ti-photo"></i> 그래프 이미지</button>
@@ -3947,20 +3973,100 @@ function renderShip() {
       </div>
     </div>
     <div class="card ship-sec" data-tab="stats" style="${shd('stats')}">
-      <div class="card-h"><h3><i class="ti ti-trophy"></i>출고 상위 제품 <span style="font-size:11.5px;font-weight:600;color:${selM ? '#2f6fed' : 'var(--t3)'}">· ${selMLabel}</span></h3>${top.length ? `<span class="more tap" onclick="openTopProducts()" style="cursor:pointer">더보기 <i class="ti ti-chevron-right"></i></span>` : ''}</div>
+      <div class="card-h"><h3><i class="ti ti-layers-difference"></i>두께별 월별 장수 <span style="font-size:11.5px;font-weight:600;color:var(--t3)">· ${year}년</span></h3>
+        <span class="more tap" onclick="openThickMonth()" style="cursor:pointer;color:#2f6fed"><i class="ti ti-table"></i> 크게 보기</span></div>
+      ${thickMonthTableHtml(year)}
+    </div>
+    <div class="card ship-sec" data-tab="stats" style="${shd('stats')}">
+      <div class="card-h"><h3><i class="ti ti-trophy"></i>출고 상위 제품 <span style="font-size:11.5px;font-weight:600;color:${selM ? '#2f6fed' : 'var(--t3)'}">· ${selMLabel}</span></h3>${top.length ? `<span class="more" style="display:inline-flex;gap:8px"><a class="tap" onclick="openMonthMatrix('item')" style="cursor:pointer;color:#2f6fed"><i class="ti ti-calendar-stats"></i> 월별</a><a class="tap" onclick="openTopProducts()" style="cursor:pointer">더보기 <i class="ti ti-chevron-right"></i></a></span>` : ''}</div>
       ${top.length ? top.map(([nm, v], i) => `<div class="abar"><span class="rk">${i + 1}</span><span class="nm">${esc(nm)}</span><span class="tr"><i style="width:${v / maxT * 100}%"></i></span><span class="vv">${v.toFixed(0)}㎡</span></div>`).join('') : `<div class="empty"><i class="ti ti-chart-dots"></i>출고 데이터가 쌓이면 표시됩니다</div>`}
     </div>
     ${isAdmin() ? `<div class="card ship-sec" data-tab="stats" style="${shd('stats')}">
-      <div class="card-h"><h3><i class="ti ti-building-store"></i>거래량 많은 업체 <span style="font-size:11.5px;font-weight:600;color:${selM ? '#2f6fed' : 'var(--t3)'}">· ${selMLabel}</span> <span style="font-size:11px;font-weight:500;color:var(--t3)">(관리자)</span></h3>${topC.length ? `<span class="more tap" onclick="openTopClients()" style="cursor:pointer">더보기 <i class="ti ti-chevron-right"></i></span>` : ''}</div>
+      <div class="card-h"><h3><i class="ti ti-building-store"></i>거래량 많은 업체 <span style="font-size:11.5px;font-weight:600;color:${selM ? '#2f6fed' : 'var(--t3)'}">· ${selMLabel}</span> <span style="font-size:11px;font-weight:500;color:var(--t3)">(관리자)</span></h3>${topC.length ? `<span class="more tap" onclick="openMonthMatrix('client')" style="cursor:pointer;color:#2f6fed"><i class="ti ti-calendar-stats"></i> 월별로 보기 <i class="ti ti-chevron-right"></i></span>` : ''}</div>
       ${topC.length ? topC.map(([nm, v], i) => `<div class="abar"><span class="rk">${i + 1}</span><span class="nm">${esc(nm)}</span><span class="tr"><i style="width:${v / maxC * 100}%"></i></span><span class="vv">${v.toFixed(0)}㎡</span></div>`).join('') : `<div class="empty"><i class="ti ti-chart-dots"></i>출고 데이터가 쌓이면 표시됩니다</div>`}
     </div>` : ''}
     `;
   shipReport();
   requestAnimationFrame(() => { window.scrollTo(0, _shipSY); if (el('r-wrap')) el('r-wrap').scrollTop = _shipTW; });   // 저장 후 자리 유지
 }
-function shipPickStatMonth(mIdx) { const key = new Date().getFullYear() + '-' + String(mIdx + 1).padStart(2, '0'); filters.shipStatMonth = (filters.shipStatMonth === key ? '' : key); renderShip(); }
-function _shipStatOuts() { const sel = filters.shipStatMonth || ''; return state.transactions.filter(t => t.type === 'out' && (!sel || (t.date || '').startsWith(sel))); }
-function shipStatLabel() { const sel = filters.shipStatMonth || ''; return sel ? (+sel.slice(0, 4) + '년 ' + (+sel.slice(5)) + '월') : '전체 기간'; }
+/* ── 두께별 × 월별 장수 표 (12T · 6T … 를 달마다 따로 센다) ── */
+function thickMonthRows(yr) {
+  const m = {};
+  (state.transactions || []).forEach(t => {
+    if (t.type !== 'out') return;
+    const d = t.date || ''; if (!d.startsWith(yr + '-')) return;
+    const j = +t.jang || 0; if (j <= 0) return;
+    const mi = parseInt(d.slice(5, 7), 10) - 1; if (mi < 0 || mi > 11) return;
+    const k = txThickKey(t);
+    (m[k] = m[k] || Array(12).fill(0))[mi] += j;
+  });
+  return Object.keys(m).sort(thickOrder).map(k => ({ key: k, mm: m[k], tot: m[k].reduce((a, b) => a + b, 0) }));
+}
+function thickMonthTableHtml(yr, big) {
+  const rows = thickMonthRows(yr);
+  if (!rows.length) return `<div class="empty" style="padding:18px"><i class="ti ti-chart-dots"></i>${yr}년 출고 내역이 없습니다</div>`;
+  const mTot = Array(12).fill(0); rows.forEach(r => r.mm.forEach((v, i) => mTot[i] += v));
+  const gTot = mTot.reduce((a, b) => a + b, 0);
+  const nf = v => v ? Math.round(v).toLocaleString('ko-KR') : '·';
+  const unit = k => k === '세면대' ? '개' : '장';
+  const body = rows.map(r => `<tr>
+    <td style="position:sticky;left:0;background:#fff;white-space:nowrap"><b>${esc(r.key)}</b></td>
+    ${r.mm.map(v => `<td style="text-align:right;${v ? '' : 'color:#dfe6e2'}">${nf(v)}</td>`).join('')}
+    <td style="text-align:right;font-weight:800;color:var(--gd);background:#f6faf8">${nf(r.tot)}<span style="font-size:10px;font-weight:600;color:var(--t3)">${unit(r.key)}</span></td></tr>`).join('');
+  return `<div class="tbl-wrap" style="overflow-x:auto${big ? ';max-height:58vh;overflow-y:auto' : ''}"><table class="tbl" style="min-width:760px;font-size:12px">
+    <thead><tr><th style="position:sticky;left:0;background:var(--soft);z-index:2">두께</th>
+      ${Array.from({ length: 12 }, (_, i) => `<th style="text-align:right;white-space:nowrap">${i + 1}월</th>`).join('')}
+      <th style="text-align:right">합계</th></tr></thead>
+    <tbody>${body}</tbody>
+    <tfoot><tr style="border-top:2px solid var(--bd2)">
+      <td style="position:sticky;left:0;background:var(--soft);font-weight:800">합계</td>
+      ${mTot.map(v => `<td style="text-align:right;font-weight:700;background:var(--soft)">${nf(v)}</td>`).join('')}
+      <td style="text-align:right;font-weight:800;color:var(--gd);background:#eef6f2">${nf(gTot)}</td></tr></tfoot></table></div>
+    <div style="font-size:11.5px;color:var(--t3);padding:7px 2px">단위 장수 (세면대는 개) · 두께는 자재명·규격에서 자동으로 읽습니다 · 가로로 밀면 12월까지</div>`;
+}
+function openThickMonth() {
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-layers-difference"></i>두께별 월별 장수</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+      <span style="display:inline-flex;align-items:center;gap:6px;background:var(--soft);border-radius:10px;padding:4px 6px">
+        <button class="btn btn-sm btn-ghost" onclick="tmYearNav(-1)"><i class="ti ti-chevron-left"></i></button>
+        <b id="tm-year" style="font-size:14px;min-width:62px;text-align:center">${shipYear()}년</b>
+        <button class="btn btn-sm btn-ghost" onclick="tmYearNav(1)"><i class="ti ti-chevron-right"></i></button></span>
+    </div>
+    <div id="tm-body">${thickMonthTableHtml(shipYear(), true)}</div>
+    <div class="frm-foot"><button class="btn" style="flex:1" onclick="closeModal()">닫기</button>
+      <button class="btn btn-pri" style="flex:1" onclick="tmDownloadXls()"><i class="ti ti-file-spreadsheet"></i>엑셀</button></div>`);
+}
+function tmYearNav(d) {
+  filters.shipStatYear = shipYear() + d;
+  const h = el('tm-year'); if (h) h.textContent = shipYear() + '년';
+  const b = el('tm-body'); if (b) b.innerHTML = thickMonthTableHtml(shipYear(), true);
+}
+function tmDownloadXls() {
+  if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후 다시'); return; }
+  const yr = shipYear(), rows = thickMonthRows(yr);
+  if (!rows.length) { toast('내려받을 자료가 없습니다'); return; }
+  const aoa = [['두께별 월별 출고 장수 — ' + yr + '년'], ['출력일 ' + todayStr()], [],
+  ['두께'].concat(Array.from({ length: 12 }, (_, i) => (i + 1) + '월'), ['합계'])];
+  rows.forEach(r => aoa.push([r.key].concat(r.mm.map(v => Math.round(v)), [Math.round(r.tot)])));
+  const mTot = Array(12).fill(0); rows.forEach(r => r.mm.forEach((v, i) => mTot[i] += v));
+  aoa.push(['합계'].concat(mTot.map(v => Math.round(v)), [Math.round(mTot.reduce((a, b) => a + b, 0))]));
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 12 }].concat(Array.from({ length: 13 }, () => ({ wch: 9 })));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '두께별월별');
+  XLSX.writeFile(wb, '두께별_월별출고_' + yr + '.xlsx');
+  toast('엑셀 저장됨');
+}
+/* 월별·분석에서 보고 있는 연도 — 지난해 자료도 볼 수 있게 */
+function shipYear() { return +(filters.shipStatYear || new Date().getFullYear()); }
+function shipYearNav(d) {
+  const y = shipYear() + d;
+  filters.shipStatYear = y;
+  if (filters.shipStatMonth) filters.shipStatMonth = y + '-' + filters.shipStatMonth.slice(5);   // 고른 달은 그대로, 연도만 옮긴다
+  renderShip();
+}
+function shipPickStatMonth(mIdx) { const key = shipYear() + '-' + String(mIdx + 1).padStart(2, '0'); filters.shipStatMonth = (filters.shipStatMonth === key ? '' : key); renderShip(); }
+function _shipStatOuts() { const p = filters.shipStatMonth || (shipYear() + '-'); return state.transactions.filter(t => t.type === 'out' && (t.date || '').startsWith(p)); }
+function shipStatLabel() { const sel = filters.shipStatMonth || ''; return sel ? (+sel.slice(0, 4) + '년 ' + (+sel.slice(5)) + '월') : (shipYear() + '년 전체'); }
 /* 출고 상위 제품 집계 (규격·건수·장수·헤베) — 헤베 기준 정렬 (선택 월 반영) */
 function shipTopProducts() {
   const m = {};
@@ -3993,17 +4099,128 @@ function openTopProducts() {
     </tbody></table></div>
     <div class="frm-foot"><button class="btn btn-pri" style="flex:1" onclick="closeModal()">닫기</button></div>`);
 }
-function openTopClients() {
-  if (!isAdmin()) { toast('관리자만 볼 수 있습니다'); return; }
-  const list = shipTopClients();
-  openModal(`
-    <div class="sheet-h"><h3><i class="ti ti-building-store"></i>거래량 많은 업체 순위</h3><button class="x" onclick="closeModal()">×</button></div>
-    <div style="font-size:12px;color:var(--t3);margin-bottom:8px">${shipStatLabel()} · 총 ${list.length}개 업체 · 헤베 기준 정렬</div>
-    <div class="tbl-wrap" style="max-height:62vh;overflow:auto"><table class="tbl"><thead><tr><th>#</th><th>거래처</th><th>건수</th><th>장수</th><th>헤베</th></tr></thead><tbody>
-    ${list.length ? list.map((x, i) => `<tr><td>${i + 1}</td><td><b>${esc(x.name)}</b></td><td>${x.cnt}</td><td>${x.jang}장</td><td><b style="color:var(--gd)">${x.hebe.toFixed(1)}㎡</b></td></tr>`).join('') : `<tr><td colspan="5"><div class="empty" style="padding:16px">출고 내역이 없습니다</div></td></tr>`}
-    </tbody></table></div>
-    <div class="frm-foot"><button class="btn btn-pri" style="flex:1" onclick="closeModal()">닫기</button></div>`);
+/* ══════════════════════════════════════════════════════════
+   거래처별 · 자재별 «월별» 출고 표 (1월~12월 한 줄에)
+   ─────────────────────────────────────────────────────────
+   예전에는 고른 달 하나만 합쳐서 보여줬다. 한 해를 통째로 놓고
+   «이 거래처가 몇 월에 얼마나 가져갔는지» 를 한 줄로 볼 수 있게 바꿨다.
+   · 세는 단위: 장수 / 헤베 / 건수 를 눌러서 바꾼다
+   · 연도는 ‹ › 로 넘긴다 (지난해 자료도 그대로 본다)
+   ══════════════════════════════════════════════════════════ */
+let _mmKind = 'client', _mmMetric = 'jang', _mmSearch = '', _mmThick = '';
+function shipMonthMatrix(yr, kind, thick) {
+  const rows = {};
+  (state.transactions || []).forEach(t => {
+    if (t.type !== 'out') return;
+    const d = t.date || ''; if (!d.startsWith(yr + '-')) return;
+    const mi = parseInt(d.slice(5, 7), 10) - 1; if (mi < 0 || mi > 11) return;
+    if (thick && txThickKey(t) !== thick) return;
+    const k = ((kind === 'item' ? t.itemName : t.targetName) || '-').trim() || '-';
+    const r = rows[k] || (rows[k] = { name: k, jang: Array(12).fill(0), hebe: Array(12).fill(0), cnt: Array(12).fill(0) });
+    r.jang[mi] += (+t.jang || 0); r.hebe[mi] += (+t.hebe || 0); r.cnt[mi]++;
+  });
+  const sum = a => a.reduce((x, y) => x + y, 0);
+  return Object.values(rows).map(r => Object.assign(r, { tJang: sum(r.jang), tHebe: sum(r.hebe), tCnt: sum(r.cnt) }))
+    .sort((a, b) => b.tHebe - a.tHebe || b.tJang - a.tJang);
 }
+/* 그 해에 실제로 나간 두께 종류 (많이 나간 순이 아니라 두꺼운 순) */
+function shipThickKeysOfYear(yr) {
+  const s = new Set();
+  (state.transactions || []).forEach(t => { if (t.type === 'out' && (t.date || '').startsWith(yr + '-') && (+t.jang || 0) > 0) s.add(txThickKey(t)); });
+  return [...s].sort(thickOrder);
+}
+function mmSetThick(k) { _mmThick = k; mmRefresh(); }
+function mmSetKind(k) { _mmKind = k; _mmSearch = ''; openMonthMatrix(k); }
+function mmSetMetric(v) { _mmMetric = v; mmRefresh(); }
+function mmSearchChanged(v) { _mmSearch = String(v || '').trim().toLowerCase(); mmRefresh(); }
+function mmYearNav(d) { filters.shipStatYear = shipYear() + d; mmRefresh(); const h = el('mm-year'); if (h) h.textContent = shipYear() + '년'; }
+function mmRefresh() {
+  const b = el('mm-body'); if (b) b.innerHTML = mmTableHtml();
+  const c = el('mm-chips'); if (c) c.innerHTML = mmChipsHtml();
+  const t = el('mm-thick'); if (t) t.innerHTML = mmThickChipsHtml();
+}
+function mmChipsHtml() {
+  const c = (v, l) => `<button class="chip ${_mmMetric === v ? 'active' : ''}" onclick="mmSetMetric('${v}')">${l}</button>`;
+  return c('jang', '장수') + c('hebe', '헤베') + c('cnt', '건수');
+}
+/* 두께 고르기 — 12T·6T 처럼 두께별로 따로 세어 볼 수 있게 */
+function mmThickChipsHtml() {
+  const keys = shipThickKeysOfYear(shipYear());
+  if (keys.length < 2) return '';
+  const c = (v, l) => `<button class="chip ${_mmThick === v ? 'active' : ''}" onclick="mmSetThick('${esc(v)}')">${esc(l)}</button>`;
+  return `<span style="font-size:11px;color:var(--t3);align-self:center;margin-right:2px">두께</span>` + c('', '전체') + keys.map(k => c(k, k)).join('');
+}
+function mmVal(r, i) { return _mmMetric === 'hebe' ? r.hebe[i] : _mmMetric === 'cnt' ? r.cnt[i] : r.jang[i]; }
+function mmTot(r) { return _mmMetric === 'hebe' ? r.tHebe : _mmMetric === 'cnt' ? r.tCnt : r.tJang; }
+function mmFmt(v) { if (!v) return ''; return _mmMetric === 'hebe' ? (Math.round(v * 10) / 10).toLocaleString('ko-KR') : Math.round(v).toLocaleString('ko-KR'); }
+function mmUnit() { return _mmMetric === 'hebe' ? '㎡' : _mmMetric === 'cnt' ? '건' : '장'; }
+function mmTableHtml() {
+  const yr = shipYear();
+  let list = shipMonthMatrix(yr, _mmKind, _mmThick);
+  if (_mmSearch) list = list.filter(r => r.name.toLowerCase().includes(_mmSearch));
+  list = list.slice().sort((a, b) => mmTot(b) - mmTot(a));
+  if (!list.length) return `<div class="empty" style="padding:20px"><i class="ti ti-chart-dots"></i>${yr}년${_mmThick ? ' ' + esc(_mmThick) : ''} 출고 내역이 없습니다</div>`;
+  const mTot = Array(12).fill(0); list.forEach(r => { for (let i = 0; i < 12; i++) mTot[i] += mmVal(r, i); });
+  const gTot = mTot.reduce((a, b) => a + b, 0);
+  const body = list.map((r, n) => `<tr>
+    <td style="position:sticky;left:0;background:#fff;white-space:nowrap;max-width:190px;overflow:hidden;text-overflow:ellipsis" title="${esc(r.name)}"><span style="color:var(--t3);font-size:10.5px">${n + 1}</span> <b>${esc(r.name)}</b></td>
+    ${Array.from({ length: 12 }, (_, i) => { const v = mmVal(r, i); return `<td style="text-align:right;${v ? '' : 'color:#dfe6e2'}">${v ? mmFmt(v) : '·'}</td>`; }).join('')}
+    <td style="text-align:right;font-weight:800;color:var(--gd);background:#f6faf8">${mmFmt(mmTot(r))}</td></tr>`).join('');
+  return `<div class="tbl-wrap" style="max-height:56vh;overflow:auto"><table class="tbl" style="min-width:820px;font-size:12px">
+    <thead><tr>
+      <th style="position:sticky;left:0;background:var(--soft);z-index:2;white-space:nowrap">${_mmKind === 'item' ? '자재' : '거래처'}</th>
+      ${Array.from({ length: 12 }, (_, i) => `<th style="text-align:right;white-space:nowrap">${i + 1}월</th>`).join('')}
+      <th style="text-align:right;white-space:nowrap">합계</th>
+    </tr></thead>
+    <tbody>${body}</tbody>
+    <tfoot><tr style="border-top:2px solid var(--bd2)">
+      <td style="position:sticky;left:0;background:var(--soft);font-weight:800">월 합계</td>
+      ${mTot.map(v => `<td style="text-align:right;font-weight:700;background:var(--soft)">${v ? mmFmt(v) : '·'}</td>`).join('')}
+      <td style="text-align:right;font-weight:800;color:var(--gd);background:#eef6f2">${mmFmt(gTot)}</td>
+    </tr></tfoot></table></div>
+    <div style="font-size:11.5px;color:var(--t3);padding:7px 2px">${yr}년${_mmThick ? ` · <b style="color:#2f6fed">${esc(_mmThick)}</b>만` : ''} · ${_mmKind === 'item' ? '자재' : '거래처'} ${list.length}곳 · 단위 <b>${mmUnit()}</b> · 합계 큰 순 · 가로로 밀면 12월까지 보입니다</div>`;
+}
+function openMonthMatrix(kind) {
+  if (kind === 'client' && !isAdmin()) { toast('관리자만 볼 수 있습니다'); return; }
+  _mmKind = kind || 'client'; _mmThick = '';
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-calendar-stats"></i>${_mmKind === 'item' ? '자재별' : '거래처별'} 월별 출고</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+      <span style="display:inline-flex;align-items:center;gap:6px;background:var(--soft);border-radius:10px;padding:4px 6px">
+        <button class="btn btn-sm btn-ghost" onclick="mmYearNav(-1)"><i class="ti ti-chevron-left"></i></button>
+        <b id="mm-year" style="font-size:14px;min-width:62px;text-align:center">${shipYear()}년</b>
+        <button class="btn btn-sm btn-ghost" onclick="mmYearNav(1)"><i class="ti ti-chevron-right"></i></button></span>
+      <div class="chips" id="mm-chips" style="margin:0">${mmChipsHtml()}</div>
+      ${isAdmin() ? `<div class="chips" style="margin:0 0 0 auto">
+        <button class="chip ${_mmKind === 'client' ? 'active' : ''}" onclick="mmSetKind('client')">거래처</button>
+        <button class="chip ${_mmKind === 'item' ? 'active' : ''}" onclick="mmSetKind('item')">자재</button></div>` : ''}
+    </div>
+    <div class="chips" id="mm-thick" style="margin:0 0 8px">${mmThickChipsHtml()}</div>
+    <div class="search-box" style="margin-bottom:8px"><i class="ti ti-search"></i>
+      <input placeholder="${_mmKind === 'item' ? '자재명' : '거래처명'} 검색" oninput="mmSearchChanged(this.value)" autocomplete="off" lang="ko"></div>
+    <div id="mm-body">${mmTableHtml()}</div>
+    <div class="frm-foot"><button class="btn" style="flex:1" onclick="closeModal()">닫기</button>
+      <button class="btn btn-pri" style="flex:1" onclick="mmDownloadXls()"><i class="ti ti-file-spreadsheet"></i>엑셀</button></div>`);
+}
+function mmDownloadXls() {
+  if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후 다시'); return; }
+  const yr = shipYear();
+  let list = shipMonthMatrix(yr, _mmKind, _mmThick);
+  if (_mmSearch) list = list.filter(r => r.name.toLowerCase().includes(_mmSearch));
+  list = list.slice().sort((a, b) => mmTot(b) - mmTot(a));
+  if (!list.length) { toast('내려받을 자료가 없습니다'); return; }
+  const rnd = v => _mmMetric === 'hebe' ? Math.round(v * 10) / 10 : Math.round(v);
+  const head = [(_mmKind === 'item' ? '자재' : '거래처')].concat(Array.from({ length: 12 }, (_, i) => (i + 1) + '월'), ['합계']);
+  const aoa = [[(_mmKind === 'item' ? '자재별' : '거래처별') + ' 월별 출고 — ' + yr + '년' + (_mmThick ? ' · ' + _mmThick : '') + ' (단위 ' + mmUnit() + ')'], ['출력일 ' + todayStr()], [], head];
+  list.forEach(r => aoa.push([r.name].concat(Array.from({ length: 12 }, (_, i) => rnd(mmVal(r, i))), [rnd(mmTot(r))])));
+  const mTot = Array(12).fill(0); list.forEach(r => { for (let i = 0; i < 12; i++) mTot[i] += mmVal(r, i); });
+  aoa.push(['월 합계'].concat(mTot.map(rnd), [rnd(mTot.reduce((a, b) => a + b, 0))]));
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 24 }].concat(Array.from({ length: 13 }, () => ({ wch: 9 })));
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '월별출고');
+  XLSX.writeFile(wb, (_mmKind === 'item' ? '자재별' : '거래처별') + '_월별출고_' + yr + (_mmThick ? '_' + _mmThick : '') + '_' + mmUnit() + '.xlsx');
+  toast('엑셀 저장됨');
+}
+function openTopClients() { openMonthMatrix('client'); }
 /* ===================================================================
    견적서 — 품목 기본단가 + 거래처별 단가 자동입력, 공급가+VAT10%, 저장·목록·A4·엑셀
    =================================================================== */
@@ -10456,7 +10673,7 @@ function shipMonthlyStats(yr) {
 }
 /* 월별 분석 엑셀 다운로드 (.xls) — 월별 출고 + 두께별 + 상위 제품/업체(선택월 반영) */
 function downloadMonthlyXls() {
-  const yr = new Date().getFullYear();
+  const yr = shipYear();
   const { mHebe, mJang, thick } = shipMonthlyStats(yr);
   const prods = shipTopProducts(), clients = shipTopClients();
   const label = shipStatLabel();
@@ -10489,7 +10706,7 @@ function downloadMonthlyXls() {
 }
 /* 월별 출고 그래프(장수) PNG 다운로드 */
 function downloadMonthlyChart() {
-  const yr = new Date().getFullYear();
+  const yr = shipYear();
   const { mJang } = shipMonthlyStats(yr);
   const dpr = 2, W = 900, H = 440;
   const cv = document.createElement('canvas'); cv.width = W * dpr; cv.height = H * dpr;
