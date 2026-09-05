@@ -4007,7 +4007,8 @@ function thickMonthTableHtml(yr, big) {
   if (!rows.length) return `<div class="empty" style="padding:18px"><i class="ti ti-chart-dots"></i>${yr}년 출고 내역이 없습니다</div>`;
   const mTot = Array(12).fill(0); rows.forEach(r => r.mm.forEach((v, i) => mTot[i] += v));
   const gTot = mTot.reduce((a, b) => a + b, 0);
-  const nf = v => v ? Math.round(v).toLocaleString('ko-KR') : '·';
+  /* 장수는 0.32장처럼 소수가 나올 수 있다(부분 재단) → 딱 떨어지지 않으면 소수 한 자리까지 */
+  const nf = v => v ? (Math.round(v * 10) / 10).toLocaleString('ko-KR') : '·';
   const unit = k => k === '세면대' ? '개' : '장';
   const body = rows.map(r => `<tr>
     <td style="position:sticky;left:0;background:#fff;white-space:nowrap"><b>${esc(r.key)}</b></td>
@@ -4047,9 +4048,10 @@ function tmDownloadXls() {
   if (!rows.length) { toast('내려받을 자료가 없습니다'); return; }
   const aoa = [['두께별 월별 출고 장수 — ' + yr + '년'], ['출력일 ' + todayStr()], [],
   ['두께'].concat(Array.from({ length: 12 }, (_, i) => (i + 1) + '월'), ['합계'])];
-  rows.forEach(r => aoa.push([r.key].concat(r.mm.map(v => Math.round(v)), [Math.round(r.tot)])));
+  const rd = v => Math.round(v * 10) / 10;
+  rows.forEach(r => aoa.push([r.key].concat(r.mm.map(rd), [rd(r.tot)])));
   const mTot = Array(12).fill(0); rows.forEach(r => r.mm.forEach((v, i) => mTot[i] += v));
-  aoa.push(['합계'].concat(mTot.map(v => Math.round(v)), [Math.round(mTot.reduce((a, b) => a + b, 0))]));
+  aoa.push(['합계'].concat(mTot.map(rd), [rd(mTot.reduce((a, b) => a + b, 0))]));
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = [{ wch: 12 }].concat(Array.from({ length: 13 }, () => ({ wch: 9 })));
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '두께별월별');
@@ -4152,7 +4154,7 @@ function mmThickChipsHtml() {
 }
 function mmVal(r, i) { return _mmMetric === 'hebe' ? r.hebe[i] : _mmMetric === 'cnt' ? r.cnt[i] : r.jang[i]; }
 function mmTot(r) { return _mmMetric === 'hebe' ? r.tHebe : _mmMetric === 'cnt' ? r.tCnt : r.tJang; }
-function mmFmt(v) { if (!v) return ''; return _mmMetric === 'hebe' ? (Math.round(v * 10) / 10).toLocaleString('ko-KR') : Math.round(v).toLocaleString('ko-KR'); }
+function mmFmt(v) { if (!v) return ''; return _mmMetric === 'cnt' ? Math.round(v).toLocaleString('ko-KR') : (Math.round(v * 10) / 10).toLocaleString('ko-KR'); }
 function mmUnit() { return _mmMetric === 'hebe' ? '㎡' : _mmMetric === 'cnt' ? '건' : '장'; }
 function mmTableHtml() {
   const yr = shipYear();
@@ -4208,7 +4210,7 @@ function mmDownloadXls() {
   if (_mmSearch) list = list.filter(r => r.name.toLowerCase().includes(_mmSearch));
   list = list.slice().sort((a, b) => mmTot(b) - mmTot(a));
   if (!list.length) { toast('내려받을 자료가 없습니다'); return; }
-  const rnd = v => _mmMetric === 'hebe' ? Math.round(v * 10) / 10 : Math.round(v);
+  const rnd = v => _mmMetric === 'cnt' ? Math.round(v) : Math.round(v * 10) / 10;
   const head = [(_mmKind === 'item' ? '자재' : '거래처')].concat(Array.from({ length: 12 }, (_, i) => (i + 1) + '월'), ['합계']);
   const aoa = [[(_mmKind === 'item' ? '자재별' : '거래처별') + ' 월별 출고 — ' + yr + '년' + (_mmThick ? ' · ' + _mmThick : '') + ' (단위 ' + mmUnit() + ')'], ['출력일 ' + todayStr()], [], head];
   list.forEach(r => aoa.push([r.name].concat(Array.from({ length: 12 }, (_, i) => rnd(mmVal(r, i))), [rnd(mmTot(r))])));
