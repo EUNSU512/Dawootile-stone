@@ -2441,6 +2441,67 @@ function sitesFilteredList() {
   }
   return list;
 }
+/* ══════════════════════════════════════════════════════════
+   엑셀형 표 보기 — 현장 · 세면대 발주
+   카드 보기는 그대로 두고 «표» 버튼을 하나 더 붙였다.
+   고른 보기는 **그 사람 기기에만** 기억된다 (localStorage · 직원마다 취향이 달라서).
+   머리글을 누르면 그 칸으로 정렬한다.
+   ══════════════════════════════════════════════════════════ */
+function _viewPref(k, def) { try { return localStorage.getItem('dws_view_' + k) || def; } catch (e) { return def; } }
+function _viewSave(k, v) { try { localStorage.setItem('dws_view_' + k, v); } catch (e) { } }
+function setSiteView(v) { filters.siteView = v; _viewSave('site', v); renderSites(); }
+function setBasinView(v) { filters.basinView = v; _viewSave('basin', v); renderBasin(); }
+function _thSort(cur, k, label, fn, align) {
+  const nx = cur === k + ':a' ? k + ':d' : k + ':a';
+  const ar = cur === k + ':a' ? ' <i class="ti ti-caret-up-filled" style="font-size:10px"></i>' : cur === k + ':d' ? ' <i class="ti ti-caret-down-filled" style="font-size:10px"></i>' : '';
+  return `<th style="text-align:${align || 'left'};cursor:pointer;white-space:nowrap" onclick="${fn}('${nx}')">${label}${ar}</th>`;
+}
+function _tblSorted(list, cur, getters) {
+  if (!cur) return list;
+  const p = String(cur).split(':'), g = getters[p[0]];
+  if (!g) return list;
+  const out = list.slice().sort((a, b) => {
+    const x = g(a), y = g(b);
+    if (typeof x === 'number' && typeof y === 'number') return x - y;
+    return String(x == null ? '' : x).localeCompare(String(y == null ? '' : y), 'ko');
+  });
+  return p[1] === 'd' ? out.reverse() : out;
+}
+function siteSetSort(v) { filters.siteSort = (filters.siteSort === v ? '' : v); const w = el('sites-grid'); if (w) w.innerHTML = siteTableHtml(sitesFilteredList()); }
+function siteTableHtml(list) {
+  const S = filters.siteSort || '';
+  const stIdx = s => Math.max(0, SITE_STAGES.indexOf(s.stage || '접수'));
+  const matOf = s => (s.items || []).map(it => (it.name || '') + (it.qty ? ' ×' + it.qty : '')).filter(x => x.trim()).join(', ') || (s.materialName || '');
+  const rows = _tblSorted(list, S, {
+    con: s => s.constructDate || '9999-99-99', st: s => stIdx(s), nm: s => s.name || '',
+    cl: s => s.client || '', mg: s => s.manager || '', tm: s => s.team || '',
+    fc: s => s.factory || '', mt: s => matOf(s), ms: s => s.measureDate || '9999-99-99', ot: s => s.orderType || ''
+  });
+  if (!rows.length) return `<div class="empty"><i class="ti ti-building"></i>해당하는 현장이 없습니다</div>`;
+  const body = rows.map(s => {
+    const iss = siteOpenIssues(s.id).length;
+    const done = (s.stage || '') === '완료';
+    return `<tr style="cursor:pointer${done ? ';opacity:.62' : ''}" onclick="openSiteDetail('${s.id}')">
+      <td style="white-space:nowrap"><b>${esc(_shortDate(s.constructDate) || '미정')}</b></td>
+      <td style="white-space:nowrap">${pill(s.stage || '접수')}</td>
+      <td><b>${iss ? `<span title="미해결 이슈 ${iss}건" style="color:var(--red-t)">●</span> ` : ''}${esc(s.name || '-')}</b>${s.region ? `<span style="color:var(--t3);font-size:11px"> · ${esc(s.region)}</span>` : ''}</td>
+      <td style="white-space:nowrap">${esc(s.client || '-')}</td>
+      <td style="white-space:nowrap">${esc(s.manager || '-')}</td>
+      <td style="white-space:nowrap">${esc(s.team || '-')}</td>
+      <td style="white-space:nowrap">${esc(s.factory || '-')}</td>
+      <td style="max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(matOf(s))}">${esc(matOf(s) || '-')}</td>
+      <td style="white-space:nowrap;color:var(--t3)">${esc(_shortDate(s.measureDate) || (s.orderType === '도면' ? '도면' : '미정'))}</td>
+      <td style="white-space:nowrap;color:var(--t3)">${esc(s.orderType || '-')}</td></tr>`;
+  }).join('');
+  const nIss = rows.reduce((a, s) => a + (siteOpenIssues(s.id).length ? 1 : 0), 0);
+  return `<div class="tbl-wrap" style="overflow-x:auto"><table class="tbl" style="min-width:1020px">
+    <thead><tr>
+      ${_thSort(S, 'con', '시공일', 'siteSetSort')}${_thSort(S, 'st', '단계', 'siteSetSort')}${_thSort(S, 'nm', '현장명', 'siteSetSort')}
+      ${_thSort(S, 'cl', '업체', 'siteSetSort')}${_thSort(S, 'mg', '담당', 'siteSetSort')}${_thSort(S, 'tm', '시공팀', 'siteSetSort')}
+      ${_thSort(S, 'fc', '공장', 'siteSetSort')}${_thSort(S, 'mt', '자재', 'siteSetSort')}${_thSort(S, 'ms', '실측일', 'siteSetSort')}${_thSort(S, 'ot', '발주', 'siteSetSort')}
+    </tr></thead><tbody>${body}</tbody></table></div>
+    <div style="font-size:11.5px;color:var(--t3);padding:8px 2px">${rows.length}건${nIss ? ` · <span style="color:var(--red-t)">● 미해결 이슈 ${nIss}건</span>` : ''} · 머리글을 누르면 정렬 · 줄을 누르면 현장 상세</div>`;
+}
 function siteGridHtml(list) {
   return list.length ? list.map(siteCard).join('') : `<div class="empty" style="grid-column:1/-1"><i class="ti ti-building"></i>해당하는 현장이 없습니다<br><button class="btn btn-pri btn-sm" style="margin-top:12px" onclick="openSiteForm()"><i class="ti ti-building-community"></i>현장 등록하기</button></div>`;
 }
@@ -2449,7 +2510,8 @@ function setSiteSearchField(fld) { filters.siteSearchField = fld; renderSites();
 function filterSites() {
   filters.siteSearch = el('site-search') ? el('site-search').value : '';
   const list = sitesFilteredList();
-  if (el('sites-grid')) el('sites-grid').innerHTML = siteGridHtml(list);
+  const tbl = (filters.siteView || _viewPref('site', 'list')) === 'table';
+  if (el('sites-grid')) el('sites-grid').innerHTML = tbl ? siteTableHtml(list) : siteGridHtml(list);
   if (el('sites-count')) el('sites-count').textContent = list.length + '건';
 }
 function renderSites() {
@@ -2457,7 +2519,7 @@ function renderSites() {
   const f = filters.sites;
   if (f === 'issue') { renderIssues(); return; } // 이슈는 전용 화면
   const list = sitesFilteredList();
-  const view = filters.siteView || 'list';
+  const view = filters.siteView || _viewPref('site', 'list');
   el('pg-sites').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-building-community"></i>시공 현장</h2><p>진행 단계를 한눈에 · 탭하면 상세</p></div>
       <button class="btn btn-pri btn-sm" onclick="openSiteForm()"><i class="ti ti-plus"></i>현장 등록</button></div>
@@ -2470,11 +2532,12 @@ function renderSites() {
       ${filters.siteSearch ? `<button class="search-x" onclick="el('site-search').value='';filterSites()"><i class="ti ti-x"></i></button>` : ''}
     </div>
     <div class="chips" style="margin-bottom:8px">
-      <button class="chip ${view === 'cal' ? '' : 'active'}" onclick="filters.siteView='list';renderSites()"><i class="ti ti-list"></i> 목록</button>
-      <button class="chip ${view === 'cal' ? 'active' : ''}" onclick="filters.siteView='cal';renderSites()"><i class="ti ti-calendar"></i> 캘린더</button>
+      <button class="chip ${view === 'list' ? 'active' : ''}" onclick="setSiteView('list')"><i class="ti ti-layout-grid"></i> 카드</button>
+      <button class="chip ${view === 'table' ? 'active' : ''}" onclick="setSiteView('table')"><i class="ti ti-table"></i> 표</button>
+      <button class="chip ${view === 'cal' ? 'active' : ''}" onclick="setSiteView('cal')"><i class="ti ti-calendar"></i> 캘린더</button>
       <button class="chip" style="margin-left:auto" onclick="downloadSiteStatsXls()"><i class="ti ti-file-spreadsheet"></i> 통계 엑셀</button>
     </div>
-    ${view === 'cal' ? staffCalendarHtml(list) : `<div style="font-size:12px;color:var(--t3);margin:2px 0 8px">검색 결과 <b id="sites-count" style="color:var(--t1)">${list.length}건</b></div><div class="site-grid" id="sites-grid">${siteGridHtml(list)}</div>`}`;
+    ${view === 'cal' ? staffCalendarHtml(list) : `<div style="font-size:12px;color:var(--t3);margin:2px 0 8px">검색 결과 <b id="sites-count" style="color:var(--t1)">${list.length}건</b></div><div class="${view === 'table' ? '' : 'site-grid'}" id="sites-grid">${view === 'table' ? siteTableHtml(list) : siteGridHtml(list)}</div>`}`;
 }
 function chip(v, label, cur) { return `<button class="chip ${cur === v ? 'active' : ''}" onclick="filters.sites='${v}';renderSites()">${label}</button>`; }
 /* 직원용 현장 캘린더 (전체 현장 · 공휴일 빨강 · 탭하면 상세) */
@@ -10808,6 +10871,7 @@ function basinFilteredList() {
 function renderBasin() {
   keepScrolls();
   const f = filters.basinTab || 'all';
+  const _bView = filters.basinView || _viewPref('basin', 'card');
   const list = basinFilteredList();
   const chips = BASIN_FILTERS.map(x => {
     const n = (state.basins || []).filter(x.match).length;
@@ -10828,8 +10892,12 @@ function renderBasin() {
     </div>
     <button class="btn btn-sm btn-block" style="margin-bottom:10px;color:#1a56b8;border-color:#b8cdf0" onclick="basinCnUpload()"><i class="ti ti-table-import"></i> 중국 발주표 올리기 <span style="color:var(--t3);font-weight:500">(主恩石材一体盆跟踪表 · 단가·발주번호·발송일 반영)</span></button>
     <button class="btn btn-sm btn-block" style="margin-bottom:10px;color:#b42318;border-color:#e6a9a9" onclick="openBasinIssueForm()"><i class="ti ti-alert-triangle"></i> 세면대 이슈 등록 <span style="color:var(--t3);font-weight:500">(파손·납기지연 등)</span></button>
+    <div class="chips" style="margin-bottom:8px">
+      <button class="chip ${_bView === 'card' ? 'active' : ''}" onclick="setBasinView('card')"><i class="ti ti-layout-grid"></i> 카드</button>
+      <button class="chip ${_bView === 'table' ? 'active' : ''}" onclick="setBasinView('table')"><i class="ti ti-table"></i> 표</button>
+    </div>
     <div style="font-size:12px;color:var(--t3);margin:2px 0 8px">검색 결과 <b id="basin-count" style="color:var(--t1)">${list.length}건</b></div>
-    <div class="site-grid" id="basin-list">${basinListHtml(list)}</div>`;
+    <div class="${_bView === 'table' ? '' : 'site-grid'}" id="basin-list">${_bView === 'table' ? basinTableHtml(list) : basinListHtml(list)}</div>`;
 }
 function basinListHtml(list) {
   if (!list.length) return `<div class="empty"><i class="ti ti-inbox"></i>해당하는 발주가 없습니다</div>`;
@@ -10838,7 +10906,8 @@ function basinListHtml(list) {
 function filterBasin() {
   filters.basinSearch = (el('basin-search') && el('basin-search').value) || '';
   const list = basinFilteredList();
-  if (el('basin-list')) el('basin-list').innerHTML = basinListHtml(list);
+  const tbl = (filters.basinView || _viewPref('basin', 'card')) === 'table';
+  if (el('basin-list')) el('basin-list').innerHTML = tbl ? basinTableHtml(list) : basinListHtml(list);
   if (el('basin-count')) el('basin-count').textContent = list.length + '건';
 }
 function basinPill(stage) {
@@ -10851,6 +10920,48 @@ function basinItems(b) {
   return [];
 }
 function basinTotalQty(b) { return basinItems(b).reduce((a, it) => a + (parseInt(it.qty, 10) || 0), 0); }
+/* 세면대 엑셀형 표 — 품목마다 한 줄 (한 발주에 품목이 여러 개면 줄이 나뉜다) */
+function basinSetSort(v) { filters.basinSort = (filters.basinSort === v ? '' : v); const w = el('basin-list'); if (w) w.innerHTML = basinTableHtml(basinFilteredList()); }
+function basinTableHtml(list) {
+  const S = filters.basinSort || '';
+  const rows = [];
+  list.forEach(b => basinItems(b).forEach((it, i) => rows.push({ b: b, it: it, first: i === 0, n: basinItems(b).length })));
+  const g = {
+    od: r => r.b.orderDate || '9999-99-99', st: r => Math.max(0, BASIN_STAGES.indexOf(r.b.stage || '견적')),
+    vd: r => r.b.vendor || '', sn: r => r.it.stone || '', sp: r => parseInt((String(r.it.spec || '').match(/\d+/) || [0])[0], 10) || 0,
+    qt: r => parseInt(r.it.qty, 10) || 0, qn: r => r.it.quoteNo || '', sd: r => r.b.shipDate || '9999-99-99',
+    ad: r => r.b.address || '', cy: r => _numv(r.it.priceCny)
+  };
+  const sorted = _tblSorted(rows, S, g);
+  if (!sorted.length) return `<div class="empty"><i class="ti ti-bath"></i>해당하는 발주가 없습니다</div>`;
+  let prev = '';
+  const body = sorted.map(r => {
+    const b = r.b, it = r.it;
+    const sameAsPrev = !S && prev === b.id; prev = b.id;
+    const done = (b.stage || '') === '완료';
+    return `<tr style="cursor:pointer${done ? ';opacity:.62' : ''}" onclick="openBasinForm('${b.id}')">
+      <td style="white-space:nowrap">${sameAsPrev ? '' : `<b>${esc(_shortDate(b.orderDate) || '-')}</b>`}</td>
+      <td style="white-space:nowrap">${sameAsPrev ? '' : basinPill(b.stage || '견적')}</td>
+      <td style="white-space:nowrap">${sameAsPrev ? `<span style="color:var(--t3)">〃</span>` : `<b>${esc(b.vendor || '(업체미정)')}</b>${r.n > 1 ? `<span style="color:var(--t3);font-size:10.5px"> ·${r.n}품목</span>` : ''}`}</td>
+      <td style="white-space:nowrap">${esc(it.stone || '-')}</td>
+      <td style="white-space:nowrap">${esc(it.spec || '-')}</td>
+      <td style="text-align:right;white-space:nowrap">${it.qty ? esc(it.qty) + '개' : '-'}</td>
+      <td style="text-align:right;white-space:nowrap;color:var(--t3)">${it.priceCny ? '¥' + fmtWon(Math.round(_numv(it.priceCny))) : '-'}</td>
+      <td style="white-space:nowrap;color:var(--t3);font-size:11px">${esc(it.orderNo || it.quoteNo || '-')}</td>
+      <td style="white-space:nowrap;color:var(--t3)">${sameAsPrev ? '' : esc(_shortDate(done ? b.shipDate : '') || '—')}</td>
+      <td style="max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(b.address || '')}">${sameAsPrev ? '' : (b.address ? esc(b.address) : `<span style="color:var(--t3)">미지정</span>`)}</td></tr>`;
+  }).join('');
+  const tq = sorted.reduce((a, r) => a + (parseInt(r.it.qty, 10) || 0), 0);
+  const cny = sorted.reduce((a, r) => a + _numv(r.it.priceCny) * (parseInt(r.it.qty, 10) || 1), 0);
+  return `<div class="tbl-wrap" style="overflow-x:auto"><table class="tbl" style="min-width:1000px">
+    <thead><tr>
+      ${_thSort(S, 'od', '발주일', 'basinSetSort')}${_thSort(S, 'st', '단계', 'basinSetSort')}${_thSort(S, 'vd', '업체', 'basinSetSort')}
+      ${_thSort(S, 'sn', '석종', 'basinSetSort')}${_thSort(S, 'sp', '규격 (W*D*H)', 'basinSetSort')}${_thSort(S, 'qt', '수량', 'basinSetSort', 'right')}
+      ${_thSort(S, 'cy', '중국단가', 'basinSetSort', 'right')}<th style="white-space:nowrap">발주·견적번호</th>
+      ${_thSort(S, 'sd', '출고일', 'basinSetSort')}${_thSort(S, 'ad', '현장 주소', 'basinSetSort')}
+    </tr></thead><tbody>${body}</tbody></table></div>
+    <div style="font-size:11.5px;color:var(--t3);padding:8px 2px">발주 ${list.length}건 · 품목 ${sorted.length}줄 · 총 ${tq}개${cny > 0 ? ' · 중국 단가 합 ¥' + fmtWon(Math.round(cny)) : ''} · 머리글을 누르면 정렬 · 줄을 누르면 발주 상세</div>`;
+}
 function basinCard(b) {
   const idx = basinStageIndex(b);
   const done = b.stage === '완료';
