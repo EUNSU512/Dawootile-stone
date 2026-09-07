@@ -6021,12 +6021,137 @@ function bankOpenList() {
 /* 견적 목록의 초록 배너에서 바로 — '견적 연결 필요'만 걸러 연다 */
 function bankOpenNeedLink() { filters.bankSearch = ''; filters.bankKind = 'needlink'; filters.bankRange = 'all'; bankOpenList(); }
 function bankListBack() { filters.bankList = false; renderLedger(); }
-function bankSetKind(v) { filters.bankKind = v; renderLedger(); }
-function bankSetRange(v) { filters.bankRange = v; renderLedger(); }
+function bankSetKind(v) { filters.bankKind = v; _bkSel = new Set(); renderLedger(); }    // 화면이 바뀌면 골라둔 건 지운다
+function bankSetRange(v) { filters.bankRange = v; _bkSel = new Set(); renderLedger(); }
 /* 검색은 목록만 다시 그린다 — 화면 전체를 다시 그리면 글자 치던 칸에서 커서가 빠진다 */
 function bankListFilter() {
   const w = el('bk-listwrap'); if (w) w.innerHTML = _bankListInner();
   const s = el('bk-sumbar'); if (s) s.innerHTML = _bankSumInner();
+  bankSelChanged();
+}
+
+/* ── 여러 건 한꺼번에 연결 ─────────────────────────────────
+   한 줄씩 누르는 게 원칙이지만 400건이 넘으면 손이 아프다.
+   체크한 입금들을 «오래된 순»으로 한 번에 배분한다. */
+let _bkSel = new Set();
+/* 체크할 수 있는 줄 = 입금 · 거래처는 붙었고 · 아직 견적에 안 붙은 것 */
+function bankSelectable(t) { return txIsIn(t) && !!txClientOf(t) && !txIsLinked(t); }
+function bankSelToggle(id) { if (_bkSel.has(id)) _bkSel.delete(id); else _bkSel.add(id); bankSelChanged(); }
+function bankSelAll(on) {
+  _bkSel = new Set(on ? _bkRows.filter(bankSelectable).map(t => t.id) : []);
+  const w = el('bk-listwrap'); if (w) w.innerHTML = _bankListInner();
+  bankSelChanged();
+}
+function bankSelChanged() {
+  const b = el('bk-bulkbar'); if (!b) return;
+  const h = _bankBulkInner();
+  b.innerHTML = h; b.style.display = h ? '' : 'none';    // 고를 게 없으면 빈 초록 상자가 남지 않게
+}
+
+/* ★ 입금 여러 건을 한 견적에 겹쳐 넣지 않도록, 견적별 «남은 미수»를 들고 다니며 깎는다.
+   (예전 [결제 반영] 화면의 left[quoteId] 와 같은 장치) */
+function bankBulkPlan(txs) {
+  const left = {}, byClient = {};
+  const listOf = c => (byClient[c] || (byClient[c] = txLinkQuotes(c)));
+  const out = [];
+  txs.slice()
+    .sort((a, b) => String(a.dt || a.date || '').localeCompare(String(b.dt || b.date || '')))   // 오래된 입금부터
+    .forEach(t => {
+      const c = txClientOf(t); if (!c) return;
+      let money = txMoney(t); const plan = [];
+      for (const q of listOf(c)) {
+        if (money <= 0) break;
+        if (left[q.id] === undefined) left[q.id] = q.rem;
+        const add = Math.min(money, left[q.id]);
+        if (add <= 0) continue;
+        plan.push({ quoteId: q.id, docNo: q.docNo || '', amount: add });
+        left[q.id] -= add; money -= add;
+      }
+      if (plan.length) out.push({ tid: t.id, client: c, payer: t.payer || '', money: txMoney(t), plan: plan, rest: money });
+    });
+  return out;
+}
+
+function _bankBulkInner() {
+  const pick = _bkRows.filter(t => _bkSel.has(t.id) && bankSelectable(t));
+  const can = _bkRows.filter(bankSelectable).length;
+  if (!can) return '';
+  if (!pick.length) {
+    return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="font-size:12.5px;color:var(--t2)">이 화면에 <b>견적에 연결할 수 있는 입금 ${can}건</b>이 있습니다</span>
+      <button class="btn btn-sm" style="margin-left:auto" onclick="bankSelAll(true)"><i class="ti ti-checkbox"></i>${can}건 모두 선택</button></div>`;
+  }
+  const plans = bankBulkPlan(pick);
+  const used = plans.reduce((a, m) => a + m.plan.reduce((x, p) => x + p.amount, 0), 0);
+  const rest = plans.reduce((a, m) => a + m.rest, 0) + pick.filter(t => !plans.some(m => m.tid === t.id)).reduce((a, t) => a + txMoney(t), 0);
+  const cls = new Set(plans.map(m => m.client)).size;
+  const skip = pick.length - plans.length;      // 그 거래처 미수가 이미 다 차서 넣을 데가 없는 입금
+  return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="font-size:12.5px"><b style="color:var(--gd)">${pick.length}건 선택</b> <span style="color:var(--t3)">· 거래처 ${cls}곳</span></span>
+      <span style="font-size:12px;color:var(--t2)">견적에 들어갈 돈 <b style="font-size:14.5px;color:var(--gd)">${fmtWon(used)}</b>원${rest > 0 ? ` <span style="color:var(--t3)">· 남는 ${fmtWon(rest)}원은 선입금</span>` : ''}</span>
+      <span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-sm" onclick="bankSelAll(false)">선택 해제</button>
+        <button class="btn btn-sm" onclick="bankSelAll(true)">모두 선택</button>
+        <button class="btn btn-sm btn-pri" onclick="bankBulkRun()" ${plans.length ? '' : 'disabled'}><i class="ti ti-link"></i>${plans.length}건 연결하기</button>
+      </span>
+      ${skip > 0 ? `<div style="width:100%;font-size:11.5px;color:var(--t3);border-top:1px dashed var(--bd);padding-top:6px"><i class="ti ti-info-circle"></i> 고른 것 중 <b>${skip}건</b>은 그 거래처의 안 받은 견적이 이미 다 채워져서 연결되지 않습니다 (선입금으로 남습니다)</div>` : ''}</div>`;
+}
+
+async function bankBulkRun() {
+  if (_txlBusy) return;
+  const pick = _bkRows.filter(t => _bkSel.has(t.id) && bankSelectable(t));
+  const plans = bankBulkPlan(pick);
+  if (!plans.length) { toast('연결할 수 있는 건이 없습니다'); return; }
+  const used = plans.reduce((a, m) => a + m.plan.reduce((x, p) => x + p.amount, 0), 0);
+  const cls = new Set(plans.map(m => m.client)).size;
+  if (!confirm(`거래처 ${cls}곳 · 입금 ${plans.length}건에서 ${fmtWon(used)}원을 견적 결제로 반영할까요?\n\n오래된 견적부터 채웁니다. 미수보다 많은 돈은 넣지 않고 선입금으로 둡니다.\n반영 뒤에도 한 건씩 되돌릴 수 있습니다.`)) return;
+
+  /* 같은 견적에 여러 입금이 들어갈 수 있으므로, 견적마다 «더할 금액»을 먼저 합친다.
+     그래야 한 번의 쓰기로 최종 금액이 정확히 들어간다 (겹쳐 쓰면 마지막 것만 남는다). */
+  const addQ = {};
+  plans.forEach(m => m.plan.forEach(p => { addQ[p.quoteId] = (addQ[p.quoteId] || 0) + p.amount; }));
+  const now = Date.now(), who = (me && me.name) || '', today = todayStr();
+  const ops = [];
+  Object.keys(addQ).forEach(qid => {
+    const q = (state.quotes || []).find(x => x.id === qid); if (!q) return;
+    const total = +q.total || 0, next = Math.min(total, (+q.paidAmount || 0) + addQ[qid]);
+    ops.push({ coll: 'quotes', id: qid, data: { paidAmount: next, paid: total > 0 && next >= total, paidDate: today } });
+  });
+  plans.forEach(m => ops.push({ coll: 'banktx', id: m.tid, data: { client: m.client, alloc: m.plan, appliedAt: now, appliedBy: who } }));
+
+  _txlBusy = true;
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-link"></i>연결 중</h3></div>
+    <div class="banner info" style="font-size:12.5px"><i class="ti ti-loader"></i><span style="flex:1;min-width:0">창을 닫지 마세요. <b id="bk-prog">준비 중…</b></span></div>`);
+  const prog = h => { const e = el('bk-prog'); if (e) e.innerHTML = h; };
+  let done = 0;
+  try {
+    if (CLOUD) {
+      for (let i = 0; i < ops.length; i += 400) {
+        const chunk = ops.slice(i, i + 400);
+        const b = db.batch();
+        chunk.forEach(o => b.update(cref(o.coll).doc(o.id), o.data));
+        await b.commit();
+        done += chunk.length; prog(done + ' / ' + ops.length);
+      }
+    } else {
+      for (const o of ops) { await Store.update(o.coll, o.id, o.data); done++; if (done % 20 === 0) prog(done + ' / ' + ops.length); }
+    }
+    /* 이름으로 추정해서 붙은 거래처는 별칭으로 기억해 둔다 — 다음부터 자동 */
+    const map = Object.assign({}, bankAliasMap()); let newAlias = 0;
+    plans.forEach(m => {
+      const t = (state.banktx || []).find(x => x.id === m.tid); if (!t || t.client) return;
+      const k = t.pkey || _bankKey(t.payer); if (!k || map[k]) return;
+      map[k] = m.client; newAlias++;
+    });
+    if (newAlias) { try { await saveBankAlias(map); } catch (e) { } }
+    _bkSel = new Set();
+    closeModal();
+    toast(`입금 ${plans.length}건 · ${fmtWon(used)}원 반영됨`);
+    setTimeout(renderLedger, 700);
+  } catch (e) {
+    closeModal();
+    toast('실패: ' + ((e && e.message) || e));
+  } finally { _txlBusy = false; }
 }
 
 /* 검색·기간·구분을 모두 적용한 줄 (최신순) */
@@ -6076,12 +6201,15 @@ function _bankListInner() {
   const MAX = 400;
   const shown = _bkRows.slice(0, MAX);
   const cut = _bkRows.length - shown.length;
+  const anySel = _bkRows.some(bankSelectable);
   const row = t => {
     const isOut = txIsOut(t);
     const c = isOut ? '' : txClientOf(t);
     const linked = txIsLinked(t);
     const docs = linked ? t.alloc.map(a => a.docNo).filter(Boolean).join(', ') : '';
+    const canSel = bankSelectable(t);
     return `<tr${isOut ? ' style="background:#fdf6f5"' : ''}>
+      ${anySel ? `<td style="text-align:center">${canSel ? `<input type="checkbox" ${_bkSel.has(t.id) ? 'checked' : ''} onchange="bankSelToggle('${t.id}')" style="width:17px;height:17px;cursor:pointer">` : '<span style="color:var(--bd2)">·</span>'}</td>` : ''}
       <td style="white-space:nowrap;color:var(--t3)">${esc(String(t.dt || t.date || '').slice(2))}</td>
       <td>${isOut ? '<span class="pill p-issue">출금</span>' : '<span class="pill p-done">입금</span>'}</td>
       <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.payer || '')}"><b>${esc(t.payer || '(이름 없음)')}</b>${t.bankNm ? ` <span style="color:var(--t3);font-size:11.5px">${esc(t.bankNm)}</span>` : ''}</td>
@@ -6095,8 +6223,11 @@ function _bankListInner() {
           : `<button class="btn btn-sm btn-ghost" style="padding:2px 7px;font-size:11px" onclick="txLinkOpen('${t.id}')"><i class="ti ti-link"></i>견적 연결</button>`)}</td>
     </tr>`;
   };
+  const nSel = shown.filter(bankSelectable).length;
+  const allOn = nSel > 0 && shown.filter(bankSelectable).every(t => _bkSel.has(t.id));
   return `<div class="tbl-wrap"><table class="tbl">
-      <thead><tr><th style="width:96px">일시</th><th style="width:52px">구분</th><th>입금자 · 적요</th><th style="width:150px">거래처</th>
+      <thead><tr>${anySel ? `<th style="width:34px;text-align:center"><input type="checkbox" ${allOn ? 'checked' : ''} onchange="bankSelAll(this.checked)" title="화면에 뜬 것 모두" style="width:16px;height:16px;cursor:pointer"></th>` : ''}
+        <th style="width:96px">일시</th><th style="width:52px">구분</th><th>입금자 · 적요</th><th style="width:150px">거래처</th>
         <th style="text-align:right;width:104px">금액</th><th style="width:130px">연결 견적</th></tr></thead>
       <tbody>${shown.map(row).join('')}</tbody>
     </table></div>
@@ -6109,7 +6240,8 @@ function bankListHtml() {
   const per = all.length ? [all.map(t => t.date || '').filter(Boolean).sort()[0], all.map(t => t.date || '').filter(Boolean).sort().slice(-1)[0]] : null;
   const kc = (v, l) => `<button class="chip ${(filters.bankKind || 'all') === v ? 'active' : ''}" onclick="bankSetKind('${v}')">${l}</button>`;
   const rc = (v, l) => `<button class="chip ${(filters.bankRange || 'all') === v ? 'active' : ''}" onclick="bankSetRange('${v}')">${l}</button>`;
-  const listHtml = _bankListInner();     // ★ 먼저 만들어야 _bkRows 가 채워진다 (합계 바가 이걸 본다)
+  const listHtml = _bankListInner();     // ★ 먼저 만들어야 _bkRows 가 채워진다 (합계 바·일괄 연결 바가 이걸 본다)
+  const bulkHtml = _bankBulkInner();
   return `
     <div class="ph"><div><h2><i class="ti ti-building-bank"></i>통장 내역</h2>
       <p>앱에 저장된 은행 거래 ${all.length}건${per ? ` · ${esc(per[0])} ~ ${esc(per[1])}` : ''}</p></div>
@@ -6136,6 +6268,7 @@ function bankListHtml() {
     </div>
 
     <div class="card" style="padding:10px 13px;margin-bottom:10px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap" id="bk-sumbar">${_bankSumInner()}</div>
+    <div class="card" id="bk-bulkbar" style="padding:10px 13px;margin-bottom:10px;border:1.5px solid var(--gd);background:var(--gl2,#f4fbf8)${bulkHtml ? '' : ';display:none'}">${bulkHtml}</div>
     <div id="bk-listwrap">${listHtml}</div>`;
 }
 
