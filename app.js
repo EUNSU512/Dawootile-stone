@@ -5785,8 +5785,15 @@ function bankCandidates(payer, amount) {
    은행 입금 저장소 (banktx) — 가져온 입금은 앱에 남겨두고 원장에서 계속 본다
    ══════════════════════════════════════════════════════════ */
 /* 입금 한 건의 고유 문서 id — 같은 건을 두 번 가져와도 덮어쓰기만 되고 늘어나지 않음 */
+/* ★★ 2026-09-07 버그 수정 — 같은 입금이 두 번 저장되던 원인
+   예전에는 이름 앞부분에 팝빌의 `x.accountID` 를 썼는데, 이건 계좌 번호가 아니라
+   **수집 요청마다 새로 붙는 번호**다. 그래서 8월 1~25일을 두 번 가져오자
+   같은 거래가 026082322…_20260801_1 과 026083114…_20260801_1 두 개로 저장돼
+   입금이 5억9천만원어치 겹쳐 잡혔다.
+   지금은 **우리가 조회한 계좌번호**를 쓴다 — 같은 계좌·같은 날·같은 일련번호면
+   몇 번을 다시 가져와도 문서 하나로 덮어쓴다. */
 function _txDocId(x, accNo) {
-  const a = String(x.accountID || accNo || 'acc').replace(/[^0-9A-Za-z]/g, '');
+  const a = String(accNo || x.accountNumber || 'acc').replace(/[^0-9A-Za-z]/g, '');
   const d = String(x.trdate || '').replace(/[^0-9]/g, '');
   const s = String(x.trserial == null ? '0' : x.trserial).replace(/[^0-9]/g, '');
   return (a + '_' + d + '_' + s).slice(0, 120);
