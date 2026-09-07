@@ -1018,11 +1018,43 @@ async function importClientsFull(input) {
   } catch (e) { toast('업로드 실패: ' + ((e && e.message) || e)); }
 }
 async function delClientC(id) { if (!isAdmin()) { toast('관리자만 삭제할 수 있습니다'); return; } const c = (state.clients || []).find(x => x.id === id); if (!c) return; if (!confirm((c.value || '') + ' 거래처를 삭제할까요?')) return; const _box = el('cl-list'); const _sc = _box ? _box.scrollTop : 0; await Store.remove('clients', id); filters.clientDetail = ''; toast('삭제됨'); setTimeout(() => { render(); const b = el('cl-list'); if (b) b.scrollTop = _sc; }, 300); }
+/* ── 거래처 목록도 조금씩 나눠 그린다 (2026-09-07) ──────────────
+   거래처가 953곳이라 한 번에 그리면 HTML 이 1.2MB · 0.86초가 걸렸다.
+   견적 목록과 같은 방식으로 60곳씩 보여주고, 끝까지 내리면 더 붙인다. */
+const CL_PAGE_STEP = 60;
+let _clPage = CL_PAGE_STEP, _clFlat = null, _clSig = '';
+function _clMoreInner(total) {
+  return `<button class="btn btn-block" onclick="clientMore()"><i class="ti ti-chevron-down"></i> 더 보기 <span style="color:var(--t3);font-weight:500">· ${total}곳 중 ${_clPage}곳</span></button>`;
+}
+function clientMore() {
+  const box = el('cl-list'); if (!box || !_clFlat) return;
+  const from = _clPage, to = Math.min(_clFlat.length, _clPage + CL_PAGE_STEP);
+  if (from >= to) return;
+  const html = _clFlat.slice(from, to).map(clientRowHtml).join('');
+  const more = el('cl-more');
+  if (more) more.insertAdjacentHTML('beforebegin', html); else box.insertAdjacentHTML('beforeend', html);
+  _clPage = to;
+  if (more) { if (_clPage >= _clFlat.length) more.remove(); else more.innerHTML = _clMoreInner(_clFlat.length); }
+}
+function clientListScroll(box) {
+  if (!box || !_clFlat || _clPage >= _clFlat.length) return;
+  if (box.scrollTop + box.clientHeight < box.scrollHeight - 500) return;
+  clientMore();
+}
 function clientRowsHtml() {
   const q = (filters.clientSearch || '').trim().toLowerCase();
   let list = (state.clients || []).slice().sort((a, b) => (a.value || '').localeCompare(b.value || ''));
   if (q) list = list.filter(c => (c.value || '').toLowerCase().includes(q));
-  return list.length ? list.map(c => {
+  if (q !== _clSig) { _clSig = q; _clPage = CL_PAGE_STEP; }   // 검색어가 바뀌면 처음 60곳부터
+  _clFlat = list;
+  if (_clPage > list.length) _clPage = Math.max(CL_PAGE_STEP, Math.min(_clPage, list.length));
+  const shown = list.slice(0, _clPage);
+  return list.length
+    ? shown.map(clientRowHtml).join('') + (list.length > _clPage ? `<div id="cl-more" style="margin:8px 2px 4px">${_clMoreInner(list.length)}</div>` : '')
+    : `<div class="empty"><i class="ti ti-users"></i>${q ? '검색 결과가 없습니다' : '거래처가 없습니다'}</div>`;
+}
+function clientRowHtml(c) {
+  {
     const st = clientStats(c.value); const ti = c.taxInfo || {};
     return `<div class="card" style="margin-bottom:8px;padding:11px 13px;cursor:pointer" onclick="openClientDetail('${c.id}')">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
@@ -1035,13 +1067,17 @@ function clientRowsHtml() {
           <i class="ti ti-chevron-right" style="color:var(--t3)"></i>
         </div>
       </div></div>`;
-  }).join('') : `<div class="empty"><i class="ti ti-users"></i>${q ? '검색 결과가 없습니다' : '거래처가 없습니다'}</div>`;
+  }
 }
 function renderClients() {
   keepScrolls();
   if (filters.ledger) { renderLedger(); return; }        // ★ 거래처 원장 (2026-09-07 이 탭으로 옮김)
   if (filters.clientDetail) { renderClientDetail(); return; }
-  const allUnpaid = (state.clients || []).reduce((a, c) => a + clientStats(c.value).unpaid, 0);
+  /* ★ 총 미수금 — 예전엔 거래처 953곳마다 견적 466장을 훑어 0.3초가 걸렸다.
+     원장 계산표(clientMoneyMap)를 한 번 만들어 합치면 같은 숫자가 바로 나온다.
+     (실측 대조: 양쪽 다 158,308,041 · 상호가 중복 등록돼도 두 번 세지 않는다) */
+  const _mm = clientMoneyMap();
+  const allUnpaid = Object.keys(_mm).reduce((a, k) => a + (_mm[k].rem || 0), 0);
   const rows = clientRowsHtml();
   el('pg-clients').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-users"></i>거래처 관리</h2><p>유형 · 사업자정보 · 미수/매출</p></div>
@@ -1062,7 +1098,7 @@ function renderClients() {
       <input type="file" id="cl-fullfile" accept=".xlsx,.xls" style="display:none" onchange="importClientsFull(this)">
     </div>
     <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i><input id="cl-search" placeholder="거래처 검색" value="${esc(filters.clientSearch || '')}" oninput="clientsFilter(this.value)" autocomplete="off" lang="ko"></div>
-    <div data-keepscroll id="cl-list" style="max-height:58vh;overflow:auto;padding-right:2px">${rows}</div>`;
+    <div data-keepscroll id="cl-list" onscroll="clientListScroll(this)" style="max-height:58vh;overflow:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${rows}</div>`;
 }
 function renderClientDetail() {
   const c = (state.clients || []).find(x => x.id === filters.clientDetail); if (!c) { filters.clientDetail = ''; renderClients(); return; }
