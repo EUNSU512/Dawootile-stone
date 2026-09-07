@@ -8356,7 +8356,7 @@ const ACCT_RULES = [
   ['급여', /급여|월급|임금|주급|일당/],
   ['상여금', /상여|성과급|보너스/],
   ['복리후생비', /복리|식대|식비|경조|회식비|건강보험|국민연금|고용보험|산재|사대보험|4대보험/],
-  ['공과금', /전기|수도|가스|통신|인터넷|한전|도시가스|kt|skt|lg유플|전화/i],
+  ['공과금', /전기요금|전기료|수도요금|수도료|도시가스|가스요금|한전|통신비|인터넷요금|전화요금|관리비|kt\s|skt\s|lg유플/i],
   ['임차료', /임차|월세|임대|보증금|렌트|리스|주차/],
   ['세금', /부가세|법인세|소득세|원천|국세|지방세|세무|세금/],
   ['지급수수료', /수수료|이자|카드|증지|법무|회계|보험료|용역/],
@@ -8375,7 +8375,9 @@ function acctOf(t) {
   const k = _acctKey((t && t.payer) || '');
   const al = acctAliasMap()[k];
   if (al) return { cat: al, sure: true };
-  const hay = [(t && t.payer) || '', (t && t.way) || '', (t && t.bankNm) || ''].join(' ');
+  /* ★ 적요(상대방 이름)만 본다. 이체 수단(way)에는 '인터넷'·'펌뱅킹'이 들어 있어서
+     같이 보면 인터넷뱅킹 이체가 전부 공과금으로 잡힌다 (실측 45건 7.3억 오분류). */
+  const hay = String((t && t.payer) || '');
   for (const [cat, re] of ACCT_RULES) { if (re.test(hay)) return { cat: cats.indexOf(cat) >= 0 ? cat : '기타', sure: false }; }
   return { cat: '', sure: false };     // 미분류 — 화면에서 따로 모아 보여준다
 }
