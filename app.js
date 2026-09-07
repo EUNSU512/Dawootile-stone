@@ -819,8 +819,8 @@ function go(t) {
   if (isRestrictedRole()) t = 'stock';   // 고객·시공팀은 전용 화면만
   else if (!tabAllowed(t)) t = 'home';   // 접근 권한 없는 메뉴 차단
   filters.costEdit = '';   // 원가 입력 폼은 메뉴 이동 시 항상 닫기
-  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; filters.cutSim = false; filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; filters.bankList = false;  filters.billEdit = false; _billEdit = null; }   // 견적 화면 상태 초기화
-  if (t !== 'clients') filters.clientDetail = '';
+  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; filters.cutSim = false; filters.bankList = false; filters.billEdit = false; _billEdit = null; }   // 견적 화면 상태 초기화
+  if (t !== 'clients') { filters.clientDetail = ''; filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; }   // 거래처 원장은 거래처 탭 것
   tab = t;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-i').forEach(n => n.classList.toggle('active', n.dataset.tab === t));
@@ -998,11 +998,13 @@ function clientRowsHtml() {
 }
 function renderClients() {
   keepScrolls();
+  if (filters.ledger) { renderLedger(); return; }        // ★ 거래처 원장 (2026-09-07 이 탭으로 옮김)
   if (filters.clientDetail) { renderClientDetail(); return; }
   const allUnpaid = (state.clients || []).reduce((a, c) => a + clientStats(c.value).unpaid, 0);
   const rows = clientRowsHtml();
   el('pg-clients').innerHTML = `
-    <div class="ph"><div><h2><i class="ti ti-users"></i>거래처 관리</h2><p>유형 · 사업자정보 · 미수/매출</p></div></div>
+    <div class="ph"><div><h2><i class="ti ti-users"></i>거래처 관리</h2><p>유형 · 사업자정보 · 미수/매출</p></div>
+      ${canLedger() ? `<button class="btn btn-sm btn-pri" onclick="openLedger()"><i class="ti ti-book"></i>거래처 원장</button>` : ''}</div>
     <div class="stat-grid" style="grid-template-columns:repeat(2,1fr);margin-bottom:12px">
       <div class="stat"><div class="ic b"><i class="ti ti-users"></i></div><div class="v">${(state.clients || []).length}</div><div class="l">거래처</div></div>
       <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(allUnpaid)}</div><div class="l">총 미수금</div></div>
@@ -6066,16 +6068,16 @@ function _pmBanner() {
 }
 
 function bankOpenList() {
-  if (!canLedger()) { toast('거래처 원장 권한이 없습니다 — 관리자에게 문의하세요'); return; }
+  if (!canLedger()) { toast('통장 내역 권한이 없습니다 — 관리자에게 문의하세요'); return; }
   qListSave();
-  filters.ledger = true; filters.bankList = true; filters.ledgerClient = ''; filters.ledgerFix = false;
-  if (!filters.bankKind) filters.bankKind = 'all';
+  filters.bankList = true; filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false;
+  if (!filters.bankKind) filters.bankKind = 'in';        // ★ 출금은 정산 탭으로 뺐다 — 여기는 입금만
   if (!filters.bankRange) filters.bankRange = 'all';
   go('quote');
 }
 /* 견적 목록의 초록 배너에서 바로 — '견적 연결 필요'만 걸러 연다 */
 function bankOpenNoClient() { filters.bankSearch = ''; filters.bankKind = 'noclient'; filters.bankRange = 'all'; bankOpenList(); }
-function bankListBack() { filters.bankList = false; renderLedger(); }
+function bankListBack() { filters.bankList = false; renderQuote(); qListRestore(); }
 function bankSetKind(v) { filters.bankKind = v; renderLedger(); }
 function bankSetRange(v) { filters.bankRange = v; renderLedger(); }
 /* 검색은 목록만 다시 그린다 — 화면 전체를 다시 그리면 글자 치던 칸에서 커서가 빠진다 */
@@ -6094,10 +6096,8 @@ function bankRows() {
   const low = qy.toLowerCase();
   const amtP = qy ? quoteAmtPred(qy) : null;      // 220만 · 1000만~3000만 · 500만이상 같은 금액 검색
   const list = (state.banktx || []).filter(t => {
-    if (!seeOut && txIsOut(t)) return false;                          // 출금은 관리자만
-    if (kind === 'in' && !txIsIn(t)) return false;
-    if (kind === 'out' && !txIsOut(t)) return false;
-    if (kind === 'noclient' && (!txIsIn(t) || txClientOf(t))) return false;
+    if (!txIsIn(t)) return false;                    // ★ 출금은 정산 › 출금 에서 본다 (관리자 전용)
+    if (kind === 'noclient' && txClientOf(t)) return false;
     const d = t.date || '';
     if (d < R.sd || d > R.ed) return false;
     if (!qy) return true;
@@ -6112,14 +6112,10 @@ function bankRows() {
 }
 
 function _bankSumInner() {
-  const inn = _bkRows.filter(txIsIn), out = _bkRows.filter(txIsOut);
-  const si = inn.reduce((a, t) => a + txMoney(t), 0);
-  const so = out.reduce((a, t) => a + txMoney(t), 0);
-  return `<span style="font-size:12.5px;color:var(--t2)"><b>${_bkRows.length}건</b></span>
-    <span style="margin-left:auto;display:flex;gap:14px;flex-wrap:wrap;align-items:baseline">
-      <span style="font-size:12px;color:var(--t3)">입금 <b style="font-size:15px;color:var(--gd);font-weight:800">${fmtWon(si)}</b><span style="font-size:11px"> · ${inn.length}건</span></span>
-      ${canSeeOut() ? `<span style="font-size:12px;color:var(--t3)">출금 <b style="font-size:15px;color:var(--red-t);font-weight:800">${fmtWon(so)}</b><span style="font-size:11px"> · ${out.length}건</span></span>` : ''}
-    </span>`;
+  const si = _bkRows.reduce((a, t) => a + txMoney(t), 0);
+  const nc = _bkRows.filter(txNoClient).length;
+  return `<span style="font-size:12.5px;color:var(--t2)"><b>${_bkRows.length}건</b>${nc ? ` <span style="color:var(--amber-t)">· 거래처 미지정 ${nc}건</span>` : ''}</span>
+    <span style="margin-left:auto;font-size:12px;color:var(--t3)">입금 합계 <b style="font-size:15px;color:var(--gd);font-weight:800">${fmtWon(si)}</b>원</span>`;
 }
 
 function _bankListInner() {
@@ -6131,16 +6127,15 @@ function _bankListInner() {
   const shown = _bkRows.slice(0, MAX);
   const cut = _bkRows.length - shown.length;
   const row = t => {
-    const isOut = txIsOut(t);
-    const c = isOut ? '' : txClientOf(t);
-    return `<tr${isOut ? ' style="background:#fdf6f5"' : ''}>
+    const c = txClientOf(t);
+    return `<tr>
       <td style="white-space:nowrap;color:var(--t3)">${esc(String(t.dt || t.date || '').slice(2))}</td>
-      <td>${isOut ? '<span class="pill p-issue">출금</span>' : (t.manual ? '<span class="pill p-prog">직접</span>' : '<span class="pill p-done">입금</span>')}</td>
+      <td>${t.manual ? '<span class="pill p-prog">직접</span>' : '<span class="pill p-done">입금</span>'}</td>
       <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.payer || '')}"><b>${esc(t.payer || '(이름 없음)')}</b>${t.bankNm ? ` <span style="color:var(--t3);font-size:11.5px">${esc(t.bankNm)}</span>` : ''}</td>
-      <td style="max-width:210px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${isOut ? '<span style="color:var(--bd2)">·</span>'
-        : (c ? `<button class="pill p-gray" style="border:none;cursor:pointer;max-width:150px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle" onclick="openLedgerFor(${JSON.stringify(c).replace(/"/g, '&quot;')})" title="이 거래처 원장 보기">${esc(c)}</button><button class="btn btn-sm btn-ghost" style="padding:1px 5px;margin-left:3px" title="거래처 바꾸기" onclick="txReassign('${t.id}')"><i class="ti ti-switch-horizontal"></i></button>`
-             : `<button class="btn btn-sm btn-ghost" style="padding:2px 8px;font-size:11px;color:var(--gd);border-color:var(--gd)" onclick="txReassign('${t.id}')"><i class="ti ti-link"></i>거래처 지정</button>`)}</td>
-      <td style="text-align:right;white-space:nowrap;font-weight:700;color:${isOut ? 'var(--red-t)' : 'var(--gd)'}">${isOut ? '−' : ''}${fmtWon(txMoney(t))}</td>
+      <td style="max-width:210px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c
+        ? `<button class="pill p-gray" style="border:none;cursor:pointer;max-width:150px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle" onclick="openLedgerFor(${JSON.stringify(c).replace(/"/g, '&quot;')})" title="이 거래처 원장 보기">${esc(c)}</button><button class="btn btn-sm btn-ghost" style="padding:1px 5px;margin-left:3px" title="거래처 바꾸기" onclick="txReassign('${t.id}')"><i class="ti ti-switch-horizontal"></i></button>`
+        : `<button class="btn btn-sm btn-ghost" style="padding:2px 8px;font-size:11px;color:var(--gd);border-color:var(--gd)" onclick="txReassign('${t.id}')"><i class="ti ti-link"></i>거래처 지정</button>`}</td>
+      <td style="text-align:right;white-space:nowrap;font-weight:700;color:var(--gd)">${fmtWon(txMoney(t))}</td>
     </tr>`;
   };
   return `<div class="tbl-wrap"><table class="tbl">
@@ -6154,22 +6149,22 @@ function _bankListInner() {
 
 function bankListHtml() {
   const seeOut = canSeeOut();
-  const all = (state.banktx || []).filter(t => seeOut || txIsIn(t));
+  const all = (state.banktx || []).filter(txIsIn);
   const per = all.length ? [all.map(t => t.date || '').filter(Boolean).sort()[0], all.map(t => t.date || '').filter(Boolean).sort().slice(-1)[0]] : null;
   const kc = (v, l) => `<button class="chip ${(filters.bankKind || 'all') === v ? 'active' : ''}" onclick="bankSetKind('${v}')">${l}</button>`;
   const rc = (v, l) => `<button class="chip ${(filters.bankRange || 'all') === v ? 'active' : ''}" onclick="bankSetRange('${v}')">${l}</button>`;
   const listHtml = _bankListInner();     // ★ 먼저 만들어야 _bkRows 가 채워진다 (합계 바·일괄 연결 바가 이걸 본다)
   return `
     <div class="ph"><div><h2><i class="ti ti-building-bank"></i>통장 내역</h2>
-      <p>앱에 저장된 은행 거래 ${all.length}건${per ? ` · ${esc(per[0])} ~ ${esc(per[1])}` : ''}</p></div>
+      <p>통장에 들어온 입금 ${all.length}건${per ? ` · ${esc(per[0])} ~ ${esc(per[1])}` : ''}</p></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         ${isAdmin() ? `<button class="btn btn-sm" onclick="openBankSync()"><i class="ti ti-download"></i>가져오기</button>` : ''}
         <button class="btn btn-sm" onclick="bankXlsx()"><i class="ti ti-file-spreadsheet"></i>엑셀</button>
-        <button class="btn btn-sm" onclick="bankListBack()"><i class="ti ti-arrow-left"></i>원장</button></div></div>
+        <button class="btn btn-sm" onclick="bankListBack()"><i class="ti ti-arrow-left"></i>견적 목록</button></div></div>
 
     <div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i>
-      <span style="flex:1;min-width:0">통장에 찍힌 그대로 저장한 내역입니다. <b>통장 잔액은 저장하지 않습니다.</b>
-      ${seeOut ? '출금 내역은 <b>관리자에게만</b> 보입니다.' : '출금 내역은 관리자만 볼 수 있습니다.'}</span></div>
+      <span style="flex:1;min-width:0">통장에 찍힌 그대로 저장한 <b>입금</b> 내역입니다. <b>통장 잔액은 저장하지 않습니다.</b>
+      ${seeOut ? '<b>출금</b>은 <b>정산 › 출금</b>에서 계정과목별로 봅니다.' : '출금 내역은 관리자만 볼 수 있습니다.'}</span></div>
 
     <div class="search-box" style="margin-bottom:9px"><i class="ti ti-search"></i>
       <input id="bk-search" placeholder="입금자·거래처·견적번호·금액 검색 (예: 신성, 220만, 1000만~3000만)" value="${esc(filters.bankSearch || '')}"
@@ -6177,7 +6172,7 @@ function bankListHtml() {
 
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
       <span style="font-size:11px;color:var(--t3);width:38px;flex:none">구분</span>
-      ${kc('all', '전체')}${kc('in', '입금')}${seeOut ? kc('out', '출금') : ''}${kc('noclient', '거래처 미지정')}
+      ${kc('all', '전체')}${kc('in', '입금')}${kc('noclient', '거래처 미지정')}
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
       <span style="font-size:11px;color:var(--t3);width:38px;flex:none">기간</span>
@@ -6194,20 +6189,18 @@ function bankXlsx() {
   const rows = _bkRows.length ? _bkRows : bankRows();
   if (!rows.length) { toast('내려받을 내역이 없습니다'); return; }
   const R = ledgerRange(filters.bankRange || 'all');
-  const head = ['일시', '구분', '입금자·적요', '은행', '거래처', '입금액', '출금액'];
-  const aoa = [['통장 내역 — ' + R.label + ((filters.bankSearch || '').trim() ? ' · 검색 «' + filters.bankSearch + '»' : '')],
-  ['출력일 ' + todayStr() + ' · ' + rows.length + '건 · 통장 잔액은 포함하지 않습니다'], [], head];
+  const head = ['일시', '구분', '입금자·적요', '은행', '거래처', '입금액'];
+  const aoa = [['통장 입금 내역 — ' + R.label + ((filters.bankSearch || '').trim() ? ' · 검색 «' + filters.bankSearch + '»' : '')],
+  ['출력일 ' + todayStr() + ' · ' + rows.length + '건 · 통장 잔액·출금은 포함하지 않습니다'], [], head];
   rows.forEach(t => {
     const isOut = txIsOut(t);
-    aoa.push([t.dt || t.date || '', isOut ? '출금' : (t.manual ? '직접' : '입금'), t.payer || '', t.bankNm || '',
-      isOut ? '' : txClientOf(t), isOut ? '' : txMoney(t), isOut ? txMoney(t) : '']);
+    aoa.push([t.dt || t.date || '', t.manual ? '직접' : '입금', t.payer || '', t.bankNm || '', txClientOf(t), txMoney(t)]);
   });
-  const si = rows.filter(txIsIn).reduce((a, t) => a + txMoney(t), 0);
-  const so = rows.filter(txIsOut).reduce((a, t) => a + txMoney(t), 0);
+  const si = rows.reduce((a, t) => a + txMoney(t), 0);
   aoa.push([]);
-  aoa.push(['합계', '', '', '', '', si, so]);
+  aoa.push(['합계', '', '', '', '', si]);
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{ wch: 17 }, { wch: 6 }, { wch: 24 }, { wch: 12 }, { wch: 22 }, { wch: 13 }, { wch: 13 }];
+  ws['!cols'] = [{ wch: 17 }, { wch: 6 }, { wch: 26 }, { wch: 12 }, { wch: 22 }, { wch: 14 }];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '통장내역');
   XLSX.writeFile(wb, '통장내역_' + todayStr() + '.xlsx');
   toast('엑셀 저장됨');
@@ -6420,8 +6413,8 @@ function openLedgerFor(c) {
   filters.ledger = true; filters.ledgerClient = (c || '').trim(); filters.ledgerRange = 'all'; filters.ledgerFix = false; filters.bankList = false; filters.ledgerCat = 'all';
   go('quote');
 }
-function openLedger() { if (!canLedger()) { toast('거래처 원장 권한이 없습니다 — 관리자에게 문의하세요'); return; } qListSave(); filters.ledger = true; filters.ledgerClient = ''; go('quote'); }
-function ledgerClose() { filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; filters.bankList = false; renderQuote(); qListRestore(); }
+function openLedger() { if (!canLedger()) { toast('거래처 원장 권한이 없습니다 — 관리자에게 문의하세요'); return; } filters.ledger = true; filters.ledgerClient = ''; filters.bankList = false; go('clients'); }
+function ledgerClose() { filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; renderClients(); }
 function ledgerSetRange(v) { filters.ledgerRange = v; renderLedger(); }
 function ledgerSetSort(v) { filters.ledgerSort = v; renderLedger(); }
 function ledgerSetCat(v) { filters.ledgerCat = v; renderLedger(); }
@@ -6429,8 +6422,7 @@ function ledgerOpen(c) { filters.ledgerClient = c; filters.ledgerCat = 'all'; fi
 function ledgerBack() { filters.ledgerClient = ''; filters.ledgerFix = false; filters.ledgerCat = 'all'; renderLedger(); }
 function ledgerFix() { filters.ledgerFix = true; filters.ledgerClient = ''; renderLedger(); }
 function renderLedger() {
-  const root = el('pg-quote'); if (!root) return;
-  if (filters.bankList) { root.innerHTML = bankListHtml(); return; }
+  const root = el('pg-clients'); if (!root) return;      // ★ 거래처 탭으로 옮김 (2026-09-07)
   if (filters.ledgerFix) { root.innerHTML = ledgerFixHtml(); return; }
   if (filters.ledgerClient) { root.innerHTML = ledgerDetailHtml(filters.ledgerClient); return; }
   const A = ledgerAgg();
@@ -6456,9 +6448,8 @@ function renderLedger() {
   root.innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-book"></i>거래처 원장</h2><p>매출 · 결제 · 미수를 자동으로 계산합니다</p></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="btn btn-sm" onclick="bankOpenList()"><i class="ti ti-list-search"></i>통장 내역</button>
         ${isAdmin() ? `<button class="btn btn-sm" onclick="openBankSync()"><i class="ti ti-download"></i>통장 가져오기</button>` : ''}
-        <button class="btn btn-sm" onclick="ledgerClose()"><i class="ti ti-arrow-left"></i>견적 목록</button></div></div>
+        <button class="btn btn-sm" onclick="ledgerClose()"><i class="ti ti-arrow-left"></i>거래처 목록</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
       <div class="stat"><div class="ic g"><i class="ti ti-file-text"></i></div><div class="v" style="font-size:18px">${fmtWon(totSale)}</div><div class="l">확정 매출</div><div class="s">${A.rows.reduce((s, r) => s + r.qn, 0)}건</div></div>
       <div class="stat"><div class="ic b"><i class="ti ti-cash"></i></div><div class="v" style="font-size:18px">${fmtWon(totApplied)}</div><div class="l">받은 돈</div><div class="s">매출의 ${totSale > 0 ? Math.round(totApplied / totSale * 100) : 0}%${totExtra > 0 ? ' · 선입금 별도' : ''}</div></div>
@@ -8325,11 +8316,233 @@ function downloadCostLedger() {
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '원가원장'); XLSX.writeFile(wb, '원가원장_' + todayStr() + '.xlsx');
   toast('원가 원장 엑셀 다운로드');
 }
+/* ══════════════════════════════════════════════════════════
+   계정과목 원장 — 통장 출금 한 건 한 건을 계정으로 나눠 본다 (2026-09-07)
+   ──────────────────────────────────────────────────────────
+   사용자: "영업이익 정리해야 하니 매 출입금 건별로 복리후생·운반·외주가공·
+            외주시공·통관 이런 식으로 계정별 총 금액을 나눠볼 수 있어야 한다"
+   ★ 기준은 **통장 출금**이다 (실제로 나간 돈).
+     매입계산서는 돈이 나갈 때 통장에 찍히므로 여기서 또 세지 않는다 — 이중계산 방지.
+   ★ 계정은 저장하지 않아도 된다. 적요를 보고 규칙으로 «추정»하고,
+     사람이 고친 것만 저장한다(그 상대방은 별칭으로 기억 → 다음 달부터 자동).
+   ══════════════════════════════════════════════════════════ */
+const ACCT_DEFAULT = ['매입/자재비', '외주가공비', '외주시공비', '운반비', '통관비', '급여', '상여금', '복리후생비', '공과금', '접대비', '소모품비', '수선비', '임차료', '지급수수료', '세금', '기타'];
+function acctCats() {
+  const m = (state.appmeta || []).find(x => x.key === 'acctCats');
+  const it = (m && Array.isArray(m.items) && m.items.length) ? m.items : ACCT_DEFAULT;
+  return it.filter(x => String(x || '').trim());
+}
+async function saveAcctCats(items) {
+  const m = (state.appmeta || []).find(x => x.key === 'acctCats');
+  if (m) await Store.update('appmeta', m.id, { items }); else await Store.add('appmeta', { key: 'acctCats', items });
+}
+/* 적요에서 «달마다 바뀌는 부분»(숫자·월)을 떼어낸 비교용 이름.
+   「김홍수7월운송」→「김홍수운송」, 「동양7월가공」→「동양가공」 — 달이 바뀌어도 같은 키가 된다. */
+function _acctKey(s) {
+  return String(s == null ? '' : s).replace(/[0-9]/g, '').replace(/월|년|일/g, '')
+    .replace(/[^0-9A-Za-z가-힣]/g, '').toLowerCase();
+}
+function acctAliasMap() { const m = (state.appmeta || []).find(x => x.key === 'acctAlias'); return (m && m.map) || {}; }
+async function saveAcctAlias(map) {
+  const m = (state.appmeta || []).find(x => x.key === 'acctAlias');
+  if (m) await Store.update('appmeta', m.id, { map }); else await Store.add('appmeta', { key: 'acctAlias', map });
+}
+/* 적요 글자로 계정을 추정하는 규칙 — 위에서부터 먼저 걸리는 것 */
+const ACCT_RULES = [
+  ['통관비', /통관|관세|포워딩|선사|해운|운임|s\/?c|d\/?o|shuttle|적출|보관료/i],
+  ['운반비', /운송|운반|용차|화물|택배|퀵|배송|물류|기사/],
+  ['외주시공비', /시공|설치|현장|인건|시멘트|타일공|미장/],
+  ['외주가공비', /가공|재단|절단|연마|폴리싱|워터젯|후가공|하가공/],
+  ['급여', /급여|월급|임금|주급|일당/],
+  ['상여금', /상여|성과급|보너스/],
+  ['복리후생비', /복리|식대|식비|경조|회식비|건강보험|국민연금|고용보험|산재|사대보험|4대보험/],
+  ['공과금', /전기|수도|가스|통신|인터넷|한전|도시가스|kt|skt|lg유플|전화/i],
+  ['임차료', /임차|월세|임대|보증금|렌트|리스|주차/],
+  ['세금', /부가세|법인세|소득세|원천|국세|지방세|세무|세금/],
+  ['지급수수료', /수수료|이자|카드|증지|법무|회계|보험료|용역/],
+  ['소모품비', /소모품|비품|공구|사무|자재구입|철물/],
+  ['수선비', /수선|수리|정비|as|a\/s|점검/i],
+  ['접대비', /접대|선물|경조사|화환/],
+  ['매입/자재비', /매입|자재|슬라브|슬랩|원석|타일|수입|무역|대전송금|송금/]
+];
+/* 이 출금 한 건의 계정 → { cat, sure }
+   sure=true : 사람이 정했거나(t.acct) 같은 상대방을 전에 정해 둔 것(별칭)
+   sure=false: 적요를 보고 규칙으로 추정한 것 (합계에는 똑같이 들어간다) */
+function acctOf(t) {
+  const cats = acctCats();
+  const fix = String((t && t.acct) || '').trim();
+  if (fix) return { cat: fix, sure: true };
+  const k = _acctKey((t && t.payer) || '');
+  const al = acctAliasMap()[k];
+  if (al) return { cat: al, sure: true };
+  const hay = [(t && t.payer) || '', (t && t.way) || '', (t && t.bankNm) || ''].join(' ');
+  for (const [cat, re] of ACCT_RULES) { if (re.test(hay)) return { cat: cats.indexOf(cat) >= 0 ? cat : '기타', sure: false }; }
+  return { cat: '', sure: false };     // 미분류 — 화면에서 따로 모아 보여준다
+}
+function acctCatOf(t) { return acctOf(t).cat; }
+
 /* ================= 정산: 원가 원장 · 회사지출 · 영업이익(마진) ================= */
 const EXP_CATS = ['급여', '공용부분', '운반비', '공과금', '상여금', '복리후생', '접대비', '소모품', '수선비', '기타'];
 const FIXED_CATS = ['급여', '공용부분', '운반비', '공과금', '기타'];   // 매월 고정
 const VAR_CATS = ['상여금', '복리후생', '접대비', '소모품', '수선비', '운반비', '기타'];   // 변동성 지출
 function settleSetTab(v) { filters.settleTab = v; renderSettle(); window.scrollTo({ top: 0 }); }
+
+/* ── 출금(계정별) 화면 ─────────────────────────────────────
+   관리자만. 통장에서 나간 돈을 계정과목으로 나눠 합계를 본다. */
+function acctSetCat(v) { filters.acctCat = v; renderSettle(); }
+function acctSetSearch(v) { filters.acctSearch = v; const w = el('ac-listwrap'); if (w) w.innerHTML = acctListInner(); }
+function acctOuts(ym) {
+  return (state.banktx || []).filter(t => txIsOut(t) && (t.date || '').startsWith(ym))
+    .sort((a, b) => String(b.dt || b.date || '').localeCompare(String(a.dt || a.date || '')));
+}
+/* 이 달 계정별 합계 { 계정: {sum, n} } + 미분류 */
+function acctTotals(ym) {
+  const m = {}; let noneSum = 0, noneN = 0;
+  acctOuts(ym).forEach(t => {
+    const c = acctCatOf(t);
+    if (!c) { noneSum += txMoney(t); noneN++; return; }
+    (m[c] || (m[c] = { sum: 0, n: 0 }));
+    m[c].sum += txMoney(t); m[c].n++;
+  });
+  return { byCat: m, noneSum, noneN };
+}
+function acctListInner() {
+  const ym = filters.settleMonth || todayStr().slice(0, 7);
+  const pick = filters.acctCat || 'all';
+  const qy = (filters.acctSearch || '').trim().toLowerCase();
+  const cats = acctCats();
+  let list = acctOuts(ym);
+  if (pick === 'none') list = list.filter(t => !acctCatOf(t));
+  else if (pick !== 'all') list = list.filter(t => acctCatOf(t) === pick);
+  if (qy) {
+    const amtP = quoteAmtPred(filters.acctSearch);
+    list = list.filter(t => {
+      const hay = [t.payer, t.bankNm, t.way, t.date, acctCatOf(t)].join(' ').toLowerCase();
+      if (hay.indexOf(qy) >= 0) return true;
+      const v = txMoney(t);
+      return !!(amtP && amtP.test({ total: v, supply: v }));
+    });
+  }
+  const sum = list.reduce((a, t) => a + txMoney(t), 0);
+  if (!list.length) return `<div class="empty"><i class="ti ti-search-off"></i>해당하는 출금 내역이 없습니다</div>`;
+  const opt = (t, cur) => `<select onchange="acctPick('${t.id}',this.value)" style="font-size:11.5px;padding:3px 6px;border:1.5px solid ${cur ? 'var(--bd2)' : 'var(--amber-t)'};border-radius:7px;background:#fff;max-width:120px">
+      <option value="" ${cur ? '' : 'selected'}>— 미분류 —</option>
+      ${cats.map(c => `<option ${c === cur ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select>`;
+  const row = t => {
+    const a = acctOf(t);
+    return `<tr>
+      <td style="white-space:nowrap;color:var(--t3)">${esc(String(t.dt || t.date || '').slice(2))}</td>
+      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.payer || '')}"><b>${esc(t.payer || '(적요 없음)')}</b>${t.bankNm ? ` <span style="color:var(--t3);font-size:11.5px">${esc(t.bankNm)}</span>` : ''}</td>
+      <td style="text-align:right;white-space:nowrap;font-weight:700;color:var(--red-t)">${fmtWon(txMoney(t))}</td>
+      <td style="white-space:nowrap">${opt(t, a.cat)}${a.cat && !a.sure ? ' <span class="pill" style="background:#fff7e6;color:#b45309;border:1px solid #f0d9a8;font-size:10px" title="적요를 보고 앱이 추정한 것 — 맞으면 그냥 두세요">추정</span>' : ''}</td>
+    </tr>`;
+  };
+  const MAX = 300;
+  return `<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:7px">
+      <span style="font-size:12.5px;color:var(--t2)"><b>${list.length}건</b></span>
+      <span style="margin-left:auto;font-size:12px;color:var(--t3)">합계 <b style="font-size:15px;color:var(--red-t)">${fmtWon(sum)}</b>원</span></div>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th style="width:96px">일시</th><th>적요 · 상대방</th><th style="text-align:right;width:110px">금액</th><th style="width:160px">계정과목</th></tr></thead>
+      <tbody>${list.slice(0, MAX).map(row).join('')}</tbody></table></div>
+    ${list.length > MAX ? `<div style="font-size:11.5px;color:var(--t3);text-align:center;padding:9px">최근 ${MAX}건만 표시 · 검색이나 계정으로 좁혀 보세요</div>` : ''}`;
+}
+/* 계정을 고르면: 그 건에 저장 + 같은 상대방을 별칭으로 기억(다음 달부터 자동) */
+async function acctPick(id, cat) {
+  if (!isAdmin()) { toast('관리자만 가능합니다'); return; }
+  const t = (state.banktx || []).find(x => x.id === id); if (!t) return;
+  try {
+    await Store.update('banktx', id, { acct: cat || '', acctBy: (me && me.name) || '', acctAt: Date.now() });
+    const k = _acctKey(t.payer || '');
+    if (k) { const m = Object.assign({}, acctAliasMap()); if (cat) m[k] = cat; else delete m[k]; await saveAcctAlias(m); }
+    toast(cat ? (cat + ' 로 지정') : '미분류로 되돌림');
+    setTimeout(renderSettle, 400);
+  } catch (e) { toast('실패: ' + ((e && e.message) || e)); }
+}
+function acctXlsx() {
+  if (!isAdmin()) { toast('관리자만'); return; }
+  if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후'); return; }
+  const ym = filters.settleMonth || todayStr().slice(0, 7);
+  const list = acctOuts(ym);
+  if (!list.length) { toast(ym + ' 출금 내역이 없습니다'); return; }
+  const T = acctTotals(ym), cats = acctCats();
+  const aoa = [['계정별 출금 원장 · ' + ym], ['출력일 ' + todayStr() + ' · 통장에서 나간 돈 기준 (통장 잔액 미포함)'], []];
+  aoa.push(['계정과목', '금액', '건수']);
+  cats.forEach(c => { if (T.byCat[c]) aoa.push([c, T.byCat[c].sum, T.byCat[c].n]); });
+  if (T.noneN) aoa.push(['미분류', T.noneSum, T.noneN]);
+  aoa.push(['합계', list.reduce((a, t) => a + txMoney(t), 0), list.length]);
+  aoa.push([]); aoa.push(['일시', '적요 · 상대방', '은행', '금액', '계정과목', '분류방법']);
+  list.forEach(t => { const a = acctOf(t); aoa.push([t.dt || t.date || '', t.payer || '', t.bankNm || '', txMoney(t), a.cat || '미분류', a.cat ? (a.sure ? '지정' : '추정') : '']); });
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 17 }, { wch: 26 }, { wch: 12 }, { wch: 14 }, { wch: 14 }, { wch: 9 }];
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '계정별출금');
+  XLSX.writeFile(wb, '계정별출금_' + ym + '.xlsx');
+  toast('엑셀 저장됨');
+}
+/* 계정과목 목록 편집 */
+function openAcctCats() {
+  if (!isAdmin()) { toast('관리자만'); return; }
+  const cats = acctCats();
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-list"></i>계정과목 관리</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div class="banner info" style="margin-bottom:11px;font-size:12px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0">한 줄에 하나씩 적으세요. 순서대로 화면에 나옵니다. <b>이미 그 계정으로 지정해 둔 출금이 있으면 이름을 바꾸지 마세요</b> — 미분류로 돌아갑니다.</span></div>
+    <div class="fld full" style="margin-bottom:12px"><label>계정과목</label>
+      <textarea id="ac-list" rows="12" style="width:100%;font-size:13.5px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:10px;line-height:1.7">${esc(cats.join('\n'))}</textarea></div>
+    <div class="frm-foot"><button class="btn" style="flex:1" onclick="closeModal()">취소</button>
+      <button class="btn" style="flex:1" onclick="acctCatsReset()">기본값으로</button>
+      <button class="btn btn-pri" style="flex:1" onclick="acctCatsSave()"><i class="ti ti-check"></i>저장</button></div>`);
+}
+async function acctCatsSave() {
+  const v = ((el('ac-list') || {}).value || '').split('\n').map(s => s.trim()).filter(Boolean);
+  if (!v.length) { toast('계정과목을 하나 이상 남겨두세요'); return; }
+  await saveAcctCats(v); closeModal(); toast('저장됨'); setTimeout(renderSettle, 400);
+}
+async function acctCatsReset() {
+  if (!confirm('계정과목을 기본값으로 되돌릴까요?')) return;
+  await saveAcctCats(ACCT_DEFAULT.slice()); closeModal(); toast('기본값으로'); setTimeout(renderSettle, 400);
+}
+function acctCard(ym) {
+  if (!isAdmin()) return `<div class="empty"><i class="ti ti-lock"></i>출금 내역은 관리자만 볼 수 있습니다</div>`;
+  const list = acctOuts(ym);
+  const T = acctTotals(ym), cats = acctCats();
+  const tot = list.reduce((a, t) => a + txMoney(t), 0);
+  const pick = filters.acctCat || 'all';
+  const chip = (v, label, sum, n, col) => `<button class="chip ${pick === v ? 'active' : ''}" onclick="acctSetCat('${v}')" style="${pick === v ? '' : ''}">${label}${sum != null ? ` <b style="color:${pick === v ? 'inherit' : (col || 'var(--red-t)')}">${fmtWon(sum)}</b><span style="color:${pick === v ? 'inherit' : 'var(--t3)'};font-size:10.5px"> ${n}건</span>` : ''}</button>`;
+  const shown = cats.filter(c => T.byCat[c]);
+  /* 이 달 확정 매출 — 나간 돈과 나란히 놓고 남는 돈을 본다 */
+  const saleM = (state.quotes || []).filter(q => q.ordered && (q.date || '').startsWith(ym)).reduce((a, q) => a + Math.round(+q.total || 0), 0);
+  return `
+    <div class="banner info" style="margin-bottom:11px;font-size:12px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0">
+      <b>통장에서 나간 돈</b>을 계정과목으로 나눈 것입니다. 매입계산서는 돈이 나갈 때 통장에 찍히므로 여기서 또 세지 않습니다.
+      «추정» 표시는 적요를 보고 앱이 자동으로 붙인 것 — 틀리면 오른쪽에서 바꿔주세요. <b>한 번 바꾸면 같은 상대방은 다음부터 자동</b>입니다.</span></div>
+    <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:11px">
+      <div class="stat"><div class="ic g"><i class="ti ti-file-text"></i></div><div class="v" style="font-size:17px">${fmtWon(saleM)}</div><div class="l">이 달 확정 매출</div></div>
+      <div class="stat"><div class="ic r"><i class="ti ti-arrow-down-right"></i></div><div class="v" style="font-size:17px;color:var(--red-t)">${fmtWon(tot)}</div><div class="l">이 달 통장 출금</div><div class="s">${list.length}건</div></div>
+      <div class="stat"><div class="ic b"><i class="ti ti-scale"></i></div><div class="v" style="font-size:17px;color:${saleM - tot >= 0 ? 'var(--gd)' : 'var(--red-t)'}">${fmtWon(saleM - tot)}</div><div class="l">차액</div><div class="s">매출 − 출금</div></div>
+    </div>
+    ${T.noneN ? `<div class="banner warn" style="margin-bottom:10px;font-size:12.5px"><i class="ti ti-alert-triangle"></i><span style="flex:1;min-width:0">계정을 못 정한 출금 <b>${T.noneN}건 · ${fmtWon(T.noneSum)}원</b>
+      <button class="btn btn-sm btn-pri" style="margin-left:8px" onclick="acctSetCat('none')"><i class="ti ti-filter"></i>이것만 보기</button></span></div>` : ''}
+    <div class="card" style="margin-bottom:11px;padding:11px 13px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px">
+        <span style="font-size:11.5px;color:var(--t3);font-weight:700"><i class="ti ti-chart-pie"></i> 계정별 합계</span>
+        <button class="btn btn-sm btn-ghost" style="margin-left:auto;padding:2px 8px;font-size:11px" onclick="openAcctCats()"><i class="ti ti-settings"></i>계정과목 관리</button>
+        <button class="btn btn-sm" style="padding:2px 8px;font-size:11px" onclick="acctXlsx()"><i class="ti ti-file-spreadsheet"></i>엑셀</button>
+      </div>
+      ${shown.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(118px,1fr));gap:7px">
+        ${shown.map(c => `<button class="card" style="text-align:center;padding:8px 5px;border:1.5px solid ${pick === c ? 'var(--gd)' : 'var(--bd)'};background:${pick === c ? 'var(--gl2,#f4fbf8)' : 'var(--soft)'};cursor:pointer" onclick="acctSetCat('${esc(c)}')">
+          <div style="font-size:10.5px;color:var(--t2);margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c)}</div>
+          <div style="font-size:13.5px;font-weight:800;color:var(--red-t)">${fmtWon(T.byCat[c].sum)}</div>
+          <div style="font-size:10px;color:var(--t3)">${T.byCat[c].n}건</div></button>`).join('')}
+      </div>` : `<div style="font-size:12px;color:var(--t3);text-align:center;padding:8px">이번 달 출금 내역이 없습니다</div>`}
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:9px">
+      ${chip('all', '전체', tot, list.length)}${T.noneN ? chip('none', '미분류', T.noneSum, T.noneN, 'var(--amber-t)') : ''}
+      ${pick !== 'all' && pick !== 'none' ? `<span class="chip active">${esc(pick)}</span>` : ''}
+      ${pick !== 'all' ? `<button class="chip" onclick="acctSetCat('all')"><i class="ti ti-x"></i>해제</button>` : ''}
+    </div>
+    <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i>
+      <input id="ac-search" placeholder="적요·금액 검색 (예: 운송, 500만이상)" value="${esc(filters.acctSearch || '')}"
+        oninput="acctSetSearch(this.value)" autocomplete="off" lang="ko"></div>
+    <div id="ac-listwrap">${acctListInner()}</div>`;
+}
 function settleMonthNav(d) {
   const ym = filters.settleMonth || todayStr().slice(0, 7);
   const [y, m] = ym.split('-').map(Number); const dt = new Date(y, m - 1 + d, 1);
@@ -9475,15 +9688,16 @@ function renderSettle() {
   const _tb = (v, ic, lab, cnt) => `<button type="button" class="${stab === v ? 'on' : ''}" onclick="settleSetTab('${v}')"><i class="ti ti-${ic}" style="font-size:14px"></i> ${lab}${cnt ? ` <b style="font-size:11px">${cnt}</b>` : ''}</button>`;
   const _saleN = salesRows(ym + '-01', _ymd(new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0))).length;
   const seg = `<div class="seg" style="margin:2px 0 12px">
-    ${_tb('sum', 'chart-pie', '요약')}${_tb('sale', 'file-invoice', '매출', _saleN)}${_tb('buy', 'file-download', '매입', purMonthAll.n)}${_tb('cost', 'calculator', '원가')}${_tb('exp', 'wallet', '지출', expMonth.length)}
+    ${_tb('sum', 'chart-pie', '요약')}${_tb('sale', 'file-invoice', '매출', _saleN)}${_tb('buy', 'file-download', '매입', purMonthAll.n)}${isAdmin() ? _tb('out', 'arrow-down-right', '출금', acctOuts(ym).length) : ''}${_tb('cost', 'calculator', '원가')}${_tb('exp', 'wallet', '지출', expMonth.length)}
   </div>`;
   const body =
     stab === 'sale' ? salesCard(ym) :
       stab === 'buy' ? purchaseCard(ym) :
-        stab === 'cost' ? (costLedger + marginCard + crewSettleCard()) :
-          stab === 'exp' ? (expCatBar + fxCard + expForm) :
-            (pnl + vatCard(ym));
-  const _sub = { sum: '영업이익 · 부가세 한눈에', sale: '우리가 끊은 계산서', buy: '우리가 받은 계산서', cost: '전표별 원가 · 마진 · 시공비', exp: '회사지출 · 고정지출' }[stab] || '';
+        stab === 'out' ? acctCard(ym) :
+          stab === 'cost' ? (costLedger + marginCard + crewSettleCard()) :
+            stab === 'exp' ? (expCatBar + fxCard + expForm) :
+              (pnl + vatCard(ym));
+  const _sub = { sum: '영업이익 · 부가세 한눈에', sale: '우리가 끊은 계산서', buy: '우리가 받은 계산서', out: '통장에서 나간 돈 · 계정과목별 (관리자 전용)', cost: '전표별 원가 · 마진 · 시공비', exp: '회사지출 · 고정지출' }[stab] || '';
   root.innerHTML = `<div class="ph"><div><h2><i class="ti ti-report-money"></i>정산</h2><p>${esc(_sub)}</p></div></div>${monthBar}${seg}${body}`;
 }
 
@@ -9491,7 +9705,7 @@ function renderQuote() {
   keepScrolls();
   if (filters.quoteSettings) { if (!document.getElementById('qset-root')) renderQuoteSettings(); return; }   // 설정 화면
   if (filters.cutSim) { const _pq = el('pg-quote'); if (!(_pq && _pq.querySelector('#cutsim-root'))) renderCutSim(); return; }   // 재단 시뮬레이션
-  if (filters.ledger) { renderLedger(); return; }   // 거래처 원장 (견적 + 은행 입금)
+  if (filters.bankList) { const _r = el('pg-quote'); if (_r) _r.innerHTML = bankListHtml(); return; }   // 통장 내역(입금)
   if (filters.billEdit) { renderBillEdit(); return; }   // 묶음 청구 항목 편집
   if (filters.quoteEdit) { if (!document.getElementById('qform-root')) renderQuoteForm(); return; }   // 편집 중엔 실시간 재렌더로 폼을 덮어쓰지 않음
   if (filters.taxEdit) { if (!document.getElementById('taxform-root')) renderTaxForm(); return; }   // 세금계산서 발행 화면
@@ -9529,7 +9743,7 @@ function renderQuote() {
     <button class="btn btn-sm ${filters.quoteBundle ? 'btn-pri' : ''}" style="margin-left:auto" onclick="quoteToggleBundle()"><i class="ti ti-stack-2"></i> 묶음청구</button></div>`;
   el('pg-quote').innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-file-invoice"></i>견적서</h2><p>견적 작성 → 출고 → 결제 · 세금계산서까지</p></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${canLedger() ? `<button class="btn btn-sm" onclick="openLedger()"><i class="ti ti-book"></i>거래처 원장</button>` : ''}${canTax() ? `<button class="btn btn-sm" onclick="openTaxList()"><i class="ti ti-file-invoice"></i>계산서 내역</button>` : ''}<button class="btn btn-sm" onclick="openCutSim()"><i class="ti ti-layout-grid"></i>재단도</button><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${canLedger() ? `<button class="btn btn-sm" onclick="bankOpenList()"><i class="ti ti-building-bank"></i>통장 내역</button><button class="btn btn-sm" onclick="openLedger()"><i class="ti ti-book"></i>거래처 원장</button>` : ''}${canTax() ? `<button class="btn btn-sm" onclick="openTaxList()"><i class="ti ti-file-invoice"></i>계산서 내역</button>` : ''}<button class="btn btn-sm" onclick="openCutSim()"><i class="ti ti-layout-grid"></i>재단도</button><button class="btn btn-sm" onclick="openQuoteSettings()"><i class="ti ti-settings"></i>견적 설정</button><button class="btn btn-pri btn-sm" onclick="openQuoteInline()"><i class="ti ti-plus"></i>견적 작성</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:12px">
       <button class="stat tap" onclick="quoteShowConfUnpaid()" title="확정 주문 중 미결제만 보기"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:19px">${fmtWon(unpaidConf)}</div><div class="l">확정 미수금 <i class="ti ti-chevron-right tap-arrow"></i></div><div class="s">${_confUnpaidList.length}건 · 확정 전 포함 ${fmtWon(unpaid)}</div></button>
       <button class="stat tap" onclick="quoteSetConf('all');quoteSetStat('notax')" title="계산서 미발행만 보기"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v">${noTax}</div><div class="l">계산서 미발행 <i class="ti ti-chevron-right tap-arrow"></i></div></button>
