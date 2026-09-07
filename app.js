@@ -2181,7 +2181,16 @@ function buildAlerts() {
   holdReqs.forEach(r => { const items = (r.items || []).map(it => `${it.materialName} ${+it.jang || 0}장`).join(', '); alerts.push({ key: 'holdreq|' + r.id, c: 'a', ic: 'ti-lock-plus', t: `${r.vendor || ''} 홀딩 요청`, s: items + (r.useDate ? ` · 사용 ${r.useDate}` : '') + (r.note ? ` · ${r.note}` : ''), tag: '홀딩요청' }); });
   lowItems.forEach(i => alerts.push({ key: 'low|' + i.name, c: 'r', ic: 'ti-alert-triangle', t: `${i.name} 입고 필요`, s: `가용 ${availJang(i)}장 · 안전재고 ${(+i.safeJang || 0)}장 미만`, tag: '재고부족' }));
   openIssues.forEach(i => alerts.push({ key: 'issue|' + (i.id || i.reason), c: 'r', ic: 'ti-alert-triangle', t: `${i.siteName || '현장'} 이슈 미해결`, s: (i.reason || '').slice(0, 40), tag: '이슈' }));
-  plannedHolds.forEach(h => alerts.push({ key: 'plan|' + h.id, c: 'a', ic: 'ti-clock-pause', t: `${h.materialName || '-'} 입고 대기`, s: `${h.vendor || ''} · ${(+h.jang || 0)}장 예약(예정홀딩) · 입고 시 자동 전환`, tag: '예정홀딩' }));
+  /* 예정홀딩 알림 — ★ 사용예정일(그리고 남은 날짜 D-n)을 같이 보여준다.
+     자재가 여러 종류면 「A 외 2종」으로 묶고, 장수도 전 품목 합계로 센다. */
+  plannedHolds.forEach(h => {
+    const hi = holdItems(h);
+    const hj = hi.reduce((a, x) => a + (+x.jang || 0), 0);
+    const hm = hi.length > 1 ? `${hi[0].materialName || '-'} 외 ${hi.length - 1}종` : (hi[0].materialName || '-');
+    const dd = daysFromNow(h.useDate);
+    const dtxt = h.useDate ? ` · 사용예정 ${h.useDate}${dd != null && dd >= 0 ? ` (D-${dd})` : ''}` : ' · 사용예정일 미정';
+    alerts.push({ key: 'plan|' + h.id, c: 'a', ic: 'ti-clock-pause', t: `${hm} 입고 대기`, s: `${h.vendor || ''} · ${hj}장 예약(예정홀딩)${dtxt} · 입고 시 자동 전환`, tag: '예정홀딩' });
+  });
   const demoted = state.holdings.filter(h => h.autoDemoted && !['확정', '해제'].includes(h.status || '홀딩') && holdItems(h).some(x => x.planned));
   demoted.forEach(h => alerts.push({ key: 'demote|' + h.id, c: 'a', ic: 'ti-transfer', t: `${h.vendor || ''} 홀딩 자동 조정됨`, s: `임박 건에 재고 양보 → 일부 예정홀딩 전환 · 사용예정 ${h.useDate || '-'}`, tag: '자동조정' }));
   soonConstruct.forEach(s => alerts.push({ key: 'const|' + s.id + '|' + s.constructDate, c: 'a', ic: 'ti-tools', t: `${s.name} 시공 임박`, s: `${s.constructDate} 시공 예정 · ${s.team || '시공팀 미정'}`, tag: 'D-' + daysFromNow(s.constructDate) }));
@@ -12448,7 +12457,10 @@ function holdCardHtml(h) {
           : `<div style="margin-bottom:9px;font-size:11.5px;color:var(--t3)"><i class="ti ti-ban"></i> 묶음 출고 대상 아님 (진행 중인 홀딩만 가능)</div>`) : ''}
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
           <div><div style="font-size:14px;font-weight:600;color:var(--t2)"><i class="ti ti-briefcase" style="font-size:13px"></i> ${esc(h.vendor || '-')}</div>${h.forSiteName ? `<div style="margin-top:5px"><span class="pill p-hold"><i class="ti ti-building-community"></i>${esc(h.forSiteName)}</span></div>` : ''}</div>
-          ${rel ? `<span class="pill p-gray"><i class="ti ti-lock-open"></i>해제됨</span>` : (conf ? `<span class="pill p-done"><i class="ti ti-circle-check"></i>확정</span>` : (plan ? `<span class="pill p-wait"><i class="ti ti-clock-pause"></i>예정 · 입고대기</span>` : `<span class="pill ${cls}"><i class="ti ti-calendar"></i>${h.useDate || '미정'}${d != null && d >= 0 && d <= 7 ? ' · D-' + d : ''}</span>`))}
+          ${rel ? `<span class="pill p-gray"><i class="ti ti-lock-open"></i>해제됨</span>` : (conf ? `<span class="pill p-done"><i class="ti ti-circle-check"></i>확정</span>` : (plan ? `<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex:none">
+            <span class="pill p-wait" style="flex:none"><i class="ti ti-clock-pause"></i>예정 · 입고대기</span>
+            <span class="pill ${cls}" style="flex:none"><i class="ti ti-calendar"></i>${h.useDate ? esc(h.useDate) : '날짜 미정'}${d != null && d >= 0 && d <= 7 ? ' · D-' + d : ''}</span>
+          </div>` : `<span class="pill ${cls}"><i class="ti ti-calendar"></i>${h.useDate || '미정'}${d != null && d >= 0 && d <= 7 ? ' · D-' + d : ''}</span>`))}
         </div>
         <div style="margin:6px 0 4px">
           ${holdItems(h).map(it => `<div style="margin-bottom:3px"><span style="font-size:15px;font-weight:700;color:var(--t1);word-break:keep-all">${esc(it.materialName || '-')}</span> <span style="color:var(--t2);font-size:12.5px">· ${+it.jang || 0}장${it.hebe ? ` (${(+it.hebe).toFixed(1)}㎡)` : ''}${it.lot ? ` · 롯트 ${esc(it.lot)}` : ''}${it.pattern ? ` · 패턴 ${esc(it.pattern)}` : ''}</span>${it.planned ? ` <span style="font-size:10.5px;font-weight:700;color:#9a6a12;background:#fef3e2;border-radius:5px;padding:1px 6px">예정</span>` : (!plan && holdItems(h).some(x => x.planned) ? ` <span style="font-size:10.5px;font-weight:700;color:#0F6E56;background:var(--gl2,#e8f7f0);border-radius:5px;padding:1px 6px">확보</span>` : '')}</div>`).join('')}
