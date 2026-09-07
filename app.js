@@ -523,6 +523,7 @@ function onData(coll) {
   _loadedColls[coll] = true;
   if (['quotes', 'banktx', 'appmeta', 'clients'].includes(coll)) moneyBust();   // 돈 계산을 다시 하게 만든다
   if (['priceList', 'inventory', 'appmeta'].includes(coll)) catalogBust();     // 단가표·재고·설정이 바뀌면 분류 표를 다시 만든다
+  if (['holdings', 'transactions'].includes(coll)) stockIxBust();             // 홀딩·입출고가 바뀌면 재고 계산표를 다시 만든다
   if (coll === 'members' && !_membersLoaded) {
     _membersLoaded = true;
     _membersWaiters.splice(0).forEach(fn => fn());
@@ -1708,11 +1709,25 @@ function siteItems(s) {
   return (s && s.materialName) ? [{ name: s.materialName, qty: s.qty || '', lot: s.lot || '' }] : [];
 }
 /* 활성 홀딩(예약 중 '홀딩')으로 잡힌 장수 합계 — 자재명 기준(다자재 합산) */
-function heldJangFor(name) {
-  if (!name) return 0; const key = _normName(name); let s = 0;
-  state.holdings.forEach(h => { if ((h.status || '홀딩') !== '홀딩') return; holdItems(h).forEach(it => { if (_normName(it.materialName) === key && !it.planned) s += (+it.jang || 0); }); });
-  return s;
+function stockIxBust() { _heldIx = null; _dmgIx = null; }
+/* ★ 2026-09-07 속도 — 자재 하나의 «홀딩 잡힌 수량»을 물어볼 때마다 홀딩 301건을
+   통째로 다시 훑고 있었다. 재고가 182품목이라 홈 화면 한 번에 5만 번.
+   자재명별 합계를 한 번만 만들어 두고 쓴다 (자료가 바뀌면 stockIxBust() 가 버린다). */
+let _heldIx = null, _heldAt = 0;
+function _heldIndex() {
+  if (_heldIx && Date.now() - _heldAt < 2000) return _heldIx;
+  const m = new Map();
+  (state.holdings || []).forEach(h => {
+    if ((h.status || '홀딩') !== '홀딩') return;
+    holdItems(h).forEach(it => {
+      if (it.planned) return;
+      const k = _normName(it.materialName); if (!k) return;
+      m.set(k, (m.get(k) || 0) + (+it.jang || 0));
+    });
+  });
+  _heldAt = Date.now(); _heldIx = m; return m;
 }
+function heldJangFor(name) { if (!name) return 0; return _heldIndex().get(_normName(name)) || 0; }
 /* 가용재고 = 실재고 − 활성홀딩 */
 function availJang(it) { return (+it.jang || 0) - heldJangFor(it.name) - Math.max(0, damagedStock(it.name)); }
 /* 롯트별 재고: 입고(+) − 출고(−). 자재명 기준(띄어쓰기 무시). 롯트 미입력은 '(미지정)' */
@@ -1859,20 +1874,29 @@ function depotSelectHtml(name, current) {
   return html;
 }
 /* 파손 재고: 입고 비고에 '파손' 포함(+) − 출고 비고에 '파손' 포함(−). 자재명 기준 */
-function damagedStock(name) {
-  if (!name) return 0;
-  const key = _normName(name); let n = 0;
-  state.transactions.forEach(t => {
-    if (_normName(t.itemName) !== key) return;
-    if (t.type === 'damage') { n += (+t.jang || 0); return; }   // 파손 처리(+)/복구(−)
-    // '파손 자재'로 표시된 입·출고만 반영. damaged 플래그 우선, 없으면(구버전) note '파손'으로 판단
-    const dmgFlag = (t.damaged === true) || (t.damaged === undefined && /파손/.test(t.note || ''));
-    if (!dmgFlag) return;
-    if (t.type === 'in') n += (+t.jang || 0);
-    else if (t.type === 'out') n -= (+t.jang || 0);   // 파손 자재 출고 → 파손 재고에서 차감(폐기·반품)
+/* ★ 2026-09-07 속도 — 파손 수량도 자재마다 입출고 1,106건을 다시 훑고 있었다(20만 번).
+   판정 규칙은 그대로 두고, 자재명별 합계만 한 번에 만들어 둔다. */
+let _dmgIx = null, _dmgAt = 0;
+function _dmgIndex() {
+  if (_dmgIx && Date.now() - _dmgAt < 2000) return _dmgIx;
+  const m = new Map();
+  (state.transactions || []).forEach(t => {
+    const k = _normName(t.itemName); if (!k) return;
+    let d = 0;
+    if (t.type === 'damage') d = (+t.jang || 0);                       // 파손 처리(+)/복구(−)
+    else {
+      // '파손 자재'로 표시된 입·출고만 반영. damaged 플래그 우선, 없으면(구버전) note '파손'으로 판단
+      const dmgFlag = (t.damaged === true) || (t.damaged === undefined && /파손/.test(t.note || ''));
+      if (!dmgFlag) return;
+      if (t.type === 'in') d = (+t.jang || 0);
+      else if (t.type === 'out') d = -(+t.jang || 0);                  // 파손 자재 출고 → 폐기·반품이라 차감
+      else return;
+    }
+    if (d) m.set(k, (m.get(k) || 0) + d);
   });
-  return n;
+  _dmgAt = Date.now(); _dmgIx = m; return m;
 }
+function damagedStock(name) { if (!name) return 0; return _dmgIndex().get(_normName(name)) || 0; }
 function patternSelectHtml(name, current) {
   // 품목에 정의된 패턴 + 입고 이력 패턴을 모두 표시 (입고에 패턴이 없어도 지정 가능)
   const qtyMap = {}; patternStock(name).forEach(p => { qtyMap[p.pattern] = p.remain; });
