@@ -821,6 +821,7 @@ function go(t) {
   filters.costEdit = '';   // 원가 입력 폼은 메뉴 이동 시 항상 닫기
   if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; filters.cutSim = false; filters.bankList = false; filters.billEdit = false; _billEdit = null; }   // 견적 화면 상태 초기화
   if (t !== 'clients') { filters.clientDetail = ''; filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; }   // 거래처 원장은 거래처 탭 것
+  if (t !== 'settle') { filters.purSearch = ''; filters.purAll = false; }   // 매입 검색은 정산 화면을 떠나면 초기화
   tab = t;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-i').forEach(n => n.classList.toggle('active', n.dataset.tab === t));
@@ -9038,19 +9039,58 @@ function _uq(v) { try { return decodeURIComponent(String(v || '')); } catch (e) 
 /* 거래처별 표에서 펼쳐놓은 줄들 — 이름을 담아둔다 */
 const _openSup = new Set();      // 매입처
 const _openCli = new Set();      // 매출 거래처
-function purToggleSup(enc) { const k = _uq(enc); if (_openSup.has(k)) _openSup.delete(k); else _openSup.add(k); renderSettle(); }
+function purToggleSup(enc) { const k = _uq(enc); if (_openSup.has(k)) _openSup.delete(k); else _openSup.add(k); _purRefreshList(); }
 function saleToggleCli(enc) { const k = _uq(enc); if (_openCli.has(k)) _openCli.delete(k); else _openCli.add(k); if (!_saleRefresh()) renderSettle(); }
 let _purView = 'list';                    // list | supplier
-function purSetView(v) { _purView = v; renderSettle(); }
-function purchaseCard(ym) {
-  const rows = purOfMonth(ym);
-  const t = purSum(rows);
-  const tIn = purSum(rows.filter(p => !p.exclude && !p.costQid));
-  const tCost = purSum(rows.filter(p => p.costQid));
-  const admin = isAdmin();
-  const cell = (lab, v, col, sub) => `<div style="text-align:center;padding:9px 6px;background:var(--soft);border-radius:10px">
-    <div style="font-size:10.5px;color:var(--t2);margin-bottom:3px">${lab}</div>
-    <div style="font-size:15px;font-weight:800;color:${col}">${fmtWon(v)}</div>${sub ? `<div style="font-size:10px;color:var(--t3);margin-top:1px">${sub}</div>` : ''}</div>`;
+/* ── 매입 계산서 한 건씩 찾아보기 (2026-09-07) ─────────────────
+   사용자 요청: "매입 계산서 각각 조회할 수 있게".
+   ① 목록 위에 검색칸 — 매입처·품목·승인번호·사업자번호·금액으로 찾는다
+   ② 「이 달 / 전체 기간」 전환 — 지난달 것도 여기서 바로 찾는다
+   ③ 줄을 누르면 그 계산서 한 장의 상세(openPurDetail)
+   ※ 홈택스 원문 화면은 서버(Cloud Function)에 그 기능이 아직 없어서 못 연다.
+     여기 보이는 값은 홈택스에서 수집해 저장해 둔 내용 그대로다.            */
+let _purYm = '';
+function _purNorm(s) { return String(s == null ? '' : s).toLowerCase().replace(/\s/g, ''); }
+function _bizFmt(b) { const t = String(b || '').replace(/[^0-9]/g, ''); return t.length === 10 ? (t.slice(0, 3) + '-' + t.slice(3, 5) + '-' + t.slice(5)) : (b || ''); }
+function purMatch(p, q) {
+  if (!q) return true;
+  const hay = _purNorm([p.supplier, p.item, p.nts, p.supplierBiz, p.supplierCeo, p.date, String(p.date || '').replace(/-/g, ''), p.costDocNo].join('|'));
+  if (hay.indexOf(q) >= 0) return true;
+  const num = q.replace(/[^0-9]/g, '');
+  if (num.length >= 3 && (String(Math.round(+p.supply || 0)).indexOf(num) >= 0 || String(Math.round(+p.total || 0)).indexOf(num) >= 0)) return true;
+  return false;
+}
+/* 화면에 보일 매입 목록 — 검색어와 기간(이 달·전체)을 반영 */
+function purViewRows(ym) {
+  const base = filters.purAll
+    ? purAll().slice().sort((a, b) => (b.date || '').localeCompare(a.date || ''))
+    : purOfMonth(ym);
+  const q = _purNorm(filters.purSearch);
+  return q ? base.filter(p => purMatch(p, q)) : base;
+}
+function purSetSearch() { filters.purSearch = (el('pur-search') && el('pur-search').value) || ''; _purRefreshList(); }
+function purClearSearch() { filters.purSearch = ''; const i = el('pur-search'); if (i) { i.value = ''; i.focus(); } _purRefreshList(); }
+function purToggleAll() { filters.purAll = !filters.purAll; _purRefreshList(); }
+function purSetView(v) { _purView = v; _purRefreshList(); }
+/* 목록만 다시 그린다 — 검색칸 포커스가 날아가지 않게 카드 전체는 건드리지 않음 */
+function _purRefreshList() {
+  const w = el('settle-pur-list'); if (!w) { renderSettle(); return; }
+  w.innerHTML = _purListInner(_purYm);
+  const c = el('pur-found'); if (c) c.innerHTML = _purFoundText(_purYm);
+  const x = el('pur-search-x'); if (x) x.style.display = (filters.purSearch || '').trim() ? '' : 'none';
+  const a = el('pur-all-chip'); if (a) a.className = 'chip' + (filters.purAll ? ' active' : '');
+  const t = el('pur-tab-list'); if (t) t.className = 'chip' + (_purView === 'list' ? ' active' : '');
+  const t2 = el('pur-tab-sup'); if (t2) t2.className = 'chip' + (_purView === 'supplier' ? ' active' : '');
+}
+function _purFoundText(ym) {
+  const v = purViewRows(ym); const s = purSum(v);
+  const on = !!((filters.purSearch || '').trim());
+  return `${filters.purAll ? '전체 기간' : esc(ym)} · <b style="color:var(--t1)">${v.length}건</b> · 공급가 <b style="color:var(--t1)">${fmtWon(s.supply)}</b> · 합계 <b style="color:var(--t1)">${fmtWon(s.total)}</b>${on ? ` <span style="color:#b45309">— 검색 결과만</span>` : ''}`;
+}
+
+/* ── 매입 목록 표(건별 / 매입처별) ────────────────────────── */
+function _purListInner(ym) {
+  const rows = purViewRows(ym);
   // 매입처별
   const bySup = {};
   rows.forEach(p => { const k = (p.supplier || '(상호없음)').trim(); if (!bySup[k]) bySup[k] = { n: 0, supply: 0, vat: 0, total: 0, biz: p.supplierBiz || '' }; const o = bySup[k]; o.n++; o.supply += (+p.supply || 0); o.vat += (+p.vat || 0); o.total += (+p.total || 0); });
@@ -9061,13 +9101,13 @@ function purchaseCard(ym) {
     const detail = open ? `<tr><td colspan="5" style="padding:0;background:#faf8f4">
         <div style="padding:8px 10px 10px">
           <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
-            <span style="font-size:11px;color:var(--t3)">${esc(ym)} 매입 내역 ${mine.length}건</span>
+            <span style="font-size:11px;color:var(--t3)">${filters.purAll ? '전체 기간' : esc(ym)} 매입 내역 ${mine.length}건 <span style="color:var(--t3)">· 줄을 누르면 계산서 상세</span></span>
             <button class="btn btn-sm" style="padding:2px 8px" onclick="event.stopPropagation();openPurSupplierAll('${_q(k)}')"><i class="ti ti-history"></i>전체 기간 보기</button>
           </div>
           <table style="width:100%;border-collapse:collapse;font-size:12px">
             <thead><tr style="color:var(--t3);font-size:10.5px"><th style="text-align:left;padding:3px 6px">일자</th><th style="text-align:left;padding:3px 6px">품목</th><th style="text-align:right;padding:3px 6px">공급가</th><th style="text-align:right;padding:3px 6px">세액</th><th style="text-align:right;padding:3px 6px">합계</th><th style="text-align:center;padding:3px 6px">연결</th></tr></thead>
-            <tbody>${mine.map(p => `<tr style="border-top:1px solid #efe9df${p.exclude ? ';opacity:.45' : ''}">
-              <td style="padding:4px 6px;white-space:nowrap;color:var(--t3)">${esc((p.date || '').slice(5))}</td>
+            <tbody>${mine.map(p => `<tr style="border-top:1px solid #efe9df;cursor:pointer${p.exclude ? ';opacity:.45' : ''}" onclick="event.stopPropagation();openPurDetail('${esc(p.id)}')">
+              <td style="padding:4px 6px;white-space:nowrap;color:var(--t3)">${esc((p.date || '').slice(2))}</td>
               <td style="padding:4px 6px">${esc(p.item || '-')}${p.nts ? `<div style="font-size:9.5px;color:var(--t3)">${esc(p.nts)}</div>` : ''}</td>
               <td style="padding:4px 6px;text-align:right">${fmtWon(p.supply)}</td>
               <td style="padding:4px 6px;text-align:right;color:var(--t3)">${fmtWon(p.vat)}</td>
@@ -9075,19 +9115,19 @@ function purchaseCard(ym) {
               <td style="padding:4px 6px;text-align:center;white-space:nowrap">${p.costDocNo ? `<span style="font-size:10px;color:var(--gd);font-weight:700">${esc(p.costDocNo)}</span>` : `<button class="btn btn-sm" style="padding:1px 6px;font-size:10.5px" onclick="event.stopPropagation();purOpenLink('${esc(p.id)}')">원가</button>`}</td></tr>`).join('')}</tbody>
           </table></div></td></tr>` : '';
     return `<tr style="border-bottom:1px solid var(--soft);cursor:pointer${open ? ';background:var(--soft)' : ''}" onclick="purToggleSup('${_q(k)}')">
-      <td style="padding:6px 8px"><i class="ti ti-chevron-${open ? 'down' : 'right'}" style="color:var(--t3);font-size:13px"></i> <b>${esc(k)}</b>${bySup[k].biz ? `<div style="font-size:10.5px;color:var(--t3);padding-left:17px">${esc(bySup[k].biz)}</div>` : ''}</td>
+      <td style="padding:6px 8px"><i class="ti ti-chevron-${open ? 'down' : 'right'}" style="color:var(--t3);font-size:13px"></i> <b>${esc(k)}</b>${bySup[k].biz ? `<div style="font-size:10.5px;color:var(--t3);padding-left:17px">${esc(_bizFmt(bySup[k].biz))}</div>` : ''}</td>
       <td style="padding:6px 8px;text-align:right;color:var(--t2)">${bySup[k].n}건</td>
       <td style="padding:6px 8px;text-align:right">${fmtWon(bySup[k].supply)}</td>
       <td style="padding:6px 8px;text-align:right;color:var(--t3)">${fmtWon(bySup[k].vat)}</td>
       <td style="padding:6px 8px;text-align:right;font-weight:800;color:#7c3aed">${fmtWon(bySup[k].total)}</td></tr>${detail}`;
   }).join('')
-    : `<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--t3)">매입 내역이 없습니다</td></tr>`;
-  // 건별
+    : `<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--t3)">${(filters.purSearch || '').trim() ? '검색 결과가 없습니다' : '매입 내역이 없습니다'}</td></tr>`;
+  // 건별 — 줄을 누르면 계산서 한 장 상세
   const listRows = rows.length ? rows.map(p => {
     const lq = p.costQid ? (state.quotes || []).find(q => q.id === p.costQid) : null;
     const off = p.exclude;
-    return `<tr style="border-bottom:1px solid var(--soft);${off ? 'opacity:.45' : ''}">
-      <td style="padding:6px 8px;white-space:nowrap;font-size:11.5px;color:var(--t3)">${esc((p.date || '').slice(5))}</td>
+    return `<tr style="border-bottom:1px solid var(--soft);cursor:pointer;${off ? 'opacity:.45' : ''}" onclick="openPurDetail('${esc(p.id)}')" title="누르면 이 계산서 상세">
+      <td style="padding:6px 8px;white-space:nowrap;font-size:11.5px;color:var(--t3)">${esc(filters.purAll ? (p.date || '').slice(2) : (p.date || '').slice(5))}</td>
       <td style="padding:6px 8px"><b>${esc(p.supplier || '-')}</b>${p.item ? `<div style="font-size:10.5px;color:var(--t3)">${esc(p.item)}</div>` : ''}</td>
       <td style="padding:6px 8px;text-align:center"><span class="pill ${p.taxType === '면세' ? 'p-gray' : p.taxType === '영세' ? 'p-wait' : 'p-prog'}" style="font-size:9.5px;padding:0 5px">${esc(p.taxType || '과세')}</span></td>
       <td style="padding:6px 8px;text-align:right">${fmtWon(p.supply)}</td>
@@ -9095,12 +9135,83 @@ function purchaseCard(ym) {
       <td style="padding:6px 8px;text-align:right;font-weight:700">${fmtWon(p.total)}</td>
       <td style="padding:6px 8px;text-align:center;white-space:nowrap">
         ${lq ? `<span style="font-size:10.5px;color:var(--gd);font-weight:700">${esc(lq.docNo || '연결됨')}</span>
-                <button class="btn btn-sm" style="padding:2px 5px;margin-left:3px" onclick="purUnlink('${p.id}')" title="원가 연결 해제"><i class="ti ti-unlink"></i></button>`
-             : `<button class="btn btn-sm" style="padding:2px 7px" onclick="purOpenLink('${p.id}')"><i class="ti ti-link"></i>원가</button>`}
-        <button class="btn btn-sm" style="padding:2px 5px;margin-left:3px" onclick="purToggleExclude('${p.id}')" title="${off ? '다시 포함' : '영업이익에서 제외'}"><i class="ti ti-${off ? 'eye' : 'eye-off'}"></i></button>
+                <button class="btn btn-sm" style="padding:2px 5px;margin-left:3px" onclick="event.stopPropagation();purUnlink('${p.id}')" title="원가 연결 해제"><i class="ti ti-unlink"></i></button>`
+             : `<button class="btn btn-sm" style="padding:2px 7px" onclick="event.stopPropagation();purOpenLink('${p.id}')"><i class="ti ti-link"></i>원가</button>`}
+        <button class="btn btn-sm" style="padding:2px 5px;margin-left:3px" onclick="event.stopPropagation();purToggleExclude('${p.id}')" title="${off ? '다시 포함' : '영업이익에서 제외'}"><i class="ti ti-${off ? 'eye' : 'eye-off'}"></i></button>
       </td></tr>`;
-  }).join('') : `<tr><td colspan="7" style="padding:16px;text-align:center;color:var(--t3)">${esc(ym)} 매입 계산서가 없습니다. 위 <b>불러오기</b>를 눌러 홈택스에서 가져오세요.</td></tr>`;
-  const tabBtn = (v, l) => `<button class="chip ${_purView === v ? 'active' : ''}" onclick="purSetView('${v}')">${l}</button>`;
+  }).join('') : `<tr><td colspan="7" style="padding:16px;text-align:center;color:var(--t3)">${(filters.purSearch || '').trim() ? '검색 결과가 없습니다 — 다른 말로 찾아보세요' : (esc(ym) + ' 매입 계산서가 없습니다. 위 <b>불러오기</b>를 눌러 홈택스에서 가져오세요.')}</td></tr>`;
+  return `<table style="width:100%;border-collapse:collapse;font-size:12.5px">
+      ${_purView === 'supplier'
+      ? `<thead><tr style="border-bottom:1.5px solid var(--bd);color:var(--t2);font-size:11px"><th style="padding:6px 8px;text-align:left">매입처</th><th style="padding:6px 8px;text-align:right">건수</th><th style="padding:6px 8px;text-align:right">공급가</th><th style="padding:6px 8px;text-align:right">세액</th><th style="padding:6px 8px;text-align:right">합계</th></tr></thead><tbody>${supRows}</tbody>`
+      : `<thead><tr style="border-bottom:1.5px solid var(--bd);color:var(--t2);font-size:11px"><th style="padding:6px 8px;text-align:left">일자</th><th style="padding:6px 8px;text-align:left">매입처 · 품목</th><th style="padding:6px 8px;text-align:center">구분</th><th style="padding:6px 8px;text-align:right">공급가</th><th style="padding:6px 8px;text-align:right">세액</th><th style="padding:6px 8px;text-align:right">합계</th><th style="padding:6px 8px;text-align:center">연결</th></tr></thead><tbody>${listRows}</tbody>`}
+    </table>`;
+}
+
+/* ── 매입 계산서 한 장 상세 ───────────────────────────────── */
+function openPurDetail(id) {
+  const p = (state.purchases || []).find(x => x.id === id); if (!p) { toast('내역을 찾을 수 없습니다'); return; }
+  const lq = p.costQid ? (state.quotes || []).find(q => q.id === p.costQid) : null;
+  const row = (k, v, col) => `<div style="display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--soft)">
+    <span style="font-size:12px;color:var(--t3);flex:none">${k}</span><b style="font-size:13px;text-align:right;word-break:break-all;color:${col || 'var(--t1)'}">${v}</b></div>`;
+  const cnt = p.exclude
+    ? `<div class="banner warn" style="margin-bottom:10px;font-size:12px"><i class="ti ti-eye-off"></i><span style="flex:1;min-width:0">이 건은 <b>영업이익 계산에서 빠져</b> 있습니다. (개인 경비 등으로 표시해 둔 건)</span></div>`
+    : (lq ? `<div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-link"></i><span style="flex:1;min-width:0">견적 <b>${esc(lq.docNo || '')}</b>${lq.client ? ' · ' + esc(lq.client) : ''} 의 <b>원가</b>로 들어가 있습니다. 그래서 회사지출에서는 빠집니다.</span></div>`
+      : `<div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-wallet"></i><span style="flex:1;min-width:0">이번 달 <b>회사지출(매입)</b>로 잡혀 있습니다. 특정 현장 원가라면 아래 <b>원가로 연결</b>을 눌러 견적에 붙이세요.</span></div>`);
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-file-invoice" style="color:#7c3aed"></i>매입 계산서 상세</h3><button class="x" onclick="closeModal()">×</button></div>
+    ${cnt}
+    <div style="background:var(--soft);border-radius:11px;padding:11px 13px;margin-bottom:11px">
+      ${row('매입처', esc(p.supplier || '-'))}
+      ${p.supplierBiz ? row('사업자등록번호', esc(_bizFmt(p.supplierBiz))) : ''}
+      ${p.supplierCeo ? row('대표자', esc(p.supplierCeo)) : ''}
+      ${row('품목', esc(p.item || '-'))}
+      ${row('작성일자', esc(p.date || '-'))}
+      ${p.issueDate && p.issueDate !== p.date ? row('발행일', esc(p.issueDate)) : ''}
+      ${p.sendDate ? row('국세청 전송일', esc(p.sendDate)) : ''}
+      ${row('과세구분', esc(p.taxType || '과세') + (p.purpose ? ' · ' + esc(p.purpose) : ''))}
+    </div>
+    <div style="background:#f6f3fd;border:1px solid #ddd3f5;border-radius:11px;padding:11px 13px;margin-bottom:11px">
+      ${row('공급가액', fmtWon(p.supply) + '원')}
+      ${row('세액', fmtWon(p.vat) + '원', 'var(--t2)')}
+      ${row('합계 (실제 나간 돈)', fmtWon(p.total) + '원', '#7c3aed')}
+    </div>
+    <div style="background:var(--soft);border-radius:11px;padding:11px 13px;margin-bottom:11px">
+      ${row('국세청 승인번호', p.nts ? esc(p.nts) : '<span style="color:var(--t3);font-weight:500">없음</span>', p.nts ? 'var(--gd)' : '')}
+      ${row('공급받는자', esc(p.buyer || '-'))}
+      ${row('가져온 시각', p.fetchedAt ? esc(new Date(p.fetchedAt).toLocaleString('ko-KR')) : '-', 'var(--t2)')}
+    </div>
+    ${p.nts ? `<button class="btn btn-sm btn-block" style="margin-bottom:8px" onclick="purCopyNts('${esc(p.nts)}')"><i class="ti ti-copy"></i>승인번호 복사 <span style="color:var(--t3);font-weight:500">(홈택스에서 조회할 때 붙여넣기)</span></button>` : ''}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      ${lq
+      ? `<button class="btn btn-sm" style="flex:1;min-width:130px" onclick="purDetailUnlink('${esc(p.id)}')"><i class="ti ti-unlink"></i>원가 연결 해제</button>`
+      : `<button class="btn btn-pri btn-sm" style="flex:1;min-width:130px" onclick="purOpenLink('${esc(p.id)}')"><i class="ti ti-link"></i>견적 원가로 연결</button>`}
+      <button class="btn btn-sm" style="flex:1;min-width:130px" onclick="purDetailExclude('${esc(p.id)}')"><i class="ti ti-${p.exclude ? 'eye' : 'eye-off'}"></i>${p.exclude ? '다시 포함하기' : '영업이익에서 제외'}</button>
+    </div>
+    <div style="font-size:11px;color:var(--t3);line-height:1.6">여기 값은 <b>홈택스에서 가져와 저장해 둔 내용</b>입니다. 홈택스 원본 화면은 승인번호를 복사해 홈택스에서 조회하세요.</div>`);
+}
+async function purDetailExclude(id) { await purToggleExclude(id); openPurDetail(id); }
+async function purDetailUnlink(id) { await purUnlink(id); openPurDetail(id); }
+function purCopyNts(v) {
+  const t = String(v || ''); if (!t) return;
+  const done = () => toast('승인번호를 복사했습니다');
+  if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(t).then(done).catch(() => _purCopyFallback(t, done)); }
+  else _purCopyFallback(t, done);
+}
+function _purCopyFallback(t, done) {
+  try { const a = document.createElement('textarea'); a.value = t; a.style.position = 'fixed'; a.style.opacity = '0'; document.body.appendChild(a); a.select(); document.execCommand('copy'); document.body.removeChild(a); done(); }
+  catch (e) { toast('복사가 안 됩니다 — 승인번호: ' + t); }
+}
+
+function purchaseCard(ym) {
+  _purYm = ym;
+  const rows = purOfMonth(ym);          // ★ 위 숫자칸은 언제나 '이 달 전체' — 검색해도 회계 숫자는 안 흔들린다
+  const t = purSum(rows);
+  const tIn = purSum(rows.filter(p => !p.exclude && !p.costQid));
+  const tCost = purSum(rows.filter(p => p.costQid));
+  const admin = isAdmin();
+  const cell = (lab, v, col, sub) => `<div style="text-align:center;padding:9px 6px;background:var(--soft);border-radius:10px">
+    <div style="font-size:10.5px;color:var(--t2);margin-bottom:3px">${lab}</div>
+    <div style="font-size:15px;font-weight:800;color:${col}">${fmtWon(v)}</div>${sub ? `<div style="font-size:10px;color:var(--t3);margin-top:1px">${sub}</div>` : ''}</div>`;
+  const supN = new Set(purViewRows(ym).map(p => (p.supplier || '(상호없음)').trim())).size;
   return `<div class="card" style="margin-bottom:12px;padding:13px 14px">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:9px">
       <div style="font-size:11.5px;color:var(--t3);font-weight:700"><i class="ti ti-file-download"></i> 매입 세금계산서 <span style="font-weight:500">(홈택스)</span></div>
@@ -9116,14 +9227,22 @@ function purchaseCard(ym) {
       ${cell('지출로 잡힘', tIn.supply, '#7c3aed', tIn.n + '건')}
       ${cell('원가로 잡힘', tCost.supply, '#0f766e', tCost.n + '건')}
     </div>
-    <div style="font-size:11px;color:var(--t3);line-height:1.6;margin-bottom:9px">· <b>원가</b> 버튼으로 특정 견적(현장)에 붙이면 그 건은 회사지출이 아니라 <b>그 현장 원가</b>로 넘어갑니다 (이중 계산 방지).
+    <div style="font-size:11px;color:var(--t3);line-height:1.6;margin-bottom:9px">· <b>줄을 누르면</b> 그 계산서 한 장의 상세(승인번호·사업자번호·전송일 등)가 열립니다.
+      <br>· <b>원가</b> 버튼으로 특정 견적(현장)에 붙이면 그 건은 회사지출이 아니라 <b>그 현장 원가</b>로 넘어갑니다 (이중 계산 방지).
       <br>· 눈 아이콘을 누르면 그 건은 영업이익 계산에서 빠집니다 (개인 경비 등).</div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${tabBtn('list', '건별')}${tabBtn('supplier', '매입처별 ' + supKeys.length)}</div>
-    <div data-keepscroll id="settle-pur-list" style="max-height:44vh;overflow:auto"><table style="width:100%;border-collapse:collapse;font-size:12.5px">
-      ${_purView === 'supplier'
-        ? `<thead><tr style="border-bottom:1.5px solid var(--bd);color:var(--t2);font-size:11px"><th style="padding:6px 8px;text-align:left">매입처</th><th style="padding:6px 8px;text-align:right">건수</th><th style="padding:6px 8px;text-align:right">공급가</th><th style="padding:6px 8px;text-align:right">세액</th><th style="padding:6px 8px;text-align:right">합계</th></tr></thead><tbody>${supRows}</tbody>`
-        : `<thead><tr style="border-bottom:1.5px solid var(--bd);color:var(--t2);font-size:11px"><th style="padding:6px 8px;text-align:left">일자</th><th style="padding:6px 8px;text-align:left">매입처 · 품목</th><th style="padding:6px 8px;text-align:center">구분</th><th style="padding:6px 8px;text-align:right">공급가</th><th style="padding:6px 8px;text-align:right">세액</th><th style="padding:6px 8px;text-align:right">합계</th><th style="padding:6px 8px;text-align:center">연결</th></tr></thead><tbody>${listRows}</tbody>`}
-    </table></div></div>`;
+    <div class="search-box" style="margin-bottom:8px">
+      <i class="ti ti-search"></i>
+      <input id="pur-search" lang="ko" placeholder="매입처·품목·승인번호·사업자번호·금액으로 찾기" value="${esc(filters.purSearch || '')}" oninput="purSetSearch()" autocomplete="off">
+      <button class="search-x" id="pur-search-x" style="${(filters.purSearch || '').trim() ? '' : 'display:none'}" onclick="purClearSearch()"><i class="ti ti-x"></i></button>
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+      <button class="chip${_purView === 'list' ? ' active' : ''}" id="pur-tab-list" onclick="purSetView('list')">건별</button>
+      <button class="chip${_purView === 'supplier' ? ' active' : ''}" id="pur-tab-sup" onclick="purSetView('supplier')">매입처별 ${supN}</button>
+      <span style="flex:1"></span>
+      <button class="chip${filters.purAll ? ' active' : ''}" id="pur-all-chip" onclick="purToggleAll()"><i class="ti ti-calendar-search"></i> 전체 기간</button>
+    </div>
+    <div id="pur-found" style="font-size:11.5px;color:var(--t3);margin-bottom:6px">${_purFoundText(ym)}</div>
+    <div data-keepscroll id="settle-pur-list" style="max-height:44vh;overflow:auto">${_purListInner(ym)}</div></div>`;
 }
 
 /* ── 부가세 예상액 ─────────────────────────────────────────── */
@@ -9239,10 +9358,13 @@ async function purUnlink(pid) {
   toast('원가 연결을 해제했습니다'); renderSettle();
 }
 function downloadPurchases(ym) {
-  const rows = purOfMonth(ym);
+  /* ★ 화면에 보이는 그대로 받는다 — 검색어나 '전체 기간'을 켜뒀으면 그 결과가 나간다 */
+  const rows = purViewRows(ym);
   if (!rows.length) { toast('내려받을 매입 내역이 없습니다'); return; }
+  const _sq = (filters.purSearch || '').trim();
+  const _rangeTxt = (filters.purAll ? '전체 기간' : ym) + (_sq ? (' · 검색 「' + _sq + '」') : '');
   const head = ['작성일자', '매입처', '사업자번호', '품목', '과세구분', '영수/청구', '공급가액', '세액', '합계', '연결견적', '제외', '국세청승인번호'];
-  const aoa = [['매입 세금계산서 — ' + ym], ['출력일 ' + todayStr()], [], head];
+  const aoa = [['매입 세금계산서 — ' + _rangeTxt], ['출력일 ' + todayStr()], [], head];
   let s = 0, v = 0, t = 0;
   rows.slice().sort((a, b) => (a.date || '').localeCompare(b.date || '')).forEach(p => {
     s += (+p.supply || 0); v += (+p.vat || 0); t += (+p.total || 0);
@@ -9251,8 +9373,8 @@ function downloadPurchases(ym) {
   aoa.push([]); aoa.push(['', '', '', '', '', '합계', s, v, t, '', '', '']);
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '매입계산서');
-  XLSX.writeFile(wb, '매입계산서_' + ym + '.xlsx');
-  toast('매입 계산서 엑셀 다운로드');
+  XLSX.writeFile(wb, '매입계산서_' + (filters.purAll ? '전체' : ym) + '.xlsx');
+  toast('매입 계산서 엑셀 다운로드 · ' + rows.length + '건');
 }
 
 /* ══════════════════════════════════════════════════════════
