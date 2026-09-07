@@ -815,7 +815,26 @@ function toggleDrawer() {
 function closeDrawer() { el('drawer').classList.remove('open'); el('drawer-ov').classList.remove('open'); }
 function goD(t) { closeDrawer(); go(t); }
 
+/* ── 화면 아래 탭바 제거 (2026-09-07) ─────────────────────────
+   메뉴는 왼쪽 위 ☰ 서랍에 전부 들어 있어서 아래 탭바는 자리만 차지했다.
+   index.html 에서 지웠지만 휴대폰은 예전 index.html 이 한동안 남아 있으므로
+   (오프라인 캐시) 여기서도 한 번 더 지워서 바로 없어지게 한다. */
+function killBotNav() {
+  try {
+    const n = document.querySelectorAll('.botnav');
+    if (!n.length) return;
+    n.forEach(x => x.remove());
+    if (window.innerWidth < 760) {
+      const a = document.getElementById('app'); if (a) a.style.paddingBottom = '16px';
+      const f = document.getElementById('fab'); if (f) f.style.bottom = '18px';
+    }
+  } catch (e) { }
+}
+document.addEventListener('DOMContentLoaded', killBotNav);
+setTimeout(killBotNav, 0);
+
 function go(t) {
+  killBotNav();
   if (isRestrictedRole()) t = 'stock';   // 고객·시공팀은 전용 화면만
   else if (!tabAllowed(t)) t = 'home';   // 접근 권한 없는 메뉴 차단
   filters.costEdit = '';   // 원가 입력 폼은 메뉴 이동 시 항상 닫기
@@ -5755,12 +5774,22 @@ function _bankDT(v) {
 function _bankDate(v) { const t = String(v || '').replace(/[^0-9]/g, ''); return t.length >= 8 ? (t.slice(0, 4) + '-' + t.slice(4, 6) + '-' + t.slice(6, 8)) : todayStr(); }
 /* 은행 입금자명 정리 — (주)/㈜/주식회사 같은 법인 표기와 공백·기호를 떼어낸 비교용 키.
    은행이 이름을 9글자쯤에서 잘라 보내기 때문에 "주식회사비나인스튜" 같은 토막 이름도 맞춰야 한다. */
+/* ★ 2026-09-07 속도 — 같은 이름을 수십만 번 다시 계산하고 있었다.
+   (통장 630줄 × 거래처 953곳 = 60만 번) 결과가 항상 같은 함수라 기억해 두고 쓴다. */
+const _bkMemo = new Map();
 function _bankKey(s) {
-  return String(s == null ? '' : s)
+  const raw = String(s == null ? '' : s);
+  if (!raw) return '';
+  const hit = _bkMemo.get(raw);
+  if (hit !== undefined) return hit;
+  const v = raw
     .replace(/㈜|주식회사|주식회|유한회사|합자회사/g, '')
     .replace(/[（(\[]\s*[주유]\s*[)）\]]/g, '')
     .replace(/[^0-9A-Za-z가-힣]/g, '')
     .toUpperCase();
+  if (_bkMemo.size > 20000) _bkMemo.clear();   // 메모리 안전장치
+  _bkMemo.set(raw, v);
+  return v;
 }
 /* 두 이름이 얼마나 같은가 — 3=완전일치, 2=한쪽이 다른 쪽에 통째로 들어감, 1=3글자 이상 겹침, 0=관계없음 */
 function _bankNameHit(payer, name) {
@@ -6288,12 +6317,37 @@ function clientPickSet(idb, name) {
   if (msg) msg.innerHTML = '<b style="color:var(--gd)">선택됨 · ' + esc(name) + '</b>';
   _clientPickFire(hid, _prev);
 }
+/* ★ 2026-09-07 속도 — 이름 자동 추정이 통장 한 줄마다 거래처 953곳을 처음부터 훑고 있었다.
+   (실측: 630줄 처리에 382ms · 이게 화면 전체가 느려지던 진짜 원인)
+   ① 거래처 이름은 미리 한 번만 정규화해 목록으로 만들어 두고
+   ② 「입금자 이름 → 거래처」 결과를 기억해 둔다. 같은 입금자는 다시 계산하지 않는다.
+   판정 규칙(_bankNameHit >= 2 를 목록 순서대로 처음 맞는 것)은 예전과 똑같다 — 결과가 달라지지 않는다. */
+let _tcIx = null;
+function txIndexBust() { _tcIx = null; }
+function _txIndex() {
+  if (_tcIx) return _tcIx;
+  const list = [];
+  ledgerClientNames().forEach(n => { const k = _bankKey(n); if (k) list.push([k, n]); });
+  _tcIx = { list: list, memo: new Map() };
+  return _tcIx;
+}
 function txClientOf(t) {
   if (!t) return '';
   if (t.client) return t.client;
   const k = t.pkey || _bankKey(t.payer);
   const al = bankAliasMap()[k]; if (al) return al;
-  return ledgerClientNames().find(c => _bankNameHit(t.payer, c) >= 2) || '';
+  if (!k) return '';
+  const ix = _txIndex();
+  const m = ix.memo.get(k);
+  if (m !== undefined) return m;
+  let found = '';
+  const L = ix.list;
+  for (let i = 0; i < L.length; i++) {
+    const ck = L[i][0];
+    if (ck === k || (k.length >= 2 && ck.indexOf(k) >= 0) || (ck.length >= 2 && k.indexOf(ck) >= 0)) { found = L[i][1]; break; }
+  }
+  ix.memo.set(k, found);
+  return found;
 }
 function txIsGuess(t) { return !!(t && !t.client && !bankAliasMap()[t.pkey || _bankKey(t.payer)]); }
 function ledgerRange(rr) {
@@ -6379,9 +6433,10 @@ function ledgerAgg() {
      견적 한 장이 결제됐는지는 «오래된 견적부터 채운» 결과일 뿐, 저장하지 않는다.
    ══════════════════════════════════════════════════════════ */
 let _cmCache = null, _qpCache = null, _cmAt = 0;
-function moneyBust() { _cmCache = null; _qpCache = null; }     // 자료가 바뀌면 다시 계산
+/* 자료가 바뀌면 다시 계산 — 거래처 이름 목록·입금자 추정 결과도 같이 버린다 */
+function moneyBust() { _cmCache = null; _qpCache = null; _lcNames = null; _tcIx = null; }
 function _moneyBuild() {
-  if (_cmCache && _qpCache && Date.now() - _cmAt < 1200) return;
+  if (_cmCache && _qpCache && Date.now() - _cmAt < 3000) return;   // 자료가 바뀌면 moneyBust() 가 바로 지우므로 오래 들고 있어도 안전
   const M = {}, P = {};
   const get = c => M[c] || (M[c] = { sale: 0, paid: 0, applied: 0, rem: 0, extra: 0, qn: 0 });
   const byC = {};
@@ -9982,10 +10037,39 @@ function quoteAmtPred(qy) {
     test: q => vals(q).some(v => exact ? v === n : String(v).includes(key))
   };
 }
+/* ── 견적 목록은 조금씩 나눠 그린다 (2026-09-07) ──────────────
+   견적이 466장이 되면서 한 번에 그리면 HTML 이 1.6MB · 화면 조각 2만개가 됐다.
+   데스크톱은 1초 걸리고, 휴대폰은 메모리가 모자라 «견적» 메뉴에서 그냥 튕겼다.
+   그래서 처음엔 60장만 그리고, 끝까지 내리면 60장씩 더 붙인다.
+   검색·필터를 바꾸면 다시 60장부터 시작한다.                                  */
+const Q_PAGE_STEP = 60;
+let _qPage = Q_PAGE_STEP, _qFlatList = null, _qSig = '';
+function _qMoreInner(total) {
+  return `<button class="btn btn-block" onclick="quoteMore()"><i class="ti ti-chevron-down"></i> 더 보기 <span style="color:var(--t3);font-weight:500">· ${total}건 중 ${_qPage}건</span></button>`;
+}
+function quoteMore() {
+  const box = el('q-list'); if (!box || !_qFlatList) return;
+  const from = _qPage, to = Math.min(_qFlatList.length, _qPage + Q_PAGE_STEP);
+  if (from >= to) return;
+  const html = _qFlatList.slice(from, to).map(quoteCardHtml).join('');
+  const more = el('q-more');
+  if (more) more.insertAdjacentHTML('beforebegin', html); else box.insertAdjacentHTML('beforeend', html);
+  _qPage = to;
+  if (more) { if (_qPage >= _qFlatList.length) more.remove(); else more.innerHTML = _qMoreInner(_qFlatList.length); }
+}
+/* 목록 끝까지 내리면 알아서 더 불러온다 (휴대폰에서 버튼 찾을 필요 없게) */
+function quoteListScroll(box) {
+  if (!box || !_qFlatList || _qPage >= _qFlatList.length) return;
+  if (box.scrollTop + box.clientHeight < box.scrollHeight - 600) return;
+  quoteMore();
+}
 function _quoteListInner() {
   const qy = (filters.quoteSearch || '').trim().toLowerCase();
   const all = (state.quotes || []);
   const ym = todayStr().slice(0, 7);
+  /* 검색어·필터·보기가 바뀌면 «처음 60장»으로 되돌린다. 자료만 바뀐 재렌더는 보던 만큼 유지 */
+  const _sig = [filters.quoteSearch || '', filters.qConf || '', filters.qStat || '', filters.qCat || '', filters.quoteView || '', filters.quoteMonth || '', filters.quoteDay || ''].join('|');
+  if (_sig !== _qSig) { _qSig = _sig; _qPage = Q_PAGE_STEP; }
   let list = all.slice().sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
   const _amtP = qy ? quoteAmtPred(filters.quoteSearch) : null;      // 금액 검색 (글자 검색과 '또는' 으로 합친다)
   if (qy) list = list.filter(q => (q.client || '').toLowerCase().includes(qy) || (q.docNo || '').toLowerCase().includes(qy) || (q.items || []).some(it => (it.name || '').toLowerCase().includes(qy)) || (_amtP ? _amtP.test(q) : false));
@@ -10098,6 +10182,7 @@ function _quoteListInner() {
   const WD = ['일', '월', '화', '수', '목', '금', '토'];
   const _flatUnpaid = (fStat !== 'all');   // 상태 필터를 걸면 월/일 묶음 없이 전체를 한 번에 본다
   let body, navBar = '';
+  _qFlatList = null;   // 월별·일별 보기에서는 «더 보기»가 없다 (아래 전체 보기에서만 채운다)
   if (view === 'month' && !_flatUnpaid) {
     const mlist = list.filter(q => qDate(q).startsWith(curMonth));
     const mSum = mlist.reduce((a, b) => a + (+b.total || 0), 0);
@@ -10123,9 +10208,15 @@ function _quoteListInner() {
       <button class="btn btn-sm" onclick="quoteDayNav(1)"><i class="ti ti-chevron-right"></i></button></div>`;
     body = dlist.length ? dlist.map(quoteCardHtml).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${esc(dTitle)}에 견적이 없습니다</div>`;
   } else {
-    body = list.length ? list.map(quoteCardHtml).join('') : `<div class="empty"><i class="ti ti-file-invoice"></i>${qy ? '검색 결과가 없습니다' : '작성한 견적이 없습니다. 견적 작성으로 시작하세요.'}</div>`;
+    /* ★ 전체 보기만 나눠 그린다 (월별·일별은 이미 그 기간 것만이라 양이 적다) */
+    _qFlatList = list;
+    if (_qPage > list.length) _qPage = Math.max(Q_PAGE_STEP, Math.min(_qPage, list.length));
+    const shown = list.slice(0, _qPage);
+    body = list.length
+      ? shown.map(quoteCardHtml).join('') + (list.length > _qPage ? `<div id="q-more" style="margin:10px 2px 4px">${_qMoreInner(list.length)}</div>` : '')
+      : `<div class="empty"><i class="ti ti-file-invoice"></i>${qy ? '검색 결과가 없습니다' : '작성한 견적이 없습니다. 견적 작성으로 시작하세요.'}</div>`;
   }
-  return `${statChips}${searchBar}${catBar}${unpaidBar}${navBar}<div id="q-list" data-keepscroll style="max-height:calc(100vh - 300px);min-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${body}</div>`;
+  return `${statChips}${searchBar}${catBar}${unpaidBar}${navBar}<div id="q-list" data-keepscroll onscroll="quoteListScroll(this)" style="max-height:calc(100vh - 300px);min-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch;padding-right:2px">${body}</div>`;
 }
 function quotesFilter() {
   const w = el('q-listwrap'); if (!w) { renderQuote(); return; }
