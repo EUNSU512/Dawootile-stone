@@ -502,6 +502,7 @@ async function seedSample() {
 const _loadedColls = {};
 function onData(coll) {
   _loadedColls[coll] = true;
+  if (['quotes', 'banktx', 'appmeta', 'clients'].includes(coll)) moneyBust();   // 돈 계산을 다시 하게 만든다
   if (coll === 'members' && !_membersLoaded) {
     _membersLoaded = true;
     _membersWaiters.splice(0).forEach(fn => fn());
@@ -818,7 +819,7 @@ function go(t) {
   if (isRestrictedRole()) t = 'stock';   // 고객·시공팀은 전용 화면만
   else if (!tabAllowed(t)) t = 'home';   // 접근 권한 없는 메뉴 차단
   filters.costEdit = '';   // 원가 입력 폼은 메뉴 이동 시 항상 닫기
-  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; filters.cutSim = false; filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; filters.bankList = false; filters.payMatch = false; filters.billEdit = false; _billEdit = null; }   // 견적 화면 상태 초기화
+  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; filters.cutSim = false; filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; filters.bankList = false;  filters.billEdit = false; _billEdit = null; }   // 견적 화면 상태 초기화
   if (t !== 'clients') filters.clientDetail = '';
   tab = t;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -843,8 +844,8 @@ let _renderTimer = null;
 function clientStats(name) {
   const qs = (state.quotes || []).filter(q => _normName(q.client) === _normName(name));
   const total = qs.reduce((a, b) => a + (+b.total || 0), 0);
-  const unpaid = qs.reduce((a, b) => a + Math.max(0, (+b.total || 0) - (+b.paidAmount || 0)), 0);
-  const paidSum = qs.reduce((a, b) => a + Math.min(+b.total || 0, +b.paidAmount || 0), 0);
+  const unpaid = qs.reduce((a, b) => a + quoteRem(b), 0);
+  const paidSum = qs.reduce((a, b) => a + quotePaid(b), 0);
   const noTax = qs.filter(q => !q.taxInvoice).length;
   return { count: qs.length, total: total, unpaid: unpaid, paidSum: paidSum, noTax: noTax };
 }
@@ -853,11 +854,11 @@ function downloadClientLedger(id) {
   if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후 다시'); return; }
   const qs = (state.quotes || []).filter(x => _normName(x.client) === _normName(c.value)).sort((a, b) => (+a.createdAt || 0) - (+b.createdAt || 0));
   const head = ['날짜', '견적번호', '품목', '공급가액', '부가세', '합계', '입금액', '미수', '결제', '결제일', '세금계산서', '승인번호'];
-  const rows = qs.map(q => { const names = (q.items || []).map(it => it.name).filter(Boolean).slice(0, 3).join(', ') + ((q.items || []).length > 3 ? (' 외 ' + ((q.items || []).length - 3)) : ''); const _t = +q.total || 0; const _p = Math.min(_t, +q.paidAmount || 0); return [qDate(q), q.docNo || '', names, +q.supply || 0, +q.vat || 0, _t, _p, Math.max(0, _t - _p), (_t > 0 && _p >= _t) ? '완료' : (_p > 0 ? '일부' : '미결제'), q.paidDate || '', q.taxInvoice ? '발행' : '미발행', q.ntsConfirmNum || '']; });
-  const supplySum = qs.reduce((a, b) => a + (+b.supply || 0), 0); const vatSum = qs.reduce((a, b) => a + (+b.vat || 0), 0); const total = qs.reduce((a, b) => a + (+b.total || 0), 0); const unpaid = qs.filter(q => !q.paid).reduce((a, b) => a + (+b.total || 0), 0);
+  const rows = qs.map(q => { const names = (q.items || []).map(it => it.name).filter(Boolean).slice(0, 3).join(', ') + ((q.items || []).length > 3 ? (' 외 ' + ((q.items || []).length - 3)) : ''); const _t = +q.total || 0; const _p = quotePaid(q); return [qDate(q), q.docNo || '', names, +q.supply || 0, +q.vat || 0, _t, _p, Math.max(0, _t - _p), (_t > 0 && _p >= _t) ? '완료' : (_p > 0 ? '일부' : '미결제'), q.paidDate || '', q.taxInvoice ? '발행' : '미발행', q.ntsConfirmNum || '']; });
+  const supplySum = qs.reduce((a, b) => a + (+b.supply || 0), 0); const vatSum = qs.reduce((a, b) => a + (+b.vat || 0), 0); const total = qs.reduce((a, b) => a + (+b.total || 0), 0); const unpaid = qs.filter(q => !quoteIsPaid(q)).reduce((a, b) => a + (+b.total || 0), 0);
   const ti = c.taxInfo || {};
   const aoa = [['거래처 원장 · ' + c.value], ['출력일 ' + todayStr() + (ti.bizNo ? (' · 사업자 ' + ti.bizNo) : '') + (c.ctype ? (' · 유형 ' + c.ctype) : '')], [], head].concat(rows);
-  const paidSum = qs.reduce((a, b) => a + Math.min(+b.total || 0, +b.paidAmount || 0), 0);
+  const paidSum = qs.reduce((a, b) => a + quotePaid(b), 0);
   aoa.push([]); aoa.push(['', '', '합계', supplySum, vatSum, total, paidSum, unpaid, '', '', '', '']);
   const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{ wch: 12 }, { wch: 16 }, { wch: 32 }, { wch: 12 }, { wch: 11 }, { wch: 13 }, { wch: 12 }, { wch: 12 }, { wch: 8 }, { wch: 12 }, { wch: 11 }, { wch: 22 }];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '원장');
@@ -1028,13 +1029,13 @@ function renderClientDetail() {
   const qs = (state.quotes || []).filter(x => _normName(x.client) === _normName(c.value)).sort((a, b) => (+b.createdAt || 0) - (+a.createdAt || 0));
   const ledger = qs.length ? qs.map(qq => {
     const when = qDate(qq);
-    const _p = +qq.paidAmount || 0; const _t = +qq.total || 0;
+    const _p = quotePaid(qq); const _t = +qq.total || 0;
     const paidPill = (_t > 0 && _p >= _t) ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${qq.id}')">결제완료</button>` : (_p > 0 ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${qq.id}')">입금 ${fmtWon(_p)}·미수 ${fmtWon(_t - _p)}</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${qq.id}')">미결제</button>`);
     const taxPill = qq.taxInvoice ? `<span class="pill p-prog">계산서발행</span>` : `<span class="pill p-gray">계산서미발행</span>`;
     return `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:9px 2px;border-bottom:1px solid var(--bd)">
       <div style="min-width:0"><div style="font-size:12.5px;font-weight:600">${esc(qq.docNo || '')} <span style="color:var(--t3);font-weight:400">· ${esc(when)}</span></div>
         <div style="display:flex;gap:4px;margin-top:3px">${paidPill}${taxPill}</div></div>
-      <div style="text-align:right;flex:none"><div style="font-weight:800;font-size:14px;color:${qq.paid ? 'var(--t2)' : 'var(--red-t)'}">${fmtWon(qq.total)}</div>
+      <div style="text-align:right;flex:none"><div style="font-weight:800;font-size:14px;color:${quoteIsPaid(qq) ? 'var(--t2)' : 'var(--red-t)'}">${fmtWon(qq.total)}</div>
         <button class="btn btn-sm" style="padding:2px 8px;font-size:11px;margin-top:2px" onclick="filters.quoteEdit='';filters.taxEdit='';go('quote');setTimeout(()=>openQuoteInline('${qq.id}'),50)">견적보기</button></div>
     </div>`;
   }).join('') : '<div class="empty" style="padding:16px">견적 내역이 없습니다</div>';
@@ -5034,15 +5035,47 @@ async function delQuote(id) {
   await Store.remove('quotes', id); filters.quoteEdit = ''; toast('삭제됨'); renderQuote();
 }
 /* ── 견적 ERP: 결제·세금계산서 상태, 견적→출고 ── */
-async function quoteMarkPaid(id) {
+/* ── 견적 카드의 결제 배지를 누르면 ─────────────────────────
+   ★ 2026-09-07부터 견적 한 장에 결제금을 적지 않는다(통장 입금만 믿는다).
+     그래서 «이 견적만 결제완료로 바꾸기»는 더 이상 없다.
+     대신 그 거래처 원장을 열어 준다 — 미수는 거기서 거래처 단위로 굴러간다. */
+function quoteMarkPaid(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) return;
-  const total = +q.total || 0; const cur = +q.paidAmount || 0;
-  const inp = prompt('입금 받은 누적 금액을 입력하세요.\n합계 ' + fmtWon(total) + '원 · 현재 입금 ' + fmtWon(cur) + '원\n(전액 입금: ' + total + ')', String(cur || ''));
-  if (inp === null) return;
-  let amt = Math.max(0, Math.round(_numv(inp))); if (total > 0 && amt > total) amt = total;
-  const paid = total > 0 && amt >= total;
-  await Store.update('quotes', id, { paidAmount: amt, paid: paid, paidDate: amt > 0 ? todayStr() : '' });
-  toast(paid ? '결제완료' : (amt > 0 ? ('입금 ' + fmtWon(amt) + ' · 미수 ' + fmtWon(total - amt)) : '미결제'));
+  const c = (q.client || '').trim();
+  if (!c) { toast('거래처가 없는 견적입니다'); return; }
+  if (!canLedger()) { toast('결제는 통장 입금으로 자동 계산됩니다 — 원장 권한이 필요합니다'); return; }
+  openLedgerFor(c);
+}
+/* 통장에 안 찍힌 돈(현금·상계 등)을 직접 넣기 — 통장 내역과 같은 곳에 쌓아 기준을 하나로 둔다 */
+function openManualPay(client) {
+  if (!canLedger()) { toast('거래처 원장 권한이 없습니다'); return; }
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-cash"></i>입금 직접 넣기</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div class="banner info" style="margin-bottom:11px;font-size:12px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0">통장에 안 찍힌 돈(현금·상계 등)만 넣으세요. <b>통장으로 들어온 입금은 이미 자동으로 잡혀 있습니다.</b></span></div>
+    <div class="fld full" style="margin-bottom:10px"><label>거래처 <span class="req">*</span></label>${clientPickerHtml('mp-c', client || '')}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+      <div class="fld" style="flex:1;min-width:140px;margin:0"><label>받은 날</label><input type="date" id="mp-date" value="${todayStr()}" style="width:100%;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px"></div>
+      <div class="fld" style="flex:1;min-width:140px;margin:0"><label>금액 <span class="req">*</span></label><input id="mp-amt" inputmode="numeric" placeholder="0" style="width:100%;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px"></div>
+    </div>
+    <div class="fld full" style="margin-bottom:12px"><label>메모</label><input id="mp-memo" lang="ko" placeholder="예: 현금 수령 / 자재 상계" style="width:100%;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px"></div>
+    <div class="frm-foot"><button class="btn" style="flex:1" onclick="closeModal()">취소</button>
+      <button class="btn btn-pri" style="flex:2" onclick="saveManualPay()"><i class="ti ti-check"></i>넣기</button></div>`);
+}
+async function saveManualPay() {
+  const c = clientPickValue('mp-c');
+  if (!c) { toast('거래처를 목록에서 눌러 선택하세요'); return; }
+  const amt = Math.round(_numv((el('mp-amt') || {}).value || 0));
+  if (!(amt > 0)) { toast('금액을 넣으세요'); return; }
+  const d = (el('mp-date') || {}).value || todayStr();
+  const memo = ((el('mp-memo') || {}).value || '').trim();
+  try {
+    await Store.add('banktx', {
+      date: d, dt: d, payer: c, pkey: _bankKey(c), amount: amt, out: 0,
+      bankNm: '', way: memo || '직접 입력', client: c, manual: true, syncedAt: Date.now(),
+      by: (me && me.name) || ''
+    });
+    closeModal(); toast(c + ' · ' + fmtWon(amt) + '원 넣었습니다');
+    setTimeout(() => { if (filters.ledger) renderLedger(); else renderQuote(); }, 500);
+  } catch (e) { toast('실패: ' + ((e && e.message) || e)); }
 }
 async function quoteMarkTax(id) { const q = (state.quotes || []).find(x => x.id === id); if (!q) return; const t = !q.taxInvoice; await Store.update('quotes', id, { taxInvoice: t, taxDate: t ? todayStr() : '' }); toast(t ? '세금계산서 발행 표시' : '표시 해제'); }
 /* ══════════════════════════════════════════════════════════
@@ -5572,12 +5605,12 @@ async function taxPing() {
 /* 발행 화면에 붙는 거래처 원장 — 이 거래처의 견적·입금·미수·계산서 상태를 한눈에 */
 function taxLedgerHtml(client, curId) {
   const key = _normName(client || ''); if (!key) return '';
-  const rem = q => Math.max(0, (+q.total || 0) - (+q.paidAmount || 0));
+  const rem = q => quoteRem(q);
   const list = (state.quotes || []).filter(q => _normName(q.client || '') === key)
     .sort((a, b) => (qDate(b) || '').localeCompare(qDate(a) || '') || (+b.createdAt || 0) - (+a.createdAt || 0));
   if (!list.length) return '';
   const tot = list.reduce((a, q) => a + (+q.total || 0), 0);
-  const paid = list.reduce((a, q) => a + (+q.paidAmount || 0), 0);
+  const paid = list.reduce((a, q) => a + quotePaid(q), 0);
   const unp = list.reduce((a, q) => a + rem(q), 0);
   const noTax = list.filter(q => !q.taxInvoice).length;
   const cell = (v, col) => `<td style="text-align:right;white-space:nowrap${col ? ';color:' + col + ';font-weight:700' : ''}">${v ? fmtWon(v) : '<span style="color:var(--bd2)">-</span>'}</td>`;
@@ -5593,7 +5626,7 @@ function taxLedgerHtml(client, curId) {
         return `<tr style="${cur ? 'background:var(--gl2,#eefaf5)' : ''}">
           <td style="white-space:nowrap">${esc(qDate(q))}</td>
           <td>${cur ? '<b style="color:var(--gd)">▶ ' + esc(q.docNo || '') + '</b>' : esc(q.docNo || '')}${q.ordered ? '' : '<div style="font-size:10px;color:var(--amber-t)">미확정</div>'}</td>
-          ${cell(q.total)}${cell(q.paidAmount)}${cell(r, r > 0 ? 'var(--red-t)' : '')}
+          ${cell(q.total)}${cell(quotePaid(q))}${cell(r, r > 0 ? 'var(--red-t)' : '')}
           <td style="white-space:nowrap;font-size:11px">${q.ntsConfirmNum ? '<span style="color:var(--gd);font-weight:700">발행</span>' : (q.taxInvoice ? '<span style="color:var(--t3)">표시만</span>' : '<span style="color:var(--red-t)">미발행</span>')}</td>
           <td>${cur ? '<span style="font-size:11px;color:var(--t3)">현재</span>' : `<button class="btn btn-sm btn-ghost" title="이 건으로 발행" onclick="openTaxForm('${q.id}')"><i class="ti ti-arrow-right"></i></button>`}</td>
         </tr>`; }).join('')}</tbody></table></div>
@@ -5730,7 +5763,7 @@ function _bankNameHit(payer, name) {
 }
 /* 입금자명 + 금액으로 후보 견적 찾기 — 이름 겹치는 미수 견적 우선, 금액 같으면 최우선 */
 function bankCandidates(payer, amount) {
-  const rem = q => Math.max(0, (+q.total || 0) - (+q.paidAmount || 0));
+  const rem = q => quoteRem(q);
   const unpaid = (state.quotes || []).filter(q => rem(q) > 0);
   const key = _bankKey(payer || '');
   const score = q => key ? Math.max(
@@ -6005,10 +6038,25 @@ async function bankRun() {
    ══════════════════════════════════════════════════════════ */
 let _bkRows = [];   // 지금 화면에 뜬 줄 — 엑셀 내려받기가 이걸 그대로 쓴다
 
-/* «견적 연결 필요» = 거래처는 붙었는데 아직 어느 견적의 대금인지 안 정해진 입금.
-   기준일(payCutoff) 이전 입금은 앱 쓰기 전 거래의 대금이라 세지 않는다. */
-function txNeedsLink(t) { return txIsIn(t) && !!txClientOf(t) && !txIsLinked(t) && (t.date || '') >= payCutoff(); }
-function bankNeedLinkCount() { try { return (state.banktx || []).filter(txNeedsLink).length; } catch (e) { return 0; } }
+/* 거래처를 아직 못 정한 입금 — 사람이 손봐 줄 게 이것 하나뿐이다.
+   거래처만 정해지면 그 거래처 미수에서 자동으로 빠진다(견적에 붙이는 작업은 없어졌다). */
+function txNoClient(t) { return txIsIn(t) && !txClientOf(t); }
+function bankNoClientCount() { try { return (state.banktx || []).filter(txNoClient).length; } catch (e) { return 0; } }
+/* 견적 목록 위 알림 — 거래처를 못 정한 입금이 있으면 알려준다 */
+function _pmBanner() {
+  if (!canLedger()) return '';
+  let n = 0, sum = 0;
+  try {
+    const l = (state.banktx || []).filter(txNoClient);
+    n = l.length; sum = l.reduce((a, t) => a + txMoney(t), 0);
+  } catch (e) { return ''; }
+  if (!n) return '';
+  return `<button class="card" style="width:100%;text-align:left;display:block;padding:11px 13px;margin-bottom:11px;border:1.5px solid var(--amber-t);background:#fffaf0;cursor:pointer" onclick="bankOpenNoClient()">
+    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
+      <span style="font-size:13px"><i class="ti ti-alert-triangle" style="color:var(--amber-t)"></i> <b>어느 거래처 돈인지 모르는 입금 ${n}건</b>이 있습니다</span>
+      <span style="font-size:13.5px;font-weight:800;color:var(--amber-t);white-space:nowrap">${fmtWon(sum)}원 <i class="ti ti-chevron-right"></i></span></div>
+    <div style="font-size:11.5px;color:var(--t3);margin-top:4px">거래처만 정해주면 그 거래처 미수에서 자동으로 빠집니다</div></button>`;
+}
 
 function bankOpenList() {
   if (!canLedger()) { toast('거래처 원장 권한이 없습니다 — 관리자에게 문의하세요'); return; }
@@ -6019,140 +6067,16 @@ function bankOpenList() {
   go('quote');
 }
 /* 견적 목록의 초록 배너에서 바로 — '견적 연결 필요'만 걸러 연다 */
-function bankOpenNeedLink() { filters.bankSearch = ''; filters.bankKind = 'needlink'; filters.bankRange = 'all'; bankOpenList(); }
+function bankOpenNoClient() { filters.bankSearch = ''; filters.bankKind = 'noclient'; filters.bankRange = 'all'; bankOpenList(); }
 function bankListBack() { filters.bankList = false; renderLedger(); }
-function bankSetKind(v) { filters.bankKind = v; _bkSel = new Set(); renderLedger(); }    // 화면이 바뀌면 골라둔 건 지운다
-function bankSetRange(v) { filters.bankRange = v; _bkSel = new Set(); renderLedger(); }
+function bankSetKind(v) { filters.bankKind = v; renderLedger(); }
+function bankSetRange(v) { filters.bankRange = v; renderLedger(); }
 /* 검색은 목록만 다시 그린다 — 화면 전체를 다시 그리면 글자 치던 칸에서 커서가 빠진다 */
 function bankListFilter() {
   const w = el('bk-listwrap'); if (w) w.innerHTML = _bankListInner();
   const s = el('bk-sumbar'); if (s) s.innerHTML = _bankSumInner();
-  bankSelChanged();
 }
 
-/* ── 여러 건 한꺼번에 연결 ─────────────────────────────────
-   한 줄씩 누르는 게 원칙이지만 400건이 넘으면 손이 아프다.
-   체크한 입금들을 «오래된 순»으로 한 번에 배분한다. */
-let _bkSel = new Set();
-/* 체크할 수 있는 줄 = 입금 · 거래처는 붙었고 · 아직 견적에 안 붙은 것 */
-function bankSelectable(t) { return txIsIn(t) && !!txClientOf(t) && !txIsLinked(t); }
-function bankSelToggle(id) { if (_bkSel.has(id)) _bkSel.delete(id); else _bkSel.add(id); bankSelChanged(); }
-function bankSelAll(on) {
-  _bkSel = new Set(on ? _bkRows.filter(bankSelectable).map(t => t.id) : []);
-  const w = el('bk-listwrap'); if (w) w.innerHTML = _bankListInner();
-  bankSelChanged();
-}
-function bankSelChanged() {
-  const b = el('bk-bulkbar'); if (!b) return;
-  const h = _bankBulkInner();
-  b.innerHTML = h; b.style.display = h ? '' : 'none';    // 고를 게 없으면 빈 초록 상자가 남지 않게
-}
-
-/* ★ 입금 여러 건을 한 견적에 겹쳐 넣지 않도록, 견적별 «남은 미수»를 들고 다니며 깎는다.
-   (예전 [결제 반영] 화면의 left[quoteId] 와 같은 장치) */
-function bankBulkPlan(txs) {
-  const left = {}, byClient = {};
-  const listOf = c => (byClient[c] || (byClient[c] = txLinkQuotes(c)));
-  const out = [];
-  txs.slice()
-    .sort((a, b) => String(a.dt || a.date || '').localeCompare(String(b.dt || b.date || '')))   // 오래된 입금부터
-    .forEach(t => {
-      const c = txClientOf(t); if (!c) return;
-      let money = txMoney(t); const plan = [];
-      for (const q of listOf(c)) {
-        if (money <= 0) break;
-        if (left[q.id] === undefined) left[q.id] = q.rem;
-        const add = Math.min(money, left[q.id]);
-        if (add <= 0) continue;
-        plan.push({ quoteId: q.id, docNo: q.docNo || '', amount: add });
-        left[q.id] -= add; money -= add;
-      }
-      if (plan.length) out.push({ tid: t.id, client: c, payer: t.payer || '', money: txMoney(t), plan: plan, rest: money });
-    });
-  return out;
-}
-
-function _bankBulkInner() {
-  const pick = _bkRows.filter(t => _bkSel.has(t.id) && bankSelectable(t));
-  const can = _bkRows.filter(bankSelectable).length;
-  if (!can) return '';
-  if (!pick.length) {
-    return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <span style="font-size:12.5px;color:var(--t2)">이 화면에 <b>견적에 연결할 수 있는 입금 ${can}건</b>이 있습니다</span>
-      <button class="btn btn-sm" style="margin-left:auto" onclick="bankSelAll(true)"><i class="ti ti-checkbox"></i>${can}건 모두 선택</button></div>`;
-  }
-  const plans = bankBulkPlan(pick);
-  const used = plans.reduce((a, m) => a + m.plan.reduce((x, p) => x + p.amount, 0), 0);
-  const rest = plans.reduce((a, m) => a + m.rest, 0) + pick.filter(t => !plans.some(m => m.tid === t.id)).reduce((a, t) => a + txMoney(t), 0);
-  const cls = new Set(plans.map(m => m.client)).size;
-  const skip = pick.length - plans.length;      // 그 거래처 미수가 이미 다 차서 넣을 데가 없는 입금
-  return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-      <span style="font-size:12.5px"><b style="color:var(--gd)">${pick.length}건 선택</b> <span style="color:var(--t3)">· 거래처 ${cls}곳</span></span>
-      <span style="font-size:12px;color:var(--t2)">견적에 들어갈 돈 <b style="font-size:14.5px;color:var(--gd)">${fmtWon(used)}</b>원${rest > 0 ? ` <span style="color:var(--t3)">· 남는 ${fmtWon(rest)}원은 선입금</span>` : ''}</span>
-      <span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
-        <button class="btn btn-sm" onclick="bankSelAll(false)">선택 해제</button>
-        <button class="btn btn-sm" onclick="bankSelAll(true)">모두 선택</button>
-        <button class="btn btn-sm btn-pri" onclick="bankBulkRun()" ${plans.length ? '' : 'disabled'}><i class="ti ti-link"></i>${plans.length}건 연결하기</button>
-      </span>
-      ${skip > 0 ? `<div style="width:100%;font-size:11.5px;color:var(--t3);border-top:1px dashed var(--bd);padding-top:6px"><i class="ti ti-info-circle"></i> 고른 것 중 <b>${skip}건</b>은 그 거래처의 안 받은 견적이 이미 다 채워져서 연결되지 않습니다 (선입금으로 남습니다)</div>` : ''}</div>`;
-}
-
-async function bankBulkRun() {
-  if (_txlBusy) return;
-  const pick = _bkRows.filter(t => _bkSel.has(t.id) && bankSelectable(t));
-  const plans = bankBulkPlan(pick);
-  if (!plans.length) { toast('연결할 수 있는 건이 없습니다'); return; }
-  const used = plans.reduce((a, m) => a + m.plan.reduce((x, p) => x + p.amount, 0), 0);
-  const cls = new Set(plans.map(m => m.client)).size;
-  if (!confirm(`거래처 ${cls}곳 · 입금 ${plans.length}건에서 ${fmtWon(used)}원을 견적 결제로 반영할까요?\n\n오래된 견적부터 채웁니다. 미수보다 많은 돈은 넣지 않고 선입금으로 둡니다.\n반영 뒤에도 한 건씩 되돌릴 수 있습니다.`)) return;
-
-  /* 같은 견적에 여러 입금이 들어갈 수 있으므로, 견적마다 «더할 금액»을 먼저 합친다.
-     그래야 한 번의 쓰기로 최종 금액이 정확히 들어간다 (겹쳐 쓰면 마지막 것만 남는다). */
-  const addQ = {};
-  plans.forEach(m => m.plan.forEach(p => { addQ[p.quoteId] = (addQ[p.quoteId] || 0) + p.amount; }));
-  const now = Date.now(), who = (me && me.name) || '', today = todayStr();
-  const ops = [];
-  Object.keys(addQ).forEach(qid => {
-    const q = (state.quotes || []).find(x => x.id === qid); if (!q) return;
-    const total = +q.total || 0, next = Math.min(total, (+q.paidAmount || 0) + addQ[qid]);
-    ops.push({ coll: 'quotes', id: qid, data: { paidAmount: next, paid: total > 0 && next >= total, paidDate: today } });
-  });
-  plans.forEach(m => ops.push({ coll: 'banktx', id: m.tid, data: { client: m.client, alloc: m.plan, appliedAt: now, appliedBy: who } }));
-
-  _txlBusy = true;
-  openModal(`<div class="sheet-h"><h3><i class="ti ti-link"></i>연결 중</h3></div>
-    <div class="banner info" style="font-size:12.5px"><i class="ti ti-loader"></i><span style="flex:1;min-width:0">창을 닫지 마세요. <b id="bk-prog">준비 중…</b></span></div>`);
-  const prog = h => { const e = el('bk-prog'); if (e) e.innerHTML = h; };
-  let done = 0;
-  try {
-    if (CLOUD) {
-      for (let i = 0; i < ops.length; i += 400) {
-        const chunk = ops.slice(i, i + 400);
-        const b = db.batch();
-        chunk.forEach(o => b.update(cref(o.coll).doc(o.id), o.data));
-        await b.commit();
-        done += chunk.length; prog(done + ' / ' + ops.length);
-      }
-    } else {
-      for (const o of ops) { await Store.update(o.coll, o.id, o.data); done++; if (done % 20 === 0) prog(done + ' / ' + ops.length); }
-    }
-    /* 이름으로 추정해서 붙은 거래처는 별칭으로 기억해 둔다 — 다음부터 자동 */
-    const map = Object.assign({}, bankAliasMap()); let newAlias = 0;
-    plans.forEach(m => {
-      const t = (state.banktx || []).find(x => x.id === m.tid); if (!t || t.client) return;
-      const k = t.pkey || _bankKey(t.payer); if (!k || map[k]) return;
-      map[k] = m.client; newAlias++;
-    });
-    if (newAlias) { try { await saveBankAlias(map); } catch (e) { } }
-    _bkSel = new Set();
-    closeModal();
-    toast(`입금 ${plans.length}건 · ${fmtWon(used)}원 반영됨`);
-    setTimeout(renderLedger, 700);
-  } catch (e) {
-    closeModal();
-    toast('실패: ' + ((e && e.message) || e));
-  } finally { _txlBusy = false; }
-}
 
 /* 검색·기간·구분을 모두 적용한 줄 (최신순) */
 function bankRows() {
@@ -6167,13 +6091,11 @@ function bankRows() {
     if (kind === 'in' && !txIsIn(t)) return false;
     if (kind === 'out' && !txIsOut(t)) return false;
     if (kind === 'noclient' && (!txIsIn(t) || txClientOf(t))) return false;
-    if (kind === 'needlink' && !txNeedsLink(t)) return false;
-    if (kind === 'linked' && !txIsLinked(t)) return false;
     const d = t.date || '';
     if (d < R.sd || d > R.ed) return false;
     if (!qy) return true;
     const hay = [t.payer, t.bankNm, t.way, txClientOf(t), t.date, t.dt,
-      (Array.isArray(t.alloc) ? t.alloc : []).map(a => a.docNo).join(' ')].join(' ').toLowerCase();
+      t.way].join(' ').toLowerCase();
     if (hay.indexOf(low) >= 0) return true;
     const money = txMoney(t);
     if (amtP && amtP.test({ total: money, supply: money })) return true;
@@ -6201,34 +6123,23 @@ function _bankListInner() {
   const MAX = 400;
   const shown = _bkRows.slice(0, MAX);
   const cut = _bkRows.length - shown.length;
-  const anySel = _bkRows.some(bankSelectable);
   const row = t => {
     const isOut = txIsOut(t);
     const c = isOut ? '' : txClientOf(t);
-    const linked = txIsLinked(t);
-    const docs = linked ? t.alloc.map(a => a.docNo).filter(Boolean).join(', ') : '';
-    const canSel = bankSelectable(t);
     return `<tr${isOut ? ' style="background:#fdf6f5"' : ''}>
-      ${anySel ? `<td style="text-align:center">${canSel ? `<input type="checkbox" ${_bkSel.has(t.id) ? 'checked' : ''} onchange="bankSelToggle('${t.id}')" style="width:17px;height:17px;cursor:pointer">` : '<span style="color:var(--bd2)">·</span>'}</td>` : ''}
       <td style="white-space:nowrap;color:var(--t3)">${esc(String(t.dt || t.date || '').slice(2))}</td>
-      <td>${isOut ? '<span class="pill p-issue">출금</span>' : '<span class="pill p-done">입금</span>'}</td>
-      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.payer || '')}"><b>${esc(t.payer || '(이름 없음)')}</b>${t.bankNm ? ` <span style="color:var(--t3);font-size:11.5px">${esc(t.bankNm)}</span>` : ''}</td>
-      <td style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${isOut ? '<span style="color:var(--bd2)">·</span>'
-        : (c ? `<button class="pill p-gray" style="border:none;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis" onclick="openLedgerFor(${JSON.stringify(c).replace(/"/g, '&quot;')})" title="이 거래처 원장 보기">${esc(c)}</button>`
-             : `<button class="btn btn-sm btn-ghost" style="padding:2px 7px;font-size:11px;color:var(--gd);border-color:var(--gd)" onclick="txLinkOpen('${t.id}')"><i class="ti ti-link"></i>거래처 연결</button>`)}</td>
+      <td>${isOut ? '<span class="pill p-issue">출금</span>' : (t.manual ? '<span class="pill p-prog">직접</span>' : '<span class="pill p-done">입금</span>')}</td>
+      <td style="max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.payer || '')}"><b>${esc(t.payer || '(이름 없음)')}</b>${t.bankNm ? ` <span style="color:var(--t3);font-size:11.5px">${esc(t.bankNm)}</span>` : ''}</td>
+      <td style="max-width:210px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${isOut ? '<span style="color:var(--bd2)">·</span>'
+        : (c ? `<button class="pill p-gray" style="border:none;cursor:pointer;max-width:150px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle" onclick="openLedgerFor(${JSON.stringify(c).replace(/"/g, '&quot;')})" title="이 거래처 원장 보기">${esc(c)}</button><button class="btn btn-sm btn-ghost" style="padding:1px 5px;margin-left:3px" title="거래처 바꾸기" onclick="txReassign('${t.id}')"><i class="ti ti-switch-horizontal"></i></button>`
+             : `<button class="btn btn-sm btn-ghost" style="padding:2px 8px;font-size:11px;color:var(--gd);border-color:var(--gd)" onclick="txReassign('${t.id}')"><i class="ti ti-link"></i>거래처 지정</button>`)}</td>
       <td style="text-align:right;white-space:nowrap;font-weight:700;color:${isOut ? 'var(--red-t)' : 'var(--gd)'}">${isOut ? '−' : ''}${fmtWon(txMoney(t))}</td>
-      <td style="max-width:160px;white-space:nowrap;font-size:11.5px;color:var(--t2)">${isOut ? '<span style="color:var(--bd2)">·</span>'
-        : (linked
-          ? `<span style="display:inline-block;max-width:110px;overflow:hidden;text-overflow:ellipsis;vertical-align:middle" title="${esc(docs)}">${esc(docs)}</span><button class="btn btn-sm btn-ghost" style="padding:1px 5px;margin-left:3px" title="연결 풀기" onclick="txLinkUndo('${t.id}')"><i class="ti ti-arrow-back-up"></i></button>`
-          : `<button class="btn btn-sm btn-ghost" style="padding:2px 7px;font-size:11px" onclick="txLinkOpen('${t.id}')"><i class="ti ti-link"></i>견적 연결</button>`)}</td>
     </tr>`;
   };
-  const nSel = shown.filter(bankSelectable).length;
-  const allOn = nSel > 0 && shown.filter(bankSelectable).every(t => _bkSel.has(t.id));
   return `<div class="tbl-wrap"><table class="tbl">
-      <thead><tr>${anySel ? `<th style="width:34px;text-align:center"><input type="checkbox" ${allOn ? 'checked' : ''} onchange="bankSelAll(this.checked)" title="화면에 뜬 것 모두" style="width:16px;height:16px;cursor:pointer"></th>` : ''}
-        <th style="width:96px">일시</th><th style="width:52px">구분</th><th>입금자 · 적요</th><th style="width:150px">거래처</th>
-        <th style="text-align:right;width:104px">금액</th><th style="width:130px">연결 견적</th></tr></thead>
+      <thead><tr>
+        <th style="width:96px">일시</th><th style="width:52px">구분</th><th>입금자 · 적요</th><th style="width:200px">거래처</th>
+        <th style="text-align:right;width:104px">금액</th></tr></thead>
       <tbody>${shown.map(row).join('')}</tbody>
     </table></div>
     ${cut > 0 ? `<div style="font-size:11.5px;color:var(--t3);text-align:center;padding:9px">가장 최근 ${MAX}건만 표시했습니다 · 나머지 ${cut}건은 검색이나 기간으로 좁혀 보세요</div>` : ''}`;
@@ -6241,7 +6152,6 @@ function bankListHtml() {
   const kc = (v, l) => `<button class="chip ${(filters.bankKind || 'all') === v ? 'active' : ''}" onclick="bankSetKind('${v}')">${l}</button>`;
   const rc = (v, l) => `<button class="chip ${(filters.bankRange || 'all') === v ? 'active' : ''}" onclick="bankSetRange('${v}')">${l}</button>`;
   const listHtml = _bankListInner();     // ★ 먼저 만들어야 _bkRows 가 채워진다 (합계 바·일괄 연결 바가 이걸 본다)
-  const bulkHtml = _bankBulkInner();
   return `
     <div class="ph"><div><h2><i class="ti ti-building-bank"></i>통장 내역</h2>
       <p>앱에 저장된 은행 거래 ${all.length}건${per ? ` · ${esc(per[0])} ~ ${esc(per[1])}` : ''}</p></div>
@@ -6260,7 +6170,7 @@ function bankListHtml() {
 
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
       <span style="font-size:11px;color:var(--t3);width:38px;flex:none">구분</span>
-      ${kc('all', '전체')}${kc('in', '입금')}${seeOut ? kc('out', '출금') : ''}${kc('noclient', '거래처 미지정')}${kc('needlink', '견적 연결 필요')}${kc('linked', '연결됨')}
+      ${kc('all', '전체')}${kc('in', '입금')}${seeOut ? kc('out', '출금') : ''}${kc('noclient', '거래처 미지정')}
     </div>
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
       <span style="font-size:11px;color:var(--t3);width:38px;flex:none">기간</span>
@@ -6268,7 +6178,6 @@ function bankListHtml() {
     </div>
 
     <div class="card" style="padding:10px 13px;margin-bottom:10px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap" id="bk-sumbar">${_bankSumInner()}</div>
-    <div class="card" id="bk-bulkbar" style="padding:10px 13px;margin-bottom:10px;border:1.5px solid var(--gd);background:var(--gl2,#f4fbf8)${bulkHtml ? '' : ';display:none'}">${bulkHtml}</div>
     <div id="bk-listwrap">${listHtml}</div>`;
 }
 
@@ -6278,187 +6187,23 @@ function bankXlsx() {
   const rows = _bkRows.length ? _bkRows : bankRows();
   if (!rows.length) { toast('내려받을 내역이 없습니다'); return; }
   const R = ledgerRange(filters.bankRange || 'all');
-  const head = ['일시', '구분', '입금자·적요', '은행', '거래처', '입금액', '출금액', '연결 견적'];
+  const head = ['일시', '구분', '입금자·적요', '은행', '거래처', '입금액', '출금액'];
   const aoa = [['통장 내역 — ' + R.label + ((filters.bankSearch || '').trim() ? ' · 검색 «' + filters.bankSearch + '»' : '')],
   ['출력일 ' + todayStr() + ' · ' + rows.length + '건 · 통장 잔액은 포함하지 않습니다'], [], head];
   rows.forEach(t => {
     const isOut = txIsOut(t);
-    aoa.push([t.dt || t.date || '', isOut ? '출금' : '입금', t.payer || '', t.bankNm || '',
-      isOut ? '' : txClientOf(t), isOut ? '' : txMoney(t), isOut ? txMoney(t) : '',
-      txIsLinked(t) ? t.alloc.map(a => a.docNo).filter(Boolean).join(', ') : '']);
+    aoa.push([t.dt || t.date || '', isOut ? '출금' : (t.manual ? '직접' : '입금'), t.payer || '', t.bankNm || '',
+      isOut ? '' : txClientOf(t), isOut ? '' : txMoney(t), isOut ? txMoney(t) : '']);
   });
   const si = rows.filter(txIsIn).reduce((a, t) => a + txMoney(t), 0);
   const so = rows.filter(txIsOut).reduce((a, t) => a + txMoney(t), 0);
   aoa.push([]);
-  aoa.push(['합계', '', '', '', '', si, so, '']);
+  aoa.push(['합계', '', '', '', '', si, so]);
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws['!cols'] = [{ wch: 17 }, { wch: 6 }, { wch: 24 }, { wch: 12 }, { wch: 20 }, { wch: 13 }, { wch: 13 }, { wch: 18 }];
+  ws['!cols'] = [{ wch: 17 }, { wch: 6 }, { wch: 24 }, { wch: 12 }, { wch: 22 }, { wch: 13 }, { wch: 13 }];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '통장내역');
   XLSX.writeFile(wb, '통장내역_' + todayStr() + '.xlsx');
   toast('엑셀 저장됨');
-}
-
-/* ══════════════════════════════════════════════════════════
-   입금 한 건 → 거래처·견적 연결  (통장 내역 줄에서 바로)
-   ──────────────────────────────────────────────────────────
-   예전에는 [결제 반영] 이라는 별도 화면에서 한꺼번에 했는데
-   "그게 왜 따로 있냐"는 지적을 받아, 통장 내역 목록에서 바로 하도록 옮겼다.
-   한 창에서 ① 거래처 붙이기 ② 그 거래처 미수 견적에 돈 넣기 를 같이 한다.
-   ══════════════════════════════════════════════════════════ */
-let _txl = { id: '', money: 0 };   // 지금 연결 창에 뜬 입금
-let _txlSel = {};                  // { 견적id: true } — 창에서 고른 견적
-let _txlBusy = false;
-
-/* 그 거래처의 아직 안 받은 견적 (오래된 순) */
-function txLinkQuotes(client) {
-  if (!client) return [];
-  return (state.quotes || [])
-    .filter(q => !!q.ordered && (q.client || '').trim() === client)
-    .map(q => ({
-      id: q.id, docNo: q.docNo || '', date: q.date || '',
-      total: Math.round(+q.total || 0),
-      rem: Math.max(0, Math.round((+q.total || 0) - (+q.paidAmount || 0)))
-    }))
-    .filter(q => q.rem > 0)
-    .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.docNo || '').localeCompare(b.docNo || ''));
-}
-/* 입금액이 다 없어질 때까지 오래된 견적부터 미리 골라 둔다 (예전 [결제 반영]과 같은 규칙) */
-function txLinkAutoPick(list, money) {
-  const sel = {}; let left = money;
-  for (const q of list) { if (left <= 0) break; sel[q.id] = true; left -= Math.min(left, q.rem); }
-  return sel;
-}
-/* 고른 견적에 얼마씩 들어가는지 — 오래된 것부터 채운다 */
-function txLinkPlan(list, money) {
-  let left = money; const plan = [];
-  for (const q of list) {
-    if (!_txlSel[q.id] || left <= 0) continue;
-    const add = Math.min(left, q.rem);
-    if (add <= 0) continue;
-    plan.push({ quoteId: q.id, docNo: q.docNo, amount: add });
-    left -= add;
-  }
-  return { plan: plan, left: left };
-}
-function txLinkToggle(qid) { _txlSel[qid] = !_txlSel[qid]; const b = el('txl-body'); if (b) b.innerHTML = txLinkInner(); }
-/* 거래처를 바꾸면 견적 목록을 다시 만들고 자동 선택도 다시 한다 */
-function txLinkClientChanged() {
-  const c = clientPickValue('txl-c');
-  _txlSel = c ? txLinkAutoPick(txLinkQuotes(c), _txl.money) : {};
-  const b = el('txl-body'); if (b) b.innerHTML = txLinkInner();
-}
-function txLinkInner() {
-  const c = clientPickValue('txl-c');
-  if (!c) return `<div class="banner warn" style="font-size:12.5px"><i class="ti ti-alert-triangle"></i><span style="flex:1;min-width:0">위에서 <b>거래처를 먼저 고르세요.</b> 이름 일부만 쳐도 아래에 목록이 나옵니다.</span></div>`;
-  const list = txLinkQuotes(c);
-  if (!list.length) return `<div class="banner info" style="font-size:12.5px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0"><b>${esc(c)}</b> 는 지금 안 받은 견적이 없습니다. 이대로 저장하면 <b>거래처만 지정</b>되고 이 돈은 선입금으로 남습니다.</span></div>`;
-  const r = txLinkPlan(list, _txl.money);
-  const got = {}; r.plan.forEach(p => got[p.quoteId] = p.amount);
-  const used = _txl.money - r.left;
-  const rows = list.map(q => {
-    const on = !!_txlSel[q.id]; const amt = got[q.id] || 0;
-    return `<label style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--bd);cursor:pointer;background:${on ? 'var(--gl2,#f4fbf8)' : '#fff'}">
-      <input type="checkbox" ${on ? 'checked' : ''} onchange="txLinkToggle('${q.id}')" style="width:17px;height:17px;flex:none">
-      <span style="flex:1;min-width:0">
-        <b style="font-size:12.5px">${esc(q.docNo)}</b> <span style="color:var(--t3);font-size:11.5px">${esc((q.date || '').slice(2))}</span>
-        <span style="display:block;font-size:11.5px;color:var(--t3)">안 받은 돈 ${fmtWon(q.rem)}원 / 총 ${fmtWon(q.total)}원</span></span>
-      <span style="flex:none;text-align:right;white-space:nowrap;font-weight:800;font-size:13px;color:${amt > 0 ? 'var(--gd)' : 'var(--bd2)'}">${amt > 0 ? fmtWon(amt) : '·'}</span>
-    </label>`;
-  }).join('');
-  return `<div class="fld full" style="margin-bottom:6px"><label>이 돈을 넣을 견적 <span style="color:var(--t3);font-weight:500">(오래된 것부터 자동으로 골라뒀습니다 · 눌러서 바꾸세요)</span></label>
-      <div style="border:1px solid var(--bd2);border-radius:10px;max-height:30vh;overflow-y:auto;-webkit-overflow-scrolling:touch">${rows}</div></div>
-    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:baseline;background:var(--soft);border-radius:9px;padding:9px 12px;margin-bottom:11px">
-      <span style="font-size:12.5px">견적에 들어갈 돈 <b style="font-size:15px;color:var(--gd)">${fmtWon(used)}</b>원</span>
-      <span style="font-size:12px;color:${r.left > 0 ? 'var(--amber-t)' : 'var(--t3)'}">${r.left > 0 ? `남는 <b>${fmtWon(r.left)}</b>원은 선입금으로 남습니다` : '입금액을 다 썼습니다'}</span>
-    </div>`;
-}
-
-function txLinkOpen(id) {
-  if (!canLedger()) { toast('거래처 원장 권한이 없습니다 — 관리자에게 문의하세요'); return; }
-  const t = (state.banktx || []).find(x => x.id === id); if (!t) return;
-  if (!txIsIn(t)) { toast('출금은 견적에 연결하지 않습니다'); return; }
-  _txl = { id: id, money: txMoney(t) };
-  _txlSel = {};
-  const head = `<div class="card" style="padding:11px 13px;margin-bottom:11px">
-      <div style="font-size:13px"><b>${esc(t.payer || '(이름 없음)')}</b> <span style="color:var(--t3)">· ${esc(t.dt || t.date || '')}${t.bankNm ? ' · ' + esc(t.bankNm) : ''}</span></div>
-      <div style="font-size:19px;font-weight:800;color:var(--gd);margin-top:4px">${fmtWon(_txl.money)}원</div></div>`;
-  /* 이미 연결된 입금은 두 번 반영되면 안 되므로, 먼저 풀게 한다 */
-  if (txIsLinked(t)) {
-    openModal(`<div class="sheet-h"><h3><i class="ti ti-link"></i>입금 연결</h3><button class="x" onclick="closeModal()">×</button></div>
-      ${head}
-      <div class="banner info" style="margin-bottom:11px;font-size:12.5px"><i class="ti ti-check"></i><span style="flex:1;min-width:0">
-        이미 <b>${esc(txClientOf(t))}</b> 의 견적에 반영되어 있습니다.
-        <div style="margin-top:6px;background:#fff;border:1px solid var(--bd);border-radius:9px">
-          ${t.alloc.map(a => `<div style="display:flex;justify-content:space-between;gap:8px;padding:6px 10px;border-bottom:1px solid var(--bd);font-size:12.5px"><b>${esc(a.docNo || '')}</b><b style="color:var(--gd)">${fmtWon(a.amount)}</b></div>`).join('')}
-        </div>
-        <div style="margin-top:7px">바꾸려면 먼저 연결을 푸세요.</div></span></div>
-      <div class="frm-foot"><button class="btn" style="flex:1" onclick="closeModal()">닫기</button>
-        <button class="btn" style="flex:1;color:var(--red-t);border-color:var(--red-t)" onclick="txLinkUndo('${id}')"><i class="ti ti-arrow-back-up"></i>연결 해제</button></div>`);
-    return;
-  }
-  openModal(`<div class="sheet-h"><h3><i class="ti ti-link"></i>입금 연결</h3><button class="x" onclick="closeModal()">×</button></div>
-    ${head}
-    <div class="fld full" style="margin-bottom:8px"><label>거래처 <span class="req">*</span></label>${clientPickerHtml('txl-c', txClientOf(t), '', 'txLinkClientChanged')}</div>
-    <label style="display:flex;align-items:center;gap:7px;font-size:12.5px;margin-bottom:12px;cursor:pointer">
-      <input type="checkbox" id="txl-alias" checked style="width:16px;height:16px">
-      <span>앞으로 <b>${esc(t.payer || '')}</b> 이름으로 들어오는 입금은 자동으로 이 거래처</span></label>
-    <div id="txl-body">${txLinkInner()}</div>
-    <div class="frm-foot"><button class="btn" style="flex:1" onclick="closeModal()">취소</button>
-      <button class="btn btn-pri" style="flex:2" onclick="txLinkSave('${id}')"><i class="ti ti-check"></i>연결하기</button></div>`);
-  txLinkClientChanged();   // 창을 연 순간 자동 선택까지 끝내 둔다
-}
-
-async function txLinkSave(id) {
-  if (_txlBusy) return;
-  const t = (state.banktx || []).find(x => x.id === id); if (!t) return;
-  if (txIsLinked(t)) { toast('이미 연결된 입금입니다 — 먼저 연결을 푸세요'); return; }
-  const c = clientPickValue('txl-c');
-  const typed = ((el('txl-c-q') || {}).value || '').trim();
-  if (!c) { toast(typed ? '아래 목록에서 거래처를 눌러 선택하세요' : '거래처를 고르세요'); return; }
-  const r = txLinkPlan(txLinkQuotes(c), _txl.money);
-  const used = _txl.money - r.left;
-  if (r.plan.length && !confirm(`${c}\n견적 ${r.plan.length}건에 ${fmtWon(used)}원을 결제로 반영할까요?\n${r.plan.map(p => '· ' + p.docNo + '  ' + fmtWon(p.amount)).join('\n')}${r.left > 0 ? '\n\n남는 ' + fmtWon(r.left) + '원은 선입금으로 둡니다.' : ''}`)) return;
-  _txlBusy = true;
-  try {
-    await Store.update('banktx', id, { client: c });
-    if (el('txl-alias') && el('txl-alias').checked) {
-      const k = t.pkey || _bankKey(t.payer);
-      if (k) { const m = Object.assign({}, bankAliasMap()); m[k] = c; await saveBankAlias(m); }
-    }
-    const alloc = [];
-    for (const p of r.plan) {
-      const q = (state.quotes || []).find(x => x.id === p.quoteId); if (!q) continue;
-      const total = +q.total || 0, cur = +q.paidAmount || 0;
-      const add = Math.min(p.amount, Math.max(0, total - cur));    // 그 사이 다른 데서 채워졌으면 그만큼만
-      if (add <= 0) continue;
-      const next = cur + add;
-      await Store.update('quotes', q.id, { paidAmount: next, paid: total > 0 && next >= total, paidDate: todayStr() });
-      alloc.push({ quoteId: q.id, docNo: q.docNo || '', amount: add });
-    }
-    if (alloc.length) await Store.update('banktx', id, { alloc: alloc, appliedAt: Date.now(), appliedBy: (me && me.name) || '' });
-    closeModal();
-    toast(alloc.length ? (c + ' · 견적 ' + alloc.length + '건에 반영됨') : ('거래처 지정: ' + c));
-    setTimeout(() => { if (filters.ledger) renderLedger(); else renderQuote(); }, 500);
-  } catch (e) { toast('실패: ' + ((e && e.message) || e)); }
-  finally { _txlBusy = false; }
-}
-
-async function txLinkUndo(id) {
-  const t = (state.banktx || []).find(x => x.id === id); if (!t || !txIsLinked(t)) return;
-  if (!confirm(`이 입금 연결을 풀까요?\n${(t.alloc || []).map(a => a.docNo + ' ' + fmtWon(a.amount)).join(', ')} 에서 그만큼 빠집니다.`)) return;
-  if (_txlBusy) return;
-  _txlBusy = true;
-  try {
-    for (const a of (t.alloc || [])) {
-      const q = (state.quotes || []).find(x => x.id === a.quoteId); if (!q) continue;
-      const total = +q.total || 0; const next = Math.max(0, (+q.paidAmount || 0) - (+a.amount || 0));
-      await Store.update('quotes', q.id, { paidAmount: next, paid: total > 0 && next >= total });
-    }
-    await Store.update('banktx', id, { alloc: [], appliedAt: 0 });
-    closeModal(); toast('연결을 풀었습니다');
-    setTimeout(() => { if (filters.ledger) renderLedger(); else renderQuote(); }, 500);
-  } catch (e) { toast('실패: ' + ((e && e.message) || e)); }
-  finally { _txlBusy = false; }
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -6574,17 +6319,11 @@ function ledgerRows(client, cat) {
     if (q.taxInvoice) rows.push({ d: q.taxDate || q.date || '', k: 'tax', amt: taxA, part: mixed, docNo: q.docNo || '', id: q.id, nts: q.ntsConfirmNum || '', mgt: q.taxMgtKey || '' });
   });
   if (CAT) { rows.sort((a, b) => (a.d || '').localeCompare(b.d || '') || ((a.k === 'sale' ? 0 : 1) - (b.k === 'sale' ? 0 : 1)) || (a.docNo || '').localeCompare(b.docNo || '')); return rows; }
-  const allocQ = {};   // 견적별 은행 연결 금액
+  /* ★ 입금 줄 = 이 거래처로 들어온 통장 입금 전부.
+     견적 한 장 한 장에 붙이는 작업이 없어져서, 통장에 찍힌 그대로 내려온다. */
   (state.banktx || []).forEach(t => {
-    if (!Array.isArray(t.alloc) || !t.alloc.length) return;
-    const mine = t.alloc.filter(a => qid[a.quoteId]);
-    if (!mine.length) return;
-    mine.forEach(a => allocQ[a.quoteId] = (allocQ[a.quoteId] || 0) + (+a.amount || 0));
-    rows.push({ d: t.date || '', k: 'pay', amt: mine.reduce((s, a) => s + (+a.amount || 0), 0), src: 'bank', payer: t.payer || '', bankNm: t.bankNm || '', docNo: mine.map(a => a.docNo).filter(Boolean).join(', '), tid: t.id });
-  });
-  qs.forEach(q => {                       // 은행 연결로 설명이 안 되는 나머지 = 손으로 넣은 입금
-    const rest = Math.max(0, (+q.paidAmount || 0) - (allocQ[q.id] || 0));
-    if (rest > 0) rows.push({ d: q.paidDate || q.date || '', k: 'pay', amt: rest, src: 'manual', docNo: q.docNo || '', id: q.id });
+    if (!txIsIn(t) || txClientOf(t) !== client) return;
+    rows.push({ d: t.date || '', k: 'pay', amt: txMoney(t), src: t.manual ? 'manual' : 'bank', payer: t.payer || '', bankNm: t.bankNm || '', tid: t.id });
   });
   const ord = { sale: 0, tax: 1, pay: 2 };
   rows.sort((a, b) => (a.d || '').localeCompare(b.d || '') || (ord[a.k] - ord[b.k]) || (a.docNo || '').localeCompare(b.docNo || ''));
@@ -6592,41 +6331,81 @@ function ledgerRows(client, cat) {
   rows.forEach(r => { if (r.k === 'sale') bal += r.amt; else if (r.k === 'pay') bal -= r.amt; r.bal = bal; });
   return rows;
 }
-/* 아직 어느 견적에도 안 붙은 입금 = 선입금이거나 앱 쓰기 전 거래의 대금 */
-function ledgerUnalloc(client) { return (state.banktx || []).filter(t => txClientOf(t) === client && !txIsLinked(t) && (+t.amount || 0) > 0); }
-/* 거래처별 요약 — 미수는 기간과 무관하게 누적으로 계산한다 (원장이니까) */
+/* 이 거래처로 들어온 통장 입금 전부 (최신순) */
+function ledgerPays(client) { return (state.banktx || []).filter(t => txIsIn(t) && txClientOf(t) === client).sort((a, b) => (b.date || '').localeCompare(a.date || '')); }
+/* 거래처별 요약 — 기간과 무관한 누적 (원장이니까). 금액은 clientMoneyMap() 이 이미 다 계산해 둔 값. */
 function ledgerAgg() {
+  const M = clientMoneyMap();
   const map = {};
-  const get = c => map[c] || (map[c] = { c: c, qn: 0, sale: 0, pay: 0, rem: 0, taxAmt: 0, noTaxAmt: 0, noTaxN: 0, unAllocN: 0, unAlloc: 0, last: '' });
+  const get = c => map[c] || (map[c] = {
+    c: c, qn: 0, sale: 0, pay: 0, rem: 0, extra: 0, taxAmt: 0, noTaxAmt: 0, noTaxN: 0, last: ''
+  });
+  Object.keys(M).forEach(c => { const o = get(c), m = M[c]; o.qn = m.qn; o.sale = m.sale; o.pay = m.paid; o.rem = m.rem; o.extra = m.extra; });
   (state.quotes || []).forEach(q => {
     if (!q.ordered) return; const c = (q.client || '').trim(); if (!c) return;
-    const o = get(c); const tot = +q.total || 0, pa = Math.min(tot, +q.paidAmount || 0);
-    o.qn++; o.sale += tot; o.pay += pa; o.rem += Math.max(0, tot - pa);
+    const o = get(c), tot = Math.round(+q.total || 0);
     if (q.taxInvoice) o.taxAmt += (+q.taxTotal || tot); else { o.noTaxAmt += tot; o.noTaxN++; }
     const d = q.date || ''; if (d > o.last) o.last = d;
   });
   let unassigned = 0, unassignedSum = 0;
   (state.banktx || []).forEach(t => {
-    const c = txClientOf(t); const amt = +t.amount || 0; if (amt <= 0) return;
-    if (!c) { unassigned++; unassignedSum += amt; return; }
+    if (!txIsIn(t)) return;
+    const c = txClientOf(t);
+    if (!c) { unassigned++; unassignedSum += txMoney(t); return; }
     const o = get(c);
-    if (!txIsLinked(t)) { o.unAllocN++; o.unAlloc += amt; }
     if ((t.date || '') > o.last) o.last = t.date || '';
   });
   return { rows: Object.values(map), unassigned: unassigned, unassignedSum: unassignedSum };
 }
-/* 거래처별 총 미수 — 원장과 같은 계산(확정 견적의 총액 − 입금). 목록에서 여러 번 부르니 잠깐 캐시 */
-let _cRemCache = null, _cRemAt = 0;
-function clientRemMap() {
-  if (_cRemCache && Date.now() - _cRemAt < 1500) return _cRemCache;
-  const m = {};
+/* ══════════════════════════════════════════════════════════
+   돈 계산 — 거래처 단위  (2026-09-07 ~)
+   ──────────────────────────────────────────────────────────
+   ★ 견적 하나하나에 «결제금»을 적어 두지 않는다. 통장 입금만 믿고 그때그때 계산한다.
+     거래처 미수 = 그 거래처 확정 매출 − 그 거래처 입금
+     ★ 입금이 매출보다 많아도 미수를 마이너스로 만들지 않는다.
+       매출까지만 상계하고, 남는 돈은 «선입금·앱 밖 거래 대금»(extra)으로 따로 보여준다.
+       (앱에 견적을 안 올린 거래의 대금이 통장에 섞여 있어서 그렇다 — 실측 248곳 중 181곳)
+     견적 한 장이 결제됐는지는 «오래된 견적부터 채운» 결과일 뿐, 저장하지 않는다.
+   ══════════════════════════════════════════════════════════ */
+let _cmCache = null, _qpCache = null, _cmAt = 0;
+function moneyBust() { _cmCache = null; _qpCache = null; }     // 자료가 바뀌면 다시 계산
+function _moneyBuild() {
+  if (_cmCache && _qpCache && Date.now() - _cmAt < 1200) return;
+  const M = {}, P = {};
+  const get = c => M[c] || (M[c] = { sale: 0, paid: 0, applied: 0, rem: 0, extra: 0, qn: 0 });
+  const byC = {};
   (state.quotes || []).forEach(q => {
     if (!q.ordered) return; const c = (q.client || '').trim(); if (!c) return;
-    m[c] = (m[c] || 0) + Math.max(0, (+q.total || 0) - (+q.paidAmount || 0));
+    const o = get(c); o.sale += Math.round(+q.total || 0); o.qn++;
+    (byC[c] || (byC[c] = [])).push(q);
   });
-  _cRemAt = Date.now(); return (_cRemCache = m);
+  (state.banktx || []).forEach(t => {
+    if (!txIsIn(t)) return; const c = txClientOf(t); if (!c) return;
+    get(c).paid += txMoney(t);
+  });
+  Object.keys(M).forEach(c => {
+    const o = M[c];
+    o.applied = Math.min(o.sale, o.paid);       // 매출까지만 상계
+    o.rem = o.sale - o.applied;                 // 미수 (0 밑으로 안 내려감)
+    o.extra = o.paid - o.applied;               // 선입금 · 앱 밖 거래 대금
+    // 그 거래처에 들어온 돈을 오래된 견적부터 흘려보내 «이 견적은 받았다»를 계산한다
+    let left = o.applied;
+    (byC[c] || []).slice()
+      .sort((a, b) => (a.date || '').localeCompare(b.date || '') || (a.docNo || '').localeCompare(b.docNo || ''))
+      .forEach(q => { const t = Math.round(+q.total || 0); const add = Math.min(left, t); P[q.id] = add; left -= add; });
+  });
+  _cmAt = Date.now(); _cmCache = M; _qpCache = P;
 }
-function clientRemOf(c) { return clientRemMap()[(c || '').trim()] || 0; }
+function clientMoneyMap() { _moneyBuild(); return _cmCache; }
+function quotePaidMap() { _moneyBuild(); return _qpCache; }
+const _MONEY0 = { sale: 0, paid: 0, applied: 0, rem: 0, extra: 0, qn: 0 };
+function clientMoneyOf(c) { return clientMoneyMap()[(c || '').trim()] || _MONEY0; }
+function clientRemOf(c) { return clientMoneyOf(c).rem; }
+function clientRemMap() { const m = clientMoneyMap(), r = {}; Object.keys(m).forEach(c => r[c] = m[c].rem); return r; }
+/* 견적 한 장 — 받은 돈 / 안 받은 돈 / 다 받았는지 (전부 계산값) */
+function quotePaid(q) { if (!q || !q.ordered) return 0; return quotePaidMap()[q.id] || 0; }
+function quoteRem(q) { return Math.max(0, Math.round(+((q && q.total) || 0)) - quotePaid(q)); }
+function quoteIsPaid(q) { const t = Math.round(+((q && q.total) || 0)); return t > 0 && quotePaid(q) >= t; }
 /* 견적 카드/팝업에서 그 거래처 원장으로 바로 가기 */
 function openLedgerFor(c) {
   if (!canLedger()) { toast('거래처 원장 권한이 없습니다 — 관리자에게 문의하세요'); return; }
@@ -6650,9 +6429,9 @@ function renderLedger() {
   const A = ledgerAgg();
   const totSale = A.rows.reduce((s, r) => s + r.sale, 0), totPay = A.rows.reduce((s, r) => s + r.pay, 0);
   const totRem = A.rows.reduce((s, r) => s + r.rem, 0), totNoTax = A.rows.reduce((s, r) => s + r.noTaxAmt, 0);
-  const totUn = A.rows.reduce((s, r) => s + r.unAlloc, 0);
+  const totExtra = A.rows.reduce((s, r) => s + r.extra, 0);
   const sc = (v, l) => `<button class="chip ${(filters.ledgerSort || 'rem') === v ? 'active' : ''}" onclick="ledgerSetSort('${v}')">${l}</button>`;
-  const pmN = bankNeedLinkCount();
+  const pmN = bankNoClientCount();
   /* 확정 매출을 분류(세라믹·세면대·석재·통관비용)로 쪼갠 총합 — 한 견적에 섞여 있으면 품목 금액 비율대로 */
   const lgCat = {}; QCATS.forEach(c => lgCat[c] = { sum: 0, n: 0 });
   (state.quotes || []).forEach(q => { if (!q.ordered) return; const sp = quoteCatSplit(q); Object.keys(sp).forEach(c => { if (lgCat[c]) { lgCat[c].sum += sp[c].tot; lgCat[c].n++; } }); });
@@ -6669,7 +6448,7 @@ function renderLedger() {
   root.innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-book"></i>거래처 원장</h2><p>매출 · 결제 · 미수를 자동으로 계산합니다</p></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        <button class="btn btn-sm" onclick="bankOpenList()"><i class="ti ti-list-search"></i>통장 내역${pmN ? ` <b style="color:var(--gd)">${pmN}</b>` : ''}</button>
+        <button class="btn btn-sm" onclick="bankOpenList()"><i class="ti ti-list-search"></i>통장 내역</button>
         ${isAdmin() ? `<button class="btn btn-sm" onclick="openBankSync()"><i class="ti ti-download"></i>통장 가져오기</button>` : ''}
         <button class="btn btn-sm" onclick="ledgerClose()"><i class="ti ti-arrow-left"></i>견적 목록</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
@@ -6679,11 +6458,9 @@ function renderLedger() {
       <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v" style="font-size:18px">${fmtWon(totNoTax)}</div><div class="l">계산서 미발행</div><div class="s">${A.rows.reduce((s, r) => s + r.noTaxN, 0)}건</div></div>
     </div>
     ${lgCatBar}
-    ${pmN ? `<button class="card" style="width:100%;text-align:left;display:block;padding:10px 13px;margin-bottom:9px;border:1.5px solid var(--gd);background:var(--gl2,#f4fbf8);cursor:pointer" onclick="bankOpenNeedLink()">
-      <span style="font-size:12.5px"><i class="ti ti-link" style="color:var(--gd)"></i> 거래처는 붙었지만 <b>어느 견적 대금인지 안 정해진 입금 ${pmN}건</b> — 통장 내역에서 견적에 연결하면 미수가 그만큼 줄어듭니다 <i class="ti ti-chevron-right"></i></span></button>` : ''}
     ${A.unassigned ? `<div class="banner warn" style="margin-bottom:9px;font-size:12.5px"><i class="ti ti-alert-triangle"></i><span style="flex:1;min-width:0">거래처를 못 찾은 입금 <b>${A.unassigned}건 · ${fmtWon(A.unassignedSum)}원</b>
       <button class="btn btn-sm btn-pri" style="margin-left:8px" onclick="ledgerFix()"><i class="ti ti-wand"></i>거래처 지정</button></span></div>` : ''}
-    ${totUn ? `<div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0">거래처는 붙었지만 아직 견적에 연결 안 된 입금이 <b>${fmtWon(totUn)}원</b> 있습니다. 앱 쓰기 전 거래의 대금이거나 선입금입니다 — <b>미수 계산에는 안 들어갑니다.</b></span></div>` : ''}
+    ${totExtra ? `<div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0">매출보다 더 들어온 돈이 <b>${fmtWon(totExtra)}원</b> 있습니다. 앱에 견적을 안 올린 거래의 대금이거나 선입금입니다 — <b>미수를 마이너스로 만들지 않고 따로 둡니다.</b></span></div>` : ''}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px"><span style="font-size:11.5px;color:var(--t3);align-self:center;margin-right:2px">정렬</span>${sc('rem', '미수 많은 순')}${sc('sale', '매출 많은 순')}${sc('last', '최근 거래순')}${sc('name', '이름순')}</div>
     <div class="search-box" style="margin-bottom:10px"><i class="ti ti-search"></i>
       <input id="lg-search" placeholder="거래처 검색" value="${esc(filters.ledgerSearch || '')}" oninput="filters.ledgerSearch=this.value;ledgerFilter()" autocomplete="off" lang="ko"></div>
@@ -6712,7 +6489,7 @@ function _ledgerListInner(A) {
         <span style="color:var(--t2)">결제 <b style="color:var(--gd)">${fmtWon(r.pay)}</b></span>
         ${r.rem > 0 ? `<span style="color:var(--t2)">미수 <b style="color:var(--red-t)">${fmtWon(r.rem)}</b></span>` : '<span style="color:var(--gd);font-weight:700"><i class="ti ti-circle-check"></i> 완납</span>'}
         ${r.noTaxN ? `<span style="color:var(--amber-t)">계산서 미발행 <b>${fmtWon(r.noTaxAmt)}</b></span>` : ''}
-        ${r.unAlloc ? `<span style="color:var(--t3)">미배정 입금 ${fmtWon(r.unAlloc)}</span>` : ''}</div>
+        ${r.extra ? `<span style="color:var(--t3)">선입금 ${fmtWon(r.extra)}</span>` : ''}</div>
     </button>`;
   }).join('');
 }
@@ -6723,10 +6500,8 @@ function ledgerDetailHtml(client) {
   const catOn = CAT !== 'all' && QCATS.indexOf(CAT) >= 0;
   const full = ledgerRows(client);                       // 전체 (요약·미수는 늘 전체 기준)
   const all = catOn ? ledgerRows(client, CAT) : full;
-  const un = ledgerUnalloc(client);
-  const sale = full.filter(r => r.k === 'sale').reduce((s, r) => s + r.amt, 0);
-  const pay = full.filter(r => r.k === 'pay').reduce((s, r) => s + r.amt, 0);
-  const rem = sale - pay;
+  const M = clientMoneyOf(client);
+  const sale = M.sale, pay = M.paid, rem = M.rem, extra = M.extra;
   const taxAmt = full.filter(r => r.k === 'tax').reduce((s, r) => s + r.amt, 0);
   const noTaxAmt = (state.quotes || []).filter(q => !!q.ordered && (q.client || '').trim() === client && !q.taxInvoice).reduce((s, q) => s + (+q.total || 0), 0);
   const inR = d => (d || '') >= R.sd && (d || '') <= R.ed;
@@ -6767,8 +6542,9 @@ function ledgerDetailHtml(client) {
       <td style="text-align:right;white-space:nowrap;color:var(--t3)">${fmtWon(r.bal)}</td></tr>`;
     return `<tr style="background:var(--gl2,#f4fbf8)">
       <td style="white-space:nowrap;color:var(--t3)">${esc((r.d || '').slice(2))}</td>
-      <td><span class="pill p-done">입금</span></td>
-      <td>${r.src === 'bank' ? `<b>${esc(r.payer)}</b>${r.bankNm ? ` <span style="color:var(--t3)">· ${esc(r.bankNm)}</span>` : ''}` : '<span style="color:var(--t2)">직접 입력</span>'}${r.docNo ? ` <span style="color:var(--t3)">→ ${esc(r.docNo)}</span>` : ''}</td>
+      <td>${r.src === 'manual' ? '<span class="pill p-prog">직접</span>' : '<span class="pill p-done">입금</span>'}</td>
+      <td><b>${esc(r.payer || '(이름 없음)')}</b>${r.bankNm ? ` <span style="color:var(--t3)">· ${esc(r.bankNm)}</span>` : ''}
+        <button class="btn btn-sm btn-ghost" style="padding:1px 5px;margin-left:4px" title="거래처 바꾸기" onclick="txReassign('${r.tid}')"><i class="ti ti-switch-horizontal"></i></button></td>
       ${money(0)}<td style="text-align:right;white-space:nowrap;font-weight:700;color:var(--gd)">${fmtWon(r.amt)}</td>
       <td style="text-align:right;white-space:nowrap;font-weight:700">${fmtWon(r.bal)}</td></tr>`;
   };
@@ -6798,22 +6574,18 @@ function ledgerDetailHtml(client) {
     <div style="font-size:11.5px;color:var(--t3);margin-top:7px">«섞임» 은 세라믹·세면대 등이 한 견적에 같이 든 경우로, 품목 금액 비율만큼만 잡은 금액입니다.</div>`;
   return `
     <div class="ph"><div><h2><i class="ti ti-book"></i>${esc(client)}</h2><p>${esc(R.label)} · 매출 ${full.filter(r => r.k === 'sale').length}건 · 입금 ${full.filter(r => r.k === 'pay').length}건${catOn ? ` · <b style="color:${QCAT_COL[CAT]}">${esc(CAT)}만 보는 중</b>` : ''}</p></div>
-      <button class="btn btn-sm" onclick="ledgerBack()"><i class="ti ti-arrow-left"></i>거래처 목록</button></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        <button class="btn btn-sm" onclick="openManualPay(${JSON.stringify(client).replace(/"/g, '&quot;')})"><i class="ti ti-cash"></i>입금 직접 넣기</button>
+        <button class="btn btn-sm" onclick="ledgerBack()"><i class="ti ti-arrow-left"></i>거래처 목록</button></div>
     <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:11px">
       <div class="stat"><div class="ic g"><i class="ti ti-file-text"></i></div><div class="v" style="font-size:18px">${fmtWon(sale)}</div><div class="l">확정 매출</div></div>
-      <div class="stat"><div class="ic b"><i class="ti ti-cash"></i></div><div class="v" style="font-size:18px">${fmtWon(pay)}</div><div class="l">결제됨</div><div class="s">${sale > 0 ? Math.round(pay / sale * 100) : 0}%</div></div>
+      <div class="stat"><div class="ic b"><i class="ti ti-cash"></i></div><div class="v" style="font-size:18px">${fmtWon(pay)}</div><div class="l">받은 돈</div><div class="s">${sale > 0 ? Math.min(100, Math.round(pay / sale * 100)) : 0}%${extra > 0 ? ' · 선입금 ' + fmtWon(extra) : ''}</div></div>
       <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:18px;color:${rem > 0 ? 'var(--red-t)' : 'var(--gd)'}">${fmtWon(rem)}</div><div class="l">${rem > 0 ? '미수금' : '완납'}</div></div>
       <div class="stat"><div class="ic b"><i class="ti ti-file-invoice"></i></div><div class="v" style="font-size:18px">${fmtWon(taxAmt)}</div><div class="l">계산서 발행</div><div class="s">${noTaxAmt ? '미발행 ' + fmtWon(noTaxAmt) : '전부 발행'}</div></div>
     </div>
-    ${un.length ? `<div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0;display:block">
-      아직 견적에 연결 안 된 입금 <b>${un.length}건 · ${fmtWon(un.reduce((s, t) => s + (+t.amount || 0), 0))}원</b> — 앱 쓰기 전 거래의 대금이거나 선입금이라 <b>위 미수 계산에는 안 들어갑니다.</b>
-      <div style="margin-top:7px;background:#fff;border:1px solid var(--bd);border-radius:9px;max-height:190px;overflow-y:auto">
-        ${un.slice(0, 40).map(t => `<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:6px 9px;border-bottom:1px solid var(--bd);font-size:12px">
-          <span><span style="color:var(--t3)">${esc((t.date || '').slice(2))}</span> <b>${esc(t.payer || '')}</b></span>
-          <span style="display:flex;gap:7px;align-items:center"><b style="color:var(--gd)">${fmtWon(t.amount)}</b>
-            <button class="btn btn-sm btn-ghost" style="padding:1px 5px" title="거래처 바꾸기" onclick="txReassign('${t.id}')"><i class="ti ti-switch-horizontal"></i></button></span></div>`).join('')}
-        ${un.length > 40 ? `<div style="padding:6px 9px;font-size:11.5px;color:var(--t3)">외 ${un.length - 40}건</div>` : ''}</div>
-      <div style="margin-top:7px"><button class="btn btn-sm" onclick="bankOpenList()"><i class="ti ti-list-search"></i>통장 내역에서 연결하기</button></div></span></div>` : ''}
+    ${extra > 0 ? `<div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0">
+      매출보다 <b>${fmtWon(extra)}원</b>이 더 들어왔습니다. 앱에 견적을 안 올린 거래의 대금이거나 선입금입니다 —
+      <b>미수를 마이너스로 만들지 않고 따로 둡니다.</b></span></div>` : ''}
     ${catChips}
     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:9px">${catChips ? '<span style="font-size:11px;color:var(--t3);width:38px;flex:none">기간</span>' : ''}${rc('all', '전체')}${rc('3m', '최근 3개월')}${rc('tm', '이번 달')}${rc('lm', '지난 달')}</div>
     ${catNote}
@@ -6827,10 +6599,11 @@ function ledgerDetailHtml(client) {
         <tr style="background:var(--soft);font-weight:800"><td colspan="3">합계</td>
           <td style="text-align:right">${fmtWon(shown.filter(r => r.k === 'sale').reduce((s, r) => s + r.amt, 0))}</td>
           <td style="text-align:right;color:var(--gd)">${fmtWon(shown.filter(r => r.k === 'pay').reduce((s, r) => s + r.amt, 0))}</td>
-          <td style="text-align:right;color:${rem > 0 ? 'var(--red-t)' : 'var(--gd)'}">${fmtWon(all.length ? all[all.length - 1].bal : 0)}</td></tr>
+          <td style="text-align:right;color:${(all.length ? all[all.length - 1].bal : 0) > 0 ? 'var(--red-t)' : 'var(--gd)'}">${fmtWon(all.length ? all[all.length - 1].bal : 0)}</td></tr>
       </tbody>
     </table></div>
-    <div style="font-size:11.5px;color:var(--t3);margin-top:7px">잔액 = 확정 매출 누계 − 입금 누계. 세금계산서 줄은 발행 사실만 표시하고 잔액에는 영향을 주지 않습니다.</div>`}`;
+    <div style="font-size:11.5px;color:var(--t3);margin-top:7px">잔액 = 확정 매출 누계 − 입금 누계. 세금계산서 줄은 발행 사실만 표시하고 잔액에는 영향을 주지 않습니다.
+      ${extra > 0 ? '<br>입금이 매출보다 많아 잔액이 마이너스로 내려가 있습니다 — 위 <b>미수금</b>은 0으로 보고, 넘는 돈은 <b>선입금</b>으로 따로 셉니다.' : ''}</div>`}`;
 }
 /* 입금 건의 계산서 발행 여부 표시 토글 */
 async function txToggleTax(id) {
@@ -6911,260 +6684,6 @@ function payCutoff() { const m = (state.appmeta || []).find(x => x.key === 'payC
 async function savePayCutoff(date) {
   const m = (state.appmeta || []).find(x => x.key === 'payCutoff');
   if (m) await Store.update('appmeta', m.id, { date }); else await Store.add('appmeta', { key: 'payCutoff', date });
-}
-function txIsLinked(t) { return !!(t && Array.isArray(t.alloc) && t.alloc.length); }
-/* 합이 target 이 되는 조합 찾기 (2~3건까지만 — 그 이상은 우연일 가능성이 커서 안 본다) */
-function _payCombo(list, target) {
-  const n = list.length;
-  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) {
-    if (Math.abs(list[i].rem + list[j].rem - target) < 1) return [list[i], list[j]];
-  }
-  for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) for (let k = j + 1; k < n; k++) {
-    if (Math.abs(list[i].rem + list[j].rem + list[k].rem - target) < 1) return [list[i], list[j], list[k]];
-  }
-  return null;
-}
-/* 반영할 후보 목록 만들기 — 거래처 기준
-   ★ 2026-08-31 이전에는 '입금액이 견적 미수액과 딱 맞는 건'만 골랐다.
-     그래서 조금씩 나눠 넣거나 여러 건을 섞어 보낸 입금은 아예 안 잡혀서,
-     결국 견적 하나하나 손으로 맞춰야 했다.
-   지금은 거래처만 정해지면 그 거래처의 **미수 견적에 오래된 순으로 순차 배분**한다.
-     · 부분 결제 허용 (한 견적을 여러 입금이 나눠서 채울 수 있다)
-     · 미수보다 더 들어온 돈은 남겨서(leftover) '선입금'으로 표시만 하고 배분하지 않는다
-     · 거래처가 자동 추정된 입금(guess)은 기본 체크에서 빼서 사람이 확인하게 한다 */
-let _pmCache = null, _pmKey = '';
-function buildPayMatches(force) {
-  const key = (state.banktx || []).length + '|' + (state.quotes || []).length + '|' + payCutoff() + '|' +
-    (state.banktx || []).filter(txIsLinked).length + '|' + (state.quotes || []).reduce((s, q) => s + (+q.paidAmount || 0), 0);
-  if (!force && _pmCache && _pmKey === key) return _pmCache;
-  const cut = payCutoff();
-  const rem = q => Math.max(0, (+q.total || 0) - (+q.paidAmount || 0));
-  // 거래처별 미수 견적 (오래된 순)
-  const byC = {};
-  (state.quotes || []).forEach(q => {
-    if (!q.ordered) return; const c = (q.client || '').trim(); if (!c) return;
-    const r = rem(q); if (r <= 0) return;
-    (byC[c] || (byC[c] = [])).push({ id: q.id, docNo: q.docNo || '', date: q.date || '', total: +q.total || 0, rem: r });
-  });
-  Object.values(byC).forEach(arr => arr.sort((a, b) => (a.date || '').localeCompare(b.date || '')));
-  const deps = (state.banktx || [])
-    .filter(t => (+t.amount || 0) > 0 && (t.date || '') >= cut && !txIsLinked(t) && txClientOf(t))
-    .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-  const left = {};                       // 견적별 '아직 안 채운 미수' — 입금 여러 건이 겹쳐 배분되지 않게
-  const out = [];
-  deps.forEach(t => {
-    const c = txClientOf(t);
-    const arr = byC[c] || [];
-    let money = Math.round(+t.amount || 0);
-    const qs = [];
-    for (const q of arr) {
-      if (money <= 0) break;
-      const r = (left[q.id] == null) ? q.rem : left[q.id];
-      if (r <= 0) continue;
-      const take = Math.min(money, r);
-      left[q.id] = r - take; money -= take;
-      qs.push({ id: q.id, docNo: q.docNo, date: q.date, amount: take, total: q.total, rem: r, part: take < r });
-    }
-    if (!qs.length) return;              // 이 거래처에 남은 미수가 없으면 반영할 게 없다
-    out.push({
-      tid: t.id, client: c, payer: t.payer, date: t.date, dt: t.dt,
-      amount: Math.round(+t.amount || 0), qs: qs,
-      leftover: money,                   // 미수보다 많이 들어온 금액 (배분 안 함)
-      guess: txIsGuess(t)                // 거래처를 이름으로 추정한 건
-    });
-  });
-  _pmKey = key; _pmCache = out;
-  return out;
-}
-/* 거래처별로 묶기 — 화면과 '거래처 전체 반영'에 쓴다 */
-function payMatchGroups(list) {
-  const g = {};
-  (list || buildPayMatches()).forEach(m => {
-    const o = g[m.client] || (g[m.client] = { client: m.client, ms: [], deposit: 0, apply: 0, leftover: 0, guess: false });
-    o.ms.push(m); o.deposit += m.amount; o.leftover += m.leftover;
-    o.apply += m.qs.reduce((a, q) => a + q.amount, 0);
-    if (m.guess) o.guess = true;
-  });
-  return Object.values(g).sort((a, b) => b.apply - a.apply);
-}
-function payMatchCount() { try { return buildPayMatches().length; } catch (e) { return 0; } }
-/* 견적 목록 위에 뜨는 알림 — 반영 안 된 입금이 있으면 알려준다 */
-function _pmBanner() {
-  if (!canLedger()) return '';
-  let n = 0, sum = 0, nc = 0;
-  try {
-    const l = (state.banktx || []).filter(txNeedsLink);
-    n = l.length;
-    sum = l.reduce((a, t) => a + txMoney(t), 0);
-    nc = new Set(l.map(txClientOf)).size;
-  } catch (e) { return ''; }
-  if (!n) return '';
-  return `<button class="card" style="width:100%;text-align:left;display:block;padding:11px 13px;margin-bottom:11px;border:1.5px solid var(--gd);background:var(--gl2,#f4fbf8);cursor:pointer" onclick="bankOpenNeedLink()">
-    <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
-      <span style="font-size:13px"><i class="ti ti-link" style="color:var(--gd)"></i> <b>거래처 ${nc}곳</b>에 아직 결제로 안 잡힌 <b>입금 ${n}건</b>이 있습니다</span>
-      <span style="font-size:13.5px;font-weight:800;color:var(--gd);white-space:nowrap">${fmtWon(sum)}원 <i class="ti ti-chevron-right"></i></span></div>
-    <div style="font-size:11.5px;color:var(--t3);margin-top:4px">눌러서 통장 내역에서 한 줄씩 견적에 연결하세요</div></button>`;
-}
-/* ── 화면 ── */
-let _pmSel = null;   // null = 아직 안 건드림(추천값 사용)
-function openPayMatch() { if (!isAdmin()) { toast('관리자만 가능합니다'); return; } qListSave(); _pmSel = null; filters.payMatch = true; go('quote'); }
-function payMatchClose() { filters.payMatch = false; _pmSel = null; renderQuote(); qListRestore(); }
-/* 기본 체크 대상 = 거래처가 확실히 정해진 입금.
-   선입금(미수 초과분)은 어차피 배분하지 않으므로 체크를 막을 이유가 없다 — 안내만 한다. */
-function _pmSure(m) { return !m.guess; }
-function _pmChecked(m) { if (_pmSel) return !!_pmSel[m.tid]; return _pmSure(m); }   // 기본: 확실한 것만 체크
-function pmToggle(tid) {
-  const list = buildPayMatches();
-  if (!_pmSel) { _pmSel = {}; list.forEach(m => _pmSel[m.tid] = _pmSure(m)); }
-  _pmSel[tid] = !_pmSel[tid]; renderPayMatch();
-}
-function pmAll(on) { const list = buildPayMatches(); _pmSel = {}; list.forEach(m => _pmSel[m.tid] = !!on); renderPayMatch(); }
-async function pmSetCutoff() {
-  const v = (el('pm-cut') && el('pm-cut').value) || '';
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) { toast('날짜를 확인하세요'); return; }
-  await savePayCutoff(v); _pmSel = null; toast('기준일 ' + v); setTimeout(() => renderPayMatch(), 400);
-}
-let _pmBusy = false;
-function renderPayMatch() {
-  if (_pmBusy) return;                     // 반영 중에는 화면을 다시 그리지 않는다
-  const root = el('pg-quote'); if (!root) return;
-  const list = buildPayMatches(true);
-  const groups = payMatchGroups(list);
-  const sel = list.filter(_pmChecked);
-  const selSum = sel.reduce((s, m) => s + m.qs.reduce((a, q) => a + q.amount, 0), 0);
-  const sure = list.filter(_pmSure).length, need = list.length - sure;
-  const linked = (state.banktx || []).filter(txIsLinked).length;
-  const inp = 'font-size:13.5px;padding:7px 9px;border:1.5px solid var(--bd2);border-radius:9px';
-  root.innerHTML = `
-    <div class="ph"><div><h2><i class="ti ti-link"></i>입금 → 결제 반영</h2><p>거래처별로 묶어서, 오래된 견적부터 자동으로 채웁니다</p></div>
-      <button class="btn btn-sm" onclick="payMatchClose()"><i class="ti ti-arrow-left"></i>견적 목록</button></div>
-    <div class="banner info" style="margin-bottom:11px;font-size:12px"><i class="ti ti-info-circle"></i><span style="flex:1;min-width:0">
-      거래처의 <b>미수 견적을 오래된 순서로</b> 채웁니다. 한 견적을 여러 입금이 나눠서 채워도 됩니다.
-      미수보다 많이 들어온 돈은 <b>선입금</b>으로 남겨두고 배분하지 않습니다.
-      잘못 들어간 건 아래 <b>[반영 취소]</b> 로 되돌릴 수 있습니다.</span></div>
-    <div class="card" style="padding:10px 12px;margin-bottom:11px;display:flex;gap:9px;flex-wrap:wrap;align-items:center">
-      <span style="font-size:12.5px;color:var(--t2)">기준일</span>
-      <input type="date" id="pm-cut" value="${esc(payCutoff())}" style="${inp}">
-      <button class="btn btn-sm" onclick="pmSetCutoff()"><i class="ti ti-check"></i>적용</button>
-      <span style="font-size:11.5px;color:var(--t3)">이 날짜 이후 입금만 견적 결제에 씁니다</span>
-    </div>
-    <div class="stat-grid" style="grid-template-columns:repeat(3,1fr);margin-bottom:11px">
-      <div class="stat"><div class="ic g"><i class="ti ti-building-store"></i></div><div class="v">${groups.length}</div><div class="l">거래처</div><div class="s">입금 ${list.length}건</div></div>
-      <div class="stat"><div class="ic b"><i class="ti ti-alert-circle"></i></div><div class="v">${need}</div><div class="l">거래처 확인 필요</div><div class="s">입금자명으로 추정한 건</div></div>
-      <div class="stat"><div class="ic r"><i class="ti ti-cash-banknote"></i></div><div class="v" style="font-size:19px">${fmtWon(selSum)}</div><div class="l">반영될 금액</div><div class="s">${sel.length}건 선택 · 반영됨 ${linked}건</div></div>
-    </div>
-    ${list.length ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px">
-      <button class="btn btn-sm" onclick="pmAll(1)"><i class="ti ti-checks"></i>전부 선택</button>
-      <button class="btn btn-sm" onclick="pmAll(0)"><i class="ti ti-square"></i>전부 해제</button>
-      <button class="btn btn-pri btn-sm" style="margin-left:auto" onclick="pmApply()"><i class="ti ti-download"></i>선택한 ${sel.length}건 반영</button></div>` : ''}
-    ${groups.length ? groups.map(g => {
-      const cRem = clientRemOf(g.client);
-      const after = Math.max(0, cRem - g.apply);
-      const gsel = g.ms.filter(_pmChecked).length;
-      return `<div class="card" style="padding:0;margin-bottom:11px;overflow:hidden">
-        <div style="padding:10px 12px;background:var(--soft);border-bottom:1px solid var(--bd)">
-          <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
-            <b style="font-size:14px">${esc(g.client)}${g.guess ? ' <span class="pill p-wait" style="font-size:10px">거래처 추정</span>' : ''}</b>
-            <button class="btn btn-sm ${gsel === g.ms.length ? '' : 'btn-pri'}" onclick="pmGroupAll('${_q(g.client)}',${gsel === g.ms.length ? 0 : 1})">
-              <i class="ti ti-${gsel === g.ms.length ? 'square' : 'checks'}"></i>${gsel === g.ms.length ? '이 거래처 해제' : '이 거래처 전체 선택'}</button>
-          </div>
-          <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:7px;font-size:12px">
-            <span style="color:var(--t3)">입금 <b style="color:var(--t1)">${fmtWon(g.deposit)}</b></span>
-            <span style="color:var(--t3)">현재 총 미수 <b style="color:var(--red-t)">${fmtWon(cRem)}</b></span>
-            <span style="color:var(--t3)"><i class="ti ti-arrow-right" style="font-size:11px"></i> 반영 후 <b style="color:${after > 0 ? 'var(--red-t)' : 'var(--gd)'}">${fmtWon(after)}</b></span>
-            ${g.leftover > 0 ? `<span style="color:var(--amber-t)">선입금 ${fmtWon(g.leftover)}</span>` : ''}
-          </div>
-        </div>
-        ${g.ms.map(m => {
-          const on = _pmChecked(m);
-          const applySum = m.qs.reduce((a, q) => a + q.amount, 0);
-          const warn = m.guess ? '입금자명으로 거래처를 추정했습니다 — 맞는지 확인하세요' : '';
-          const info = m.leftover > 0 ? `미수보다 ${fmtWon(m.leftover)}원 많습니다 — 초과분은 반영하지 않고 남겨둡니다 (선입금)` : '';
-          return `<label style="display:flex;gap:9px;align-items:flex-start;cursor:pointer;padding:10px 12px;border-top:1px solid var(--bd);background:${on ? 'var(--gl2,#f4fbf8)' : ''}">
-            <input type="checkbox" ${on ? 'checked' : ''} onchange="pmToggle('${m.tid}')" style="width:17px;height:17px;margin-top:2px;flex:none">
-            <span style="flex:1;min-width:0">
-              <span style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
-                <b style="font-size:13px">${esc(m.payer || '')}</b>
-                <b style="font-size:14.5px;color:var(--gd)">${fmtWon(m.amount)}원</b></span>
-              <span style="display:block;font-size:11.5px;color:var(--t3);margin-top:2px">${esc(m.dt || m.date || '')}${applySum < m.amount ? ` · 반영 ${fmtWon(applySum)}` : ''}</span>
-              ${warn ? `<span style="display:block;font-size:11.5px;color:var(--amber-t);margin-top:3px"><i class="ti ti-alert-triangle"></i> ${esc(warn)}</span>` : ''}
-              ${info ? `<span style="display:block;font-size:11.5px;color:var(--t3);margin-top:3px"><i class="ti ti-info-circle"></i> ${esc(info)}</span>` : ''}
-              <span style="display:block;margin-top:6px">${m.qs.map(q => `<span style="display:flex;justify-content:space-between;gap:8px;font-size:12px;padding:3px 0;border-top:1px dashed var(--bd)">
-                  <span><i class="ti ti-arrow-narrow-right" style="color:var(--t3)"></i> ${esc(q.docNo)} <span style="color:var(--t3)">${esc(q.date)}</span></span>
-                  <span style="white-space:nowrap"><b>${fmtWon(q.amount)}</b> <span style="color:var(--t3)">/ 미수 ${fmtWon(q.rem)}</span>${q.part ? ' <span class="pill p-wait" style="font-size:9.5px;padding:0 5px">일부</span>' : ''}</span></span>`).join('')}</span>
-            </span></label>`;
-        }).join('')}
-      </div>`;
-    }).join('') : `<div class="empty"><i class="ti ti-circle-check"></i>반영할 게 없습니다<div style="font-size:12px;margin-top:5px">기준일 이후 입금 중 거래처가 정해지고 미수가 남은 건이 없습니다</div></div>`}
-    ${linked ? `<div class="sec-label" style="margin-top:16px">반영된 입금 ${linked}건</div>${_pmAppliedHtml()}` : ''}`;
-}
-/* 거래처 단위로 한 번에 선택/해제 */
-function pmGroupAll(encClient, on) {
-  const c = _uq(encClient);
-  const list = buildPayMatches();
-  if (!_pmSel) { _pmSel = {}; list.forEach(m => _pmSel[m.tid] = _pmSure(m)); }
-  list.filter(m => m.client === c).forEach(m => { _pmSel[m.tid] = !!on; });
-  renderPayMatch();
-}
-function _pmAppliedHtml() {
-  const rows = (state.banktx || []).filter(txIsLinked).sort((a, b) => (b.date || '').localeCompare(a.date || '')).slice(0, 60);
-  return rows.map(t => `<div class="card" style="padding:9px 12px;margin-bottom:6px;background:var(--gl2,#f4fbf8);border:1px solid var(--gbd,#bfe6d5)">
-      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;align-items:center">
-        <span style="font-size:12.5px"><b>${esc(t.payer || '')}</b> <span style="color:var(--t3)">· ${esc(t.date || '')}</span></span>
-        <span style="display:flex;gap:8px;align-items:center"><b style="font-size:13px;color:var(--gd)">${fmtWon(t.amount)}원</b>
-          <button class="btn btn-sm btn-ghost" style="color:var(--red-t)" onclick="pmUnapply('${t.id}')"><i class="ti ti-arrow-back-up"></i>반영 취소</button></span></div>
-      <div style="font-size:11.5px;color:var(--gd);margin-top:3px"><i class="ti ti-circle-check"></i> ${(t.alloc || []).map(a => esc(a.docNo || '') + ' ' + fmtWon(a.amount)).join(' · ')}</div>
-    </div>`).join('');
-}
-async function pmApply() {
-  const list = buildPayMatches(); const sel = list.filter(_pmChecked);
-  if (!sel.length) { toast('선택된 건이 없습니다'); return; }
-  // 선입금(미수 초과분)은 배분하지 않으므로, 실제로 견적에 들어갈 금액만 보여준다
-  const sum = sel.reduce((s, m) => s + m.qs.reduce((a, q) => a + q.amount, 0), 0);
-  const cls = [...new Set(sel.map(m => m.client))];
-  if (!confirm(`거래처 ${cls.length}곳 · 입금 ${sel.length}건에서 ${fmtWon(sum)}원을 견적 결제로 반영할까요?\n\n오래된 견적부터 채웁니다. 반영 후에도 [반영 취소]로 되돌릴 수 있습니다.`)) return;
-  let ok = 0, fail = 0; _pmBusy = true;
-  for (const m of sel) {
-    try {
-      const alloc = [];
-      for (const qq of m.qs) {
-        const q = (state.quotes || []).find(x => x.id === qq.id); if (!q) continue;
-        const total = +q.total || 0; const cur = +q.paidAmount || 0;
-        const add = Math.min(qq.amount, Math.max(0, total - cur));
-        if (add <= 0) continue;
-        const next = cur + add;
-        await Store.update('quotes', q.id, { paidAmount: next, paid: total > 0 && next >= total, paidDate: todayStr() });
-        alloc.push({ quoteId: q.id, docNo: q.docNo || '', amount: add });
-      }
-      if (alloc.length) {
-        await Store.update('banktx', m.tid, { alloc: alloc, appliedAt: Date.now(), appliedBy: (me && me.name) || '' });
-        // 사람이 확인해서 반영한 것이므로 '입금자명 → 거래처'를 기억해 둔다.
-        // 다음부터 같은 입금자명은 '추정'이 아니라 확정으로 잡혀서 기본 체크된다.
-        if (m.guess) { try { const t0 = (state.banktx || []).find(x => x.id === m.tid);
-          const k = (t0 && (t0.pkey || _bankKey(t0.payer))) || ''; 
-          if (k) { const map = Object.assign({}, bankAliasMap()); if (!map[k]) { map[k] = m.client; await saveBankAlias(map); } }
-        } catch (e) { } }
-        ok++;
-      }
-    } catch (e) { fail++; console.warn('pmApply', e); }
-  }
-  _pmSel = null; _pmBusy = false;
-  toast(`${ok}건 반영${fail ? ' · ' + fail + '건 실패' : ''}`);
-  setTimeout(() => renderPayMatch(), 700);
-}
-async function pmUnapply(tid) {
-  const t = (state.banktx || []).find(x => x.id === tid); if (!t || !txIsLinked(t)) return;
-  if (!confirm(`이 입금 반영을 되돌릴까요?\n${(t.alloc || []).map(a => a.docNo + ' ' + fmtWon(a.amount)).join(', ')} 에서 차감됩니다.`)) return;
-  try {
-    _pmBusy = true;
-    for (const a of (t.alloc || [])) {
-      const q = (state.quotes || []).find(x => x.id === a.quoteId); if (!q) continue;
-      const total = +q.total || 0; const next = Math.max(0, (+q.paidAmount || 0) - (+a.amount || 0));
-      await Store.update('quotes', q.id, { paidAmount: next, paid: total > 0 && next >= total });
-    }
-    await Store.update('banktx', tid, { alloc: [], appliedAt: 0 });
-    _pmSel = null; _pmBusy = false; toast('되돌렸습니다'); setTimeout(() => renderPayMatch(), 600);
-  } catch (e) { _pmBusy = false; toast('실패: ' + ((e && e.message) || e)); }
 }
 /* ── 발행된 세금계산서 조회 ── */
 async function _taxDocCall(body) {
@@ -8482,9 +8001,9 @@ function quoteCardHtml(q) {
   const _regLabel = _hasBasin ? '세면대 발주' : (_hasGagong ? '현장 등록' : '출고 등록');
   const _regIcon = _hasBasin ? 'ti-bath' : (_hasGagong ? 'ti-building-community' : 'ti-truck-delivery');
   const names = (q.items || []).map(it => it.name).filter(Boolean).slice(0, 3).join(', ') + ((q.items || []).length > 3 ? ` 외 ${q.items.length - 3}` : '');
-  const _pa = +q.paidAmount || 0; const _tt = +q.total || 0; const _rem = Math.max(0, _tt - _pa);
+  const _pa = quotePaid(q); const _tt = Math.round(+q.total || 0); const _rem = quoteRem(q);
   const _cRem = clientRemOf(q.client);        // 이 거래처가 우리한테 갚아야 할 총액 (원장 기준)
-  const paidPill = (_tt > 0 && _pa >= _tt) ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 수정"><i class="ti ti-cash"></i> 결제완료</button>` : (_pa > 0 ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 수정"><i class="ti ti-cash"></i> 입금 ${fmtWon(_pa)} · 미수 ${fmtWon(_rem)}</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="입금 입력"><i class="ti ti-cash"></i> 미결제</button>`);
+  const paidPill = (_tt > 0 && _pa >= _tt) ? `<button class="pill p-done" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="이 거래처 원장 보기"><i class="ti ti-cash"></i> 결제완료</button>` : (_pa > 0 ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="이 거래처 원장 보기"><i class="ti ti-cash"></i> 입금 ${fmtWon(_pa)} · 미수 ${fmtWon(_rem)}</button>` : `<button class="pill p-wait" style="border:none;cursor:pointer" onclick="quoteMarkPaid('${q.id}')" title="이 거래처 원장 보기"><i class="ti ti-cash"></i> 미결제</button>`);
   const taxPill = q.taxInvoice
     ? `<button class="pill p-prog" style="border:none;cursor:pointer" onclick="openTaxMark('${q.id}')" title="계산서 표시·연결 바꾸기"><i class="ti ti-file-check"></i> 계산서 발행${q.taxDate ? ' ' + esc(q.taxDate.slice(5)) : ''}${q.taxExtId ? ' <i class="ti ti-link" style="font-size:11px"></i>' : ''}</button>`
     : `<button class="pill p-gray" style="border:none;cursor:pointer" onclick="openTaxMark('${q.id}')" title="발행으로 표시 · 홈택스 계산서 연결"><i class="ti ti-file-off"></i> 계산서 미발행</button>`;
@@ -8537,7 +8056,7 @@ function quoteCardHtml(q) {
 function openQuoteView(id) {
   const q = (state.quotes || []).find(x => x.id === id); if (!q) { toast('견적을 찾을 수 없습니다'); return; }
   const items = q.items || [];
-  const _pa = +q.paidAmount || 0, _tt = +q.total || 0, _rem = Math.max(0, _tt - _pa);
+  const _pa = quotePaid(q), _tt = Math.round(+q.total || 0), _rem = quoteRem(q);
   const _cRem = clientRemOf(q.client);
   const badge = (on, cls, ic, txt) => on ? `<span class="pill ${cls}"><i class="ti ${ic}"></i> ${txt}</span>` : '';
   const badges = [
@@ -9965,7 +9484,6 @@ function renderQuote() {
   if (filters.quoteSettings) { if (!document.getElementById('qset-root')) renderQuoteSettings(); return; }   // 설정 화면
   if (filters.cutSim) { const _pq = el('pg-quote'); if (!(_pq && _pq.querySelector('#cutsim-root'))) renderCutSim(); return; }   // 재단 시뮬레이션
   if (filters.ledger) { renderLedger(); return; }   // 거래처 원장 (견적 + 은행 입금)
-  if (filters.payMatch) { renderPayMatch(); return; }   // 입금 → 견적 결제 일괄 반영
   if (filters.billEdit) { renderBillEdit(); return; }   // 묶음 청구 항목 편집
   if (filters.quoteEdit) { if (!document.getElementById('qform-root')) renderQuoteForm(); return; }   // 편집 중엔 실시간 재렌더로 폼을 덮어쓰지 않음
   if (filters.taxEdit) { if (!document.getElementById('taxform-root')) renderTaxForm(); return; }   // 세금계산서 발행 화면
@@ -9973,7 +9491,7 @@ function renderQuote() {
   const qy = (filters.quoteSearch || '').trim().toLowerCase();
   const all = (state.quotes || []);
   const ym = todayStr().slice(0, 7);
-  const _remQ = q => Math.max(0, (+q.total || 0) - (+q.paidAmount || 0));
+  const _remQ = q => quoteRem(q);
   const unpaid = all.reduce((a, b) => a + _remQ(b), 0);
   const _confUnpaidList = all.filter(q => !!q.ordered && _remQ(q) > 0);
   const unpaidConf = _confUnpaidList.reduce((a, q) => a + _remQ(q), 0);
@@ -10099,7 +9617,7 @@ function _quoteListInner() {
   const _isBasinPend = q => _isBasinQ(q) && !_isDoneQ(q);
   const _isNoTax = q => !q.taxInvoice;
   const _isTax = q => !!q.taxInvoice;
-  const _remOf = q => Math.max(0, (+q.total || 0) - (+q.paidAmount || 0));
+  const _remOf = q => quoteRem(q);
   const _isUnpaid = q => _remOf(q) > 0;                                   // 미수가 남은 것 (부분 결제 포함)
   const _isPaid = q => (+q.total || 0) > 0 && _remOf(q) <= 0;             // 완납
   const _isConf = q => !!q.ordered;
@@ -10127,7 +9645,7 @@ function _quoteListInner() {
   // 검색 결과 요약 — 몇 건인지, 합계가 얼마인지 바로 보이게
   const searchBar = qy ? (() => {
     const n = list.length, sum = list.reduce((a, q) => a + (+q.total || 0), 0);
-    const rem = list.reduce((a, q) => a + Math.max(0, (+q.total || 0) - (+q.paidAmount || 0)), 0);
+    const rem = list.reduce((a, q) => a + quoteRem(q), 0);
     return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;background:#eef4ff;border:1px solid #cfe0ff;border-radius:11px;padding:9px 12px;margin-bottom:10px">
       <span style="color:#2f6fed;font-weight:800;font-size:12.5px"><i class="ti ti-search"></i> 검색 «${esc(filters.quoteSearch || '')}» · ${n}건</span>
       ${_amtP ? `<span class="pill" style="background:#dbeafe;color:#1a56b8;border:1px solid #bfd8ff;font-size:10.5px"><i class="ti ti-currency-won"></i> 금액 ${esc(_amtP.label)}</span>` : ''}
@@ -10180,7 +9698,7 @@ function _quoteListInner() {
   if (fConf !== 'all' || fStat !== 'all') {
     const _amt = list.reduce((a, q) => a + (+q.total || 0), 0);
     const _rem2 = list.reduce((a, q) => a + _remOf(q), 0);
-    const _paidIn = list.reduce((a, q) => a + Math.min(+q.total || 0, +q.paidAmount || 0), 0);
+    const _paidIn = list.reduce((a, q) => a + quotePaid(q), 0);
     const warm = fStat === 'unpaid' || fStat === 'notax' || fStat === 'basin';
     const _c = warm ? 'var(--red-t)' : 'var(--gd)';
     const _bg = warm ? '#fff6f5' : '#f2fbf6';
