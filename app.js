@@ -818,7 +818,7 @@ function go(t) {
   if (isRestrictedRole()) t = 'stock';   // 고객·시공팀은 전용 화면만
   else if (!tabAllowed(t)) t = 'home';   // 접근 권한 없는 메뉴 차단
   filters.costEdit = '';   // 원가 입력 폼은 메뉴 이동 시 항상 닫기
-  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; filters.cutSim = false; filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; filters.payMatch = false; filters.billEdit = false; _billEdit = null; }   // 견적 화면 상태 초기화
+  if (t !== 'quote') { filters.quoteEdit = ''; filters.quoteSettings = false; filters.taxEdit = ''; filters.cutSim = false; filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; filters.bankList = false; filters.payMatch = false; filters.billEdit = false; _billEdit = null; }   // 견적 화면 상태 초기화
   if (t !== 'clients') filters.clientDetail = '';
   tab = t;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
@@ -5758,17 +5758,28 @@ function _txDocId(x, accNo) {
   const s = String(x.trserial == null ? '0' : x.trserial).replace(/[^0-9]/g, '');
   return (a + '_' + d + '_' + s).slice(0, 120);
 }
-/* 팝빌 응답 한 줄 → 앱에서 쓰는 모양으로 (입금액은 accIn, 입금자명은 remark1) */
+/* 팝빌 응답 한 줄 → 앱에서 쓰는 모양으로
+   accIn = 들어온 돈(입금), accOut = 나간 돈(출금), 상대방·적요는 remark1.
+   ★ 통장 잔액(x.balance)은 절대 저장하지 않는다 — 앱 어디에도 남지 않게. */
 function _txFromPopbill(x, acc) {
   const payer = (x.remark1 || '').trim() || (x.remark2 || '').trim();
   return {
     date: _bankDate(x.trdate || x.trdt), dt: _bankDT(x.trdt || x.trdate),
     payer: payer, pkey: _bankKey(payer),
-    amount: Math.round(+x.accIn || 0),   // ★ 통장 잔액(x.balance)은 저장하지 않는다 — 직원에게 보일 일이 없게
+    amount: Math.round(+x.accIn || 0),    // 입금액 (출금 줄이면 0)
+    out: Math.round(+x.accOut || 0),      // 출금액 (입금 줄이면 0)
     bankNm: (x.remark2 || '').trim(), way: (x.remark3 || '').trim(),
     accNo: acc || '', syncedAt: Date.now()
   };
 }
+/* ── 통장 한 줄이 입금인가 출금인가 ────────────────────────────
+   amount = 들어온 돈, out = 나간 돈. 둘 중 하나만 0보다 크다.
+   예전에 가져온 줄에는 out 이 아예 없으므로 전부 입금으로 본다(그때는 입금만 가져왔다). */
+function txIsOut(t) { return (+((t && t.out) || 0)) > 0 && !((+((t && t.amount) || 0)) > 0); }
+function txIsIn(t) { return (+((t && t.amount) || 0)) > 0; }
+function txMoney(t) { return txIsOut(t) ? Math.round(+t.out || 0) : Math.round(+((t && t.amount) || 0)); }
+/* 출금 내역은 관리자만 본다 — 급여·세금·개인 이체가 섞여 있어서 */
+function canSeeOut() { return isAdmin(); }
 /* ══════════════════════════════════════════════════════════
    통장 잔액 — 관리자 전용, 저장하지 않고 볼 때마다 은행에서 읽는다
    ──────────────────────────────────────────────────────────
@@ -5875,16 +5886,17 @@ function openBankSync() {
   if (!isAdmin()) { toast('입금 조회는 관리자만 가능합니다'); return; }
   const ed = todayStr();
   const sd = _ymd(new Date(Date.now() - 29 * 86400000));
-  openModal(`<div class="sheet-h"><h3><i class="ti ti-building-bank"></i>입금 내역 가져오기</h3><button class="x" onclick="closeModal()">×</button></div>
-    <div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i> 팝빌에 연결된 계좌에서 <b>입금</b> 내역을 가져와 앱에 저장합니다. 저장된 내역은 <b>거래처 원장</b>에서 계속 볼 수 있습니다.<br><b>은행 규정상 한 번에 1개월까지만</b> 조회됩니다 — 기간을 길게 잡으면 자동으로 달마다 나눠서 가져옵니다.
-      <br><b>[잔액 조회]</b>는 최근 28일 거래를 읽어 <b>마지막 거래 직후의 통장 잔액</b>을 보여줍니다. 관리자에게만 보이고 앱에 저장하지 않습니다.</div>
+  openModal(`<div class="sheet-h"><h3><i class="ti ti-building-bank"></i>통장 내역 가져오기</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i> 팝빌에 연결된 계좌에서 <b>입금·출금 내역을 통장 그대로</b> 가져와 앱에 저장합니다. <b>통장 잔액은 저장하지 않습니다.</b> 출금 내역은 <b>관리자에게만</b> 보입니다.
+      <br><b>은행 규정상 한 번에 1개월까지만</b> 조회됩니다 — 기간을 길게 잡으면 자동으로 달마다 나눠서 가져옵니다.
+      <br><b>[잔액 조회]</b>는 최근 28일 거래를 읽어 <b>마지막 거래 직후의 통장 잔액</b>을 그 자리에서만 보여줍니다. 관리자에게만 보이고 앱에 저장하지 않습니다.</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">
       <div class="fld" style="flex:2;min-width:180px;margin:0"><label>계좌</label><select id="bk-acc" style="width:100%;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px"><option>불러오는 중…</option></select></div>
       <div class="fld" style="flex:1;min-width:130px;margin:0"><label>시작일</label><input type="date" id="bk-sd" value="${sd}" style="width:100%;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px"></div>
       <div class="fld" style="flex:1;min-width:130px;margin:0"><label>종료일</label><input type="date" id="bk-ed" value="${ed}" style="width:100%;font-size:14px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px"></div>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:10px">
-      <button class="btn btn-pri" style="flex:2" onclick="bankRun()"><i class="ti ti-download"></i>입금 내역 가져오기</button>
+      <button class="btn btn-pri" style="flex:2" onclick="bankRun()"><i class="ti ti-download"></i>통장 내역 가져오기</button>
       <button class="btn" style="flex:1" onclick="bankBalanceRun()"><i class="ti ti-wallet"></i>잔액 조회</button>
     </div>
     <div id="bk-bal" style="margin-bottom:8px"></div>
@@ -5935,10 +5947,13 @@ async function _bankFetchOne(a, sd, ed, setSt, label) {
   }
   if (!done) throw new Error('수집이 오래 걸립니다. 잠시 후 다시 시도하세요.');
   setSt(label + ' 내역 불러오는 중…');
-  const r2 = await _bankCall({ mode: 'search', jobID: jobID, tradeType: ['I'], perPage: 500, order: 'D' });
+  /* ★ 입금(I)·출금(O)을 함께 가져온다 = 통장 내역 그대로.
+     잔액은 _txFromPopbill 에서 버리므로 앱에는 남지 않는다. */
+  const r2 = await _bankCall({ mode: 'search', jobID: jobID, tradeType: ['I', 'O'], perPage: 500, order: 'D' });
   const list = (r2.result && r2.result.list) || [];
   const total = +((r2.result && r2.result.total) || 0);
-  const rows = list.map(x => ({ id: _txDocId(x, a.accountNumber), row: _txFromPopbill(x, a.accountNumber) })).filter(r => r.row.amount > 0);
+  const rows = list.map(x => ({ id: _txDocId(x, a.accountNumber), row: _txFromPopbill(x, a.accountNumber) }))
+    .filter(r => r.row.amount > 0 || r.row.out > 0);
   // 한 건씩 저장하면 400건에 수십 초가 걸린다 → 400건씩 묶어서 한 번에 저장
   let saved = 0;
   if (CLOUD) {
@@ -5974,12 +5989,169 @@ async function bankRun() {
     }
     // 방금 끝낸 수집을 그대로 다시 읽는 것이라 추가 비용이 없다 → 잔액도 같이 보여준다
     if (lastJob) { const bal = await _bankBalOf(lastJob); bankBalShow(bal, a); }
-    setSt(`<b style="color:var(--gd)">입금 ${saved}건 저장됨</b>${cut ? ' <span style="color:var(--amber-t)">· 한 구간에 500건이 넘어 일부만 가져왔습니다. 기간을 좁혀 다시 받아주세요.</span>' : ''}`);
+    setSt(`<b style="color:var(--gd)">통장 내역 ${saved}건 저장됨</b>${cut ? ' <span style="color:var(--amber-t)">· 한 구간에 500건이 넘어 일부만 가져왔습니다. 기간을 좁혀 다시 받아주세요.</span>' : ''}`);
     const box = el('bk-body');
-    if (box) box.innerHTML = `<div class="banner info" style="font-size:12.5px"><i class="ti ti-check"></i> 저장했습니다. <b>거래처 원장</b>에서 확인하세요.
-      <div style="margin-top:7px"><button class="btn btn-sm btn-pri" onclick="closeModal();openLedger()"><i class="ti ti-book"></i>거래처 원장 열기</button></div></div>`;
+    if (box) box.innerHTML = `<div class="banner info" style="font-size:12.5px"><i class="ti ti-check"></i> 저장했습니다. <b>통장 내역</b>에서 검색해 보거나 <b>거래처 원장</b>에서 확인하세요.
+      <div style="margin-top:7px;display:flex;gap:6px;flex-wrap:wrap"><button class="btn btn-sm btn-pri" onclick="closeModal();bankOpenList()"><i class="ti ti-list-search"></i>통장 내역 열기</button><button class="btn btn-sm" onclick="closeModal();openLedger()"><i class="ti ti-book"></i>거래처 원장 열기</button></div></div>`;
   } catch (e) { setSt('<span style="color:#c0341d">' + esc((e && e.message) || e) + '</span>'); }
   finally { _bank.loading = false; }
+}
+
+/* ══════════════════════════════════════════════════════════
+   통장 내역 — 가져온 은행 거래를 검색해서 본다
+   ──────────────────────────────────────────────────────────
+   ★ 통장 잔액은 저장하지도 보여주지도 않는다.
+   ★ 출금 줄은 관리자에게만 보인다 (급여·세금·개인 이체가 섞여 있어서).
+   ══════════════════════════════════════════════════════════ */
+let _bkRows = [];   // 지금 화면에 뜬 줄 — 엑셀 내려받기가 이걸 그대로 쓴다
+
+function bankOpenList() {
+  if (!canLedger()) { toast('거래처 원장 권한이 없습니다 — 관리자에게 문의하세요'); return; }
+  qListSave();
+  filters.ledger = true; filters.bankList = true; filters.ledgerClient = ''; filters.ledgerFix = false;
+  if (!filters.bankKind) filters.bankKind = 'all';
+  if (!filters.bankRange) filters.bankRange = 'all';
+  go('quote');
+}
+function bankListBack() { filters.bankList = false; renderLedger(); }
+function bankSetKind(v) { filters.bankKind = v; renderLedger(); }
+function bankSetRange(v) { filters.bankRange = v; renderLedger(); }
+/* 검색은 목록만 다시 그린다 — 화면 전체를 다시 그리면 글자 치던 칸에서 커서가 빠진다 */
+function bankListFilter() {
+  const w = el('bk-listwrap'); if (w) w.innerHTML = _bankListInner();
+  const s = el('bk-sumbar'); if (s) s.innerHTML = _bankSumInner();
+}
+
+/* 검색·기간·구분을 모두 적용한 줄 (최신순) */
+function bankRows() {
+  const R = ledgerRange(filters.bankRange || 'all');
+  const kind = filters.bankKind || 'all';
+  const seeOut = canSeeOut();
+  const qy = (filters.bankSearch || '').trim();
+  const low = qy.toLowerCase();
+  const amtP = qy ? quoteAmtPred(qy) : null;      // 220만 · 1000만~3000만 · 500만이상 같은 금액 검색
+  const list = (state.banktx || []).filter(t => {
+    if (!seeOut && txIsOut(t)) return false;                          // 출금은 관리자만
+    if (kind === 'in' && !txIsIn(t)) return false;
+    if (kind === 'out' && !txIsOut(t)) return false;
+    if (kind === 'noclient' && (!txIsIn(t) || txClientOf(t))) return false;
+    if (kind === 'linked' && !txIsLinked(t)) return false;
+    const d = t.date || '';
+    if (d < R.sd || d > R.ed) return false;
+    if (!qy) return true;
+    const hay = [t.payer, t.bankNm, t.way, txClientOf(t), t.date, t.dt,
+      (Array.isArray(t.alloc) ? t.alloc : []).map(a => a.docNo).join(' ')].join(' ').toLowerCase();
+    if (hay.indexOf(low) >= 0) return true;
+    const money = txMoney(t);
+    if (amtP && amtP.test({ total: money, supply: money })) return true;
+    return false;
+  });
+  return list.sort((a, b) => String(b.dt || b.date || '').localeCompare(String(a.dt || a.date || '')));
+}
+
+function _bankSumInner() {
+  const inn = _bkRows.filter(txIsIn), out = _bkRows.filter(txIsOut);
+  const si = inn.reduce((a, t) => a + txMoney(t), 0);
+  const so = out.reduce((a, t) => a + txMoney(t), 0);
+  return `<span style="font-size:12.5px;color:var(--t2)"><b>${_bkRows.length}건</b></span>
+    <span style="margin-left:auto;display:flex;gap:14px;flex-wrap:wrap;align-items:baseline">
+      <span style="font-size:12px;color:var(--t3)">입금 <b style="font-size:15px;color:var(--gd);font-weight:800">${fmtWon(si)}</b><span style="font-size:11px"> · ${inn.length}건</span></span>
+      ${canSeeOut() ? `<span style="font-size:12px;color:var(--t3)">출금 <b style="font-size:15px;color:var(--red-t);font-weight:800">${fmtWon(so)}</b><span style="font-size:11px"> · ${out.length}건</span></span>` : ''}
+    </span>`;
+}
+
+function _bankListInner() {
+  _bkRows = bankRows();
+  if (!_bkRows.length) {
+    return `<div class="empty"><i class="ti ti-search-off"></i>${(filters.bankSearch || '').trim() ? '검색 결과가 없습니다' : '이 조건에 해당하는 내역이 없습니다'}</div>`;
+  }
+  const MAX = 400;
+  const shown = _bkRows.slice(0, MAX);
+  const cut = _bkRows.length - shown.length;
+  const row = t => {
+    const isOut = txIsOut(t);
+    const c = isOut ? '' : txClientOf(t);
+    const linked = txIsLinked(t);
+    const docs = linked ? t.alloc.map(a => a.docNo).filter(Boolean).join(', ') : '';
+    return `<tr${isOut ? ' style="background:#fdf6f5"' : ''}>
+      <td style="white-space:nowrap;color:var(--t3)">${esc(String(t.dt || t.date || '').slice(2))}</td>
+      <td>${isOut ? '<span class="pill p-issue">출금</span>' : '<span class="pill p-done">입금</span>'}</td>
+      <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(t.payer || '')}"><b>${esc(t.payer || '(이름 없음)')}</b>${t.bankNm ? ` <span style="color:var(--t3);font-size:11.5px">${esc(t.bankNm)}</span>` : ''}</td>
+      <td style="max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${isOut ? '<span style="color:var(--bd2)">·</span>'
+        : (c ? `<button class="pill p-gray" style="border:none;cursor:pointer;max-width:100%;overflow:hidden;text-overflow:ellipsis" onclick="openLedgerFor(${JSON.stringify(c).replace(/"/g, '&quot;')})" title="이 거래처 원장 보기">${esc(c)}</button>`
+             : `<button class="btn btn-sm btn-ghost" style="padding:2px 7px;font-size:11px" onclick="txReassign('${t.id}')"><i class="ti ti-switch-horizontal"></i>거래처 지정</button>`)}</td>
+      <td style="text-align:right;white-space:nowrap;font-weight:700;color:${isOut ? 'var(--red-t)' : 'var(--gd)'}">${isOut ? '−' : ''}${fmtWon(txMoney(t))}</td>
+      <td style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;color:var(--t2)" title="${esc(docs)}">${docs ? esc(docs) : (isOut ? '' : '<span style="color:var(--bd2)">미배정</span>')}</td>
+    </tr>`;
+  };
+  return `<div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th style="width:96px">일시</th><th style="width:52px">구분</th><th>입금자 · 적요</th><th style="width:150px">거래처</th>
+        <th style="text-align:right;width:104px">금액</th><th style="width:130px">연결 견적</th></tr></thead>
+      <tbody>${shown.map(row).join('')}</tbody>
+    </table></div>
+    ${cut > 0 ? `<div style="font-size:11.5px;color:var(--t3);text-align:center;padding:9px">가장 최근 ${MAX}건만 표시했습니다 · 나머지 ${cut}건은 검색이나 기간으로 좁혀 보세요</div>` : ''}`;
+}
+
+function bankListHtml() {
+  const seeOut = canSeeOut();
+  const all = (state.banktx || []).filter(t => seeOut || txIsIn(t));
+  const per = all.length ? [all.map(t => t.date || '').filter(Boolean).sort()[0], all.map(t => t.date || '').filter(Boolean).sort().slice(-1)[0]] : null;
+  const kc = (v, l) => `<button class="chip ${(filters.bankKind || 'all') === v ? 'active' : ''}" onclick="bankSetKind('${v}')">${l}</button>`;
+  const rc = (v, l) => `<button class="chip ${(filters.bankRange || 'all') === v ? 'active' : ''}" onclick="bankSetRange('${v}')">${l}</button>`;
+  const listHtml = _bankListInner();     // ★ 먼저 만들어야 _bkRows 가 채워진다 (합계 바가 이걸 본다)
+  return `
+    <div class="ph"><div><h2><i class="ti ti-building-bank"></i>통장 내역</h2>
+      <p>앱에 저장된 은행 거래 ${all.length}건${per ? ` · ${esc(per[0])} ~ ${esc(per[1])}` : ''}</p></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${isAdmin() ? `<button class="btn btn-sm" onclick="openBankSync()"><i class="ti ti-download"></i>가져오기</button>` : ''}
+        <button class="btn btn-sm" onclick="bankXlsx()"><i class="ti ti-file-spreadsheet"></i>엑셀</button>
+        <button class="btn btn-sm" onclick="bankListBack()"><i class="ti ti-arrow-left"></i>원장</button></div></div>
+
+    <div class="banner info" style="margin-bottom:10px;font-size:12px"><i class="ti ti-info-circle"></i>
+      <span style="flex:1;min-width:0">통장에 찍힌 그대로 저장한 내역입니다. <b>통장 잔액은 저장하지 않습니다.</b>
+      ${seeOut ? '출금 내역은 <b>관리자에게만</b> 보입니다.' : '출금 내역은 관리자만 볼 수 있습니다.'}</span></div>
+
+    <div class="search-box" style="margin-bottom:9px"><i class="ti ti-search"></i>
+      <input id="bk-search" placeholder="입금자·거래처·견적번호·금액 검색 (예: 신성, 220만, 1000만~3000만)" value="${esc(filters.bankSearch || '')}"
+        oninput="filters.bankSearch=this.value;bankListFilter()" autocomplete="off" lang="ko"></div>
+
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+      <span style="font-size:11px;color:var(--t3);width:38px;flex:none">구분</span>
+      ${kc('all', '전체')}${kc('in', '입금')}${seeOut ? kc('out', '출금') : ''}${kc('noclient', '거래처 미지정')}${kc('linked', '결제 반영됨')}
+    </div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+      <span style="font-size:11px;color:var(--t3);width:38px;flex:none">기간</span>
+      ${rc('all', '전체')}${rc('3m', '최근 3개월')}${rc('tm', '이번 달')}${rc('lm', '지난 달')}
+    </div>
+
+    <div class="card" style="padding:10px 13px;margin-bottom:10px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap" id="bk-sumbar">${_bankSumInner()}</div>
+    <div id="bk-listwrap">${listHtml}</div>`;
+}
+
+/* 지금 화면에 뜬 줄 그대로 엑셀로 */
+function bankXlsx() {
+  if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후 다시'); return; }
+  const rows = _bkRows.length ? _bkRows : bankRows();
+  if (!rows.length) { toast('내려받을 내역이 없습니다'); return; }
+  const R = ledgerRange(filters.bankRange || 'all');
+  const head = ['일시', '구분', '입금자·적요', '은행', '거래처', '입금액', '출금액', '연결 견적'];
+  const aoa = [['통장 내역 — ' + R.label + ((filters.bankSearch || '').trim() ? ' · 검색 «' + filters.bankSearch + '»' : '')],
+  ['출력일 ' + todayStr() + ' · ' + rows.length + '건 · 통장 잔액은 포함하지 않습니다'], [], head];
+  rows.forEach(t => {
+    const isOut = txIsOut(t);
+    aoa.push([t.dt || t.date || '', isOut ? '출금' : '입금', t.payer || '', t.bankNm || '',
+      isOut ? '' : txClientOf(t), isOut ? '' : txMoney(t), isOut ? txMoney(t) : '',
+      txIsLinked(t) ? t.alloc.map(a => a.docNo).filter(Boolean).join(', ') : '']);
+  });
+  const si = rows.filter(txIsIn).reduce((a, t) => a + txMoney(t), 0);
+  const so = rows.filter(txIsOut).reduce((a, t) => a + txMoney(t), 0);
+  aoa.push([]);
+  aoa.push(['합계', '', '', '', '', si, so, '']);
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws['!cols'] = [{ wch: 17 }, { wch: 6 }, { wch: 24 }, { wch: 12 }, { wch: 20 }, { wch: 13 }, { wch: 13 }, { wch: 18 }];
+  const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '통장내역');
+  XLSX.writeFile(wb, '통장내역_' + todayStr() + '.xlsx');
+  toast('엑셀 저장됨');
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -6050,8 +6222,8 @@ function txClientOf(t) {
   return ledgerClientNames().find(c => _bankNameHit(t.payer, c) >= 2) || '';
 }
 function txIsGuess(t) { return !!(t && !t.client && !bankAliasMap()[t.pkey || _bankKey(t.payer)]); }
-function ledgerRange() {
-  const r = filters.ledgerRange || 'all';
+function ledgerRange(rr) {
+  const r = rr || filters.ledgerRange || 'all';
   const t = todayStr();
   if (r === 'all') return { sd: '0000-00-00', ed: '9999-99-99', label: '전체 기간' };
   if (r === 'tm') return { sd: t.slice(0, 7) + '-01', ed: t, label: '이번 달' };
@@ -6067,7 +6239,7 @@ function ledgerRows(client, cat) {
        그래서 분류를 고르면 매출·계산서 줄만 보여주고 입금·잔액은 빼둔다. */
   const CAT = (cat && cat !== 'all') ? cat : '';
   const qs = (state.quotes || []).filter(q => !!q.ordered && (q.client || '').trim() === client);
-  if (!qs.length && !(state.banktx || []).some(t => txClientOf(t) === client)) return [];
+  if (!qs.length && !(state.banktx || []).some(t => txIsIn(t) && txClientOf(t) === client)) return [];
   const qid = {}; qs.forEach(q => qid[q.id] = q);
   const rows = [];
   qs.forEach(q => {
@@ -6141,19 +6313,20 @@ function clientRemOf(c) { return clientRemMap()[(c || '').trim()] || 0; }
 function openLedgerFor(c) {
   if (!canLedger()) { toast('거래처 원장 권한이 없습니다 — 관리자에게 문의하세요'); return; }
   closeModal(); qListSave();
-  filters.ledger = true; filters.ledgerClient = (c || '').trim(); filters.ledgerRange = 'all'; filters.ledgerFix = false; filters.ledgerCat = 'all';
+  filters.ledger = true; filters.ledgerClient = (c || '').trim(); filters.ledgerRange = 'all'; filters.ledgerFix = false; filters.bankList = false; filters.ledgerCat = 'all';
   go('quote');
 }
 function openLedger() { if (!canLedger()) { toast('거래처 원장 권한이 없습니다 — 관리자에게 문의하세요'); return; } qListSave(); filters.ledger = true; filters.ledgerClient = ''; go('quote'); }
-function ledgerClose() { filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; renderQuote(); qListRestore(); }
+function ledgerClose() { filters.ledger = false; filters.ledgerClient = ''; filters.ledgerFix = false; filters.bankList = false; renderQuote(); qListRestore(); }
 function ledgerSetRange(v) { filters.ledgerRange = v; renderLedger(); }
 function ledgerSetSort(v) { filters.ledgerSort = v; renderLedger(); }
 function ledgerSetCat(v) { filters.ledgerCat = v; renderLedger(); }
-function ledgerOpen(c) { filters.ledgerClient = c; filters.ledgerCat = 'all'; renderLedger(); }
+function ledgerOpen(c) { filters.ledgerClient = c; filters.ledgerCat = 'all'; filters.bankList = false; renderLedger(); }
 function ledgerBack() { filters.ledgerClient = ''; filters.ledgerFix = false; filters.ledgerCat = 'all'; renderLedger(); }
 function ledgerFix() { filters.ledgerFix = true; filters.ledgerClient = ''; renderLedger(); }
 function renderLedger() {
   const root = el('pg-quote'); if (!root) return;
+  if (filters.bankList) { root.innerHTML = bankListHtml(); return; }
   if (filters.ledgerFix) { root.innerHTML = ledgerFixHtml(); return; }
   if (filters.ledgerClient) { root.innerHTML = ledgerDetailHtml(filters.ledgerClient); return; }
   const A = ledgerAgg();
@@ -6178,7 +6351,8 @@ function renderLedger() {
   root.innerHTML = `
     <div class="ph"><div><h2><i class="ti ti-book"></i>거래처 원장</h2><p>매출 · 결제 · 미수를 자동으로 계산합니다</p></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
-        ${isAdmin() ? `<button class="btn btn-sm" onclick="openBankSync()"><i class="ti ti-download"></i>입금 가져오기</button>
+        <button class="btn btn-sm" onclick="bankOpenList()"><i class="ti ti-list-search"></i>통장 내역</button>
+        ${isAdmin() ? `<button class="btn btn-sm" onclick="openBankSync()"><i class="ti ti-download"></i>통장 가져오기</button>
         <button class="btn btn-sm" onclick="openPayMatch()"><i class="ti ti-link"></i>결제 반영${pmN ? ` <b style="color:var(--gd)">${pmN}</b>` : ''}</button>` : ''}
         <button class="btn btn-sm" onclick="ledgerClose()"><i class="ti ti-arrow-left"></i>견적 목록</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
@@ -6379,7 +6553,7 @@ async function txReassignSave(id) {
 function ledgerFixHtml() {
   const R = ledgerRange();
   const inR = d => (d || '') >= R.sd && (d || '') <= R.ed;
-  const list = (state.banktx || []).filter(t => inR(t.date) && !txClientOf(t)).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+  const list = (state.banktx || []).filter(t => txIsIn(t) && inR(t.date) && !txClientOf(t)).sort((a, b) => (b.date || '').localeCompare(a.date || ''));   // 출금은 거래처를 붙일 대상이 아니다
   // 같은 입금자명끼리 묶어서 한 번만 정하면 되게
   const g = {};
   list.forEach(t => { const k = t.pkey || _bankKey(t.payer); (g[k] || (g[k] = { payer: t.payer, k: k, n: 0, sum: 0, ids: [] })); g[k].n++; g[k].sum += (+t.amount || 0); g[k].ids.push(t.id); });
@@ -6401,7 +6575,7 @@ function ledgerFixHtml() {
 async function ledgerFixSave(pkey, i) {
   const c = clientPickValue('fx-' + i);
   if (!c) { toast('거래처 이름을 치고 아래 목록에서 눌러 선택하세요'); return; }
-  const ids = (state.banktx || []).filter(t => (t.pkey || _bankKey(t.payer)) === pkey && !t.client).map(t => t.id);
+  const ids = (state.banktx || []).filter(t => txIsIn(t) && (t.pkey || _bankKey(t.payer)) === pkey && !t.client).map(t => t.id);
   if (!confirm(`${ids.length}건을 "${c}" 로 지정할까요?\n앞으로 같은 이름은 자동으로 이 거래처가 됩니다.`)) return;
   try {
     const m = Object.assign({}, bankAliasMap()); m[pkey] = c; await saveBankAlias(m);
