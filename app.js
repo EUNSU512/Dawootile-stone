@@ -42,21 +42,40 @@ const QCAT_ICON = { '세라믹': 'grid-dots', '세면대': 'bath', '석재': 'di
 const QCAT_COL = { '세라믹': 'var(--gd)', '세면대': '#0e7490', '석재': '#7c3aed', '통관비용': '#b45309' };
 function qcatNorm(c) { const s = String(c == null ? '' : c).trim(); return QCAT_LEGACY[s] || s; }
 const CUSTOMS_LINES = ['관세', '부가가치세', '지원가산세', '통관수수료', 'D/O CHG (선사비용)', '적출료', 'SHUTTLE CHG', '경과보관료', '제주선임', '운송료', '취급수수료', '기타경비'];
-function itemCategory(name) {
-  const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(name));
-  if (pl && pl.cat) { const c = qcatNorm(pl.cat); if (QCATS.indexOf(c) >= 0) return c; }
-  const t = (name || '').replace(/\s/g, '');
-  if (/통관|관세|clearance/i.test(t)) return '통관비용';
-  /* 세면대 판별 — 세면대 본체는 물론 부속(브라켓·폽업+트랩)도 세면대로 본다.
-     실측: 견적에 쓰인 품목 183개 중 세면대로 잡히는 건 9개, 오판 0개.
-     '인덕션 타공·싱크볼 타공' 같은 세라믹 가공은 여기에 안 걸린다. */
-  if (/세면대|세면볼|폽업|팝업/.test(t)) return '세면대';
-  /* 석재 판별 — 돌 이름(포천석·사비석·해남고홍석…)과 석재 가공 용어(잔다듬·버너·혼드…)까지 본다.
-     세라믹 슬라브 이름(타지마할·로마팬텀 등)에는 이런 말이 안 들어가서 섞이지 않는다.
-     실측: 견적에 쓰인 품목 154개 중 9개가 새로 석재로 잡히고 오판은 0개. */
-  if (/석재|대리석|화강|천연석|현무암|점판암|사비석|고흥석|고홍석|포천석|디딤석|잔석|잔다듬|버너|혼드|물갈기|정다듬|도드락/i.test(t)) return '석재';
-  return '세라믹';
+/* ★ 2026-09-07 속도 — 품목 하나의 분류를 알아낼 때마다 단가표 225줄을 처음부터 훑고 있었다.
+   (견적 466장 × 품목 2,009개 = 45만 번 비교 · 실측 221ms)
+   단가표를 «이름 → 분류» 표로 한 번만 만들어 두고, 이름별 결과도 기억해 둔다.
+   판정 규칙은 예전과 똑같다 — 단가표에 있으면 그 분류, 없으면 이름으로 추정. */
+let _catIx = null;
+function catalogBust() { _catIx = null; _qmiSets = null; }
+function _catIndex() {
+  if (_catIx) return _catIx;
+  const m = new Map();
+  (state.priceList || []).forEach(p => { const k = _normName(p.itemName); if (k && !m.has(k)) m.set(k, p.cat || ''); });
+  _catIx = { plc: m, memo: new Map() };
+  return _catIx;
 }
+function itemCategory(name) {
+  const ix = _catIndex();
+  const key = _normName(name);
+  const hit = ix.memo.get(key);
+  if (hit !== undefined) return hit;
+  let out = '';
+  const pc = ix.plc.get(key);
+  if (pc) { const c = qcatNorm(pc); if (QCATS.indexOf(c) >= 0) out = c; }
+  if (!out) {
+    const t = (name || '').replace(/\s/g, '');
+    /* 통관 → 세면대(본체·브라켓·폽업 부속 포함) → 석재(돌 이름·석재 가공 용어) → 나머지는 세라믹.
+       실측으로 오판 0개를 확인한 순서다. */
+    if (/통관|관세|clearance/i.test(t)) out = '통관비용';
+    else if (/세면대|세면볼|폽업|팝업/.test(t)) out = '세면대';
+    else if (/석재|대리석|화강|천연석|현무암|점판암|사비석|고흥석|고홍석|포천석|디딤석|잔석|잔다듬|버너|혼드|물갈기|정다듬|도드락/i.test(t)) out = '석재';
+    else out = '세라믹';
+  }
+  ix.memo.set(key, out);
+  return out;
+}
+
 /* ── 견적 한 건을 분류별 금액으로 쪼갠다 ──
    → { '세라믹': {sup, tot}, '세면대': {sup, tot}, … }  (그 견적에 있는 분류만 들어간다)
    공급가(sup)는 품목 금액을 그대로 더하고, 합계(tot, 부가세·할인 반영)는 품목 금액 비율대로 나눈다.
@@ -503,6 +522,7 @@ const _loadedColls = {};
 function onData(coll) {
   _loadedColls[coll] = true;
   if (['quotes', 'banktx', 'appmeta', 'clients'].includes(coll)) moneyBust();   // 돈 계산을 다시 하게 만든다
+  if (['priceList', 'inventory', 'appmeta'].includes(coll)) catalogBust();     // 단가표·재고·설정이 바뀌면 분류 표를 다시 만든다
   if (coll === 'members' && !_membersLoaded) {
     _membersLoaded = true;
     _membersWaiters.splice(0).forEach(fn => fn());
@@ -5428,10 +5448,20 @@ async function quoteLinkSiteDo(siteId) {
 /* 견적 품목 중 '실제 자재'만 골라냄 — 홀딩·출고 불러오기 공통.
    부대비용/가공 칸에서 넣은 항목(it.extra), 부대비용 항목명, 가공·운송·시공 키워드,
    주문제작 세면대(재고가 아님)는 모두 제외. 재고·단가표에 등록된 이름이면 자재로 인정. */
-function quoteMaterialItems(q) {
-  const isOrderBasin = n => (n || '').includes('세면대') && /주문제작|비규격/.test(n || '');
+/* ★ 2026-09-07 속도 — 견적 한 장을 볼 때마다 «부대비용 목록»과 «자재 목록»을
+   처음부터 다시 만들고 있었다 (견적 466장에 582ms). 목록은 한 번만 만들어 둔다.
+   단가표·재고·설정이 바뀌면 catalogBust() 가 버리므로 내용은 항상 최신이다. */
+let _qmiSets = null;
+function _qmiCache() {
+  if (_qmiSets) return _qmiSets;
   const extraSet = new Set(extraItemsList().map(x => _normName(x.name)).concat(CONSUMER_GAGONG.map(x => _normName(x.name))));
   let matSet; try { matSet = new Set(quotePriceItems().map(i => _normName(i.name))); } catch (e) { matSet = new Set(); }
+  _qmiSets = { extraSet: extraSet, matSet: matSet };
+  return _qmiSets;
+}
+function quoteMaterialItems(q) {
+  const isOrderBasin = n => (n || '').includes('세면대') && /주문제작|비규격/.test(n || '');
+  const _c = _qmiCache(), extraSet = _c.extraSet, matSet = _c.matSet;
   return (q && q.items || []).filter(it => {
     const nm = it.name || ''; if (!nm) return false;
     if ((+it.qty || 0) <= 0) return false;           // ★ 환불(마이너스) 행은 출고·홀딩·재고에 반영하지 않는다
