@@ -841,13 +841,14 @@ function fabAction() {
 }
 let _renderTimer = null;
 /* ================= 거래처 관리 (유형 · 사업자정보 · 미수/매출 장부) ================= */
+/* 거래처 한 곳 요약 — ★ 미수·입금은 거래처 원장과 똑같은 계산을 쓴다(clientMoneyOf).
+   예전엔 미확정 견적까지 미수로 세서 원장(1.5억)과 이 화면(10.4억)이 따로 놀았다. */
 function clientStats(name) {
   const qs = (state.quotes || []).filter(q => _normName(q.client) === _normName(name));
   const total = qs.reduce((a, b) => a + (+b.total || 0), 0);
-  const unpaid = qs.reduce((a, b) => a + quoteRem(b), 0);
-  const paidSum = qs.reduce((a, b) => a + quotePaid(b), 0);
+  const M = clientMoneyOf(name);
   const noTax = qs.filter(q => !q.taxInvoice).length;
-  return { count: qs.length, total: total, unpaid: unpaid, paidSum: paidSum, noTax: noTax };
+  return { count: qs.length, total: total, sale: M.sale, unpaid: M.rem, paidSum: M.applied, extra: M.extra, noTax: noTax };
 }
 function downloadClientLedger(id) {
   const c = (state.clients || []).find(x => x.id === id); if (!c) return;
@@ -986,7 +987,7 @@ function clientRowsHtml() {
     return `<div class="card" style="margin-bottom:8px;padding:11px 13px;cursor:pointer" onclick="openClientDetail('${c.id}')">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
         <div style="min-width:0"><div style="font-weight:700;font-size:14.5px">${esc(c.value)}</div>
-          <div style="font-size:11px;color:var(--t3);margin-top:2px">${ti.bizNo ? esc(ti.bizNo) + ' · ' : '<span style="color:#c0341d">사업자정보 미등록 · </span>'}${st.count}건 · 매출 ${fmtWon(st.total)}</div></div>
+          <div style="font-size:11px;color:var(--t3);margin-top:2px">${ti.bizNo ? esc(ti.bizNo) + ' · ' : '<span style="color:#c0341d">사업자정보 미등록 · </span>'}${st.count}건 · 확정매출 ${fmtWon(st.sale)}</div></div>
         <div style="display:flex;align-items:center;gap:8px;flex:none" onclick="event.stopPropagation()">
           <select onchange="setClientTypeSetting('${c.id}',this.value)" style="font-size:12.5px;padding:5px 7px;border:1.5px solid var(--bd2);border-radius:8px">${CTYPES.map(t => `<option ${((c.ctype) || '소비자') === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
           <div style="text-align:right;min-width:74px"><div style="font-size:14px;font-weight:800;color:${st.unpaid > 0 ? 'var(--red-t)' : 'var(--t3)'}">${fmtWon(st.unpaid)}</div><div style="font-size:9.5px;color:var(--t3)">미수금</div></div>
