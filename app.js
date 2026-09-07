@@ -11520,18 +11520,29 @@ function basinTableHtml(list) {
       <td style="text-align:right;white-space:nowrap;color:var(--t3)">${it.priceCny ? '¥' + fmtWon(Math.round(_numv(it.priceCny))) : '-'}</td>
       <td style="white-space:nowrap;color:var(--t3);font-size:11px">${esc(it.orderNo || it.quoteNo || '-')}</td>
       <td style="white-space:nowrap;color:var(--t3)">${sameAsPrev ? '' : esc(_shortDate(done ? b.shipDate : '') || '—')}</td>
-      <td style="max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(b.address || '')}">${sameAsPrev ? '' : (b.address ? esc(b.address) : `<span style="color:var(--t3)">미지정</span>`)}</td></tr>`;
+      <td style="max-width:230px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(b.address || '')}">${sameAsPrev ? '' : (b.address ? esc(b.address) : `<span style="color:var(--t3)">미지정</span>`)}</td>
+      <td style="white-space:nowrap;text-align:center">${sameAsPrev ? '' : basinSlipBtn(b, 'sm')}</td></tr>`;
   }).join('');
   const tq = sorted.reduce((a, r) => a + (parseInt(r.it.qty, 10) || 0), 0);
   const cny = sorted.reduce((a, r) => a + _numv(r.it.priceCny) * (parseInt(r.it.qty, 10) || 1), 0);
-  return `<div class="tbl-wrap" style="overflow-x:auto"><table class="tbl" style="min-width:1000px">
+  return `<div class="tbl-wrap" style="overflow-x:auto"><table class="tbl" style="min-width:1130px">
     <thead><tr>
       ${_thSort(S, 'od', '발주일', 'basinSetSort')}${_thSort(S, 'st', '단계', 'basinSetSort')}${_thSort(S, 'vd', '업체', 'basinSetSort')}
       ${_thSort(S, 'sn', '석종', 'basinSetSort')}${_thSort(S, 'sp', '규격 (W*D*H)', 'basinSetSort')}${_thSort(S, 'qt', '수량', 'basinSetSort', 'right')}
       ${_thSort(S, 'cy', '중국단가', 'basinSetSort', 'right')}<th style="white-space:nowrap">발주·견적번호</th>
-      ${_thSort(S, 'sd', '출고일', 'basinSetSort')}${_thSort(S, 'ad', '현장 주소', 'basinSetSort')}
+      ${_thSort(S, 'sd', '출고일', 'basinSetSort')}${_thSort(S, 'ad', '현장 주소', 'basinSetSort')}<th style="white-space:nowrap;text-align:center">출고증</th>
     </tr></thead><tbody>${body}</tbody></table></div>
-    <div style="font-size:11.5px;color:var(--t3);padding:8px 2px">발주 ${list.length}건 · 품목 ${sorted.length}줄 · 총 ${tq}개${cny > 0 ? ' · 중국 단가 합 ¥' + fmtWon(Math.round(cny)) : ''} · 머리글을 누르면 정렬 · 줄을 누르면 발주 상세</div>`;
+    <div style="font-size:11.5px;color:var(--t3);padding:8px 2px">발주 ${list.length}건 · 품목 ${sorted.length}줄 · 총 ${tq}개${cny > 0 ? ' · 중국 단가 합 ¥' + fmtWon(Math.round(cny)) : ''} · 머리글을 누르면 정렬 · 줄을 누르면 발주 상세 · 맨 오른쪽에서 출고증</div>`;
+}
+/* 세면대 출고증 버튼 — 카드/표/상세 어디서든 같은 규칙으로 쓴다.
+   국내입고 단계면 「출고 처리」(누르면 완료로 넘기고 출고증까지 인쇄),
+   완료면 「출고증」(다시 인쇄). 그 전 단계는 아직 뽑을 게 없으므로 '—'. */
+function basinSlipBtn(b, size) {
+  const idx = basinStageIndex(b);
+  const sm = size === 'sm' ? ' btn-sm' : '';
+  if ((b.stage || '') === '완료') return `<button class="btn${sm}" onclick="event.stopPropagation();printBasinSlip('${b.id}')"><i class="ti ti-printer"></i>출고증</button>`;
+  if (idx === 4) return `<button class="btn${sm}" style="background:#0a5b46;color:#fff;border-color:#0a5b46" onclick="event.stopPropagation();basinShipOut('${b.id}')"><i class="ti ti-truck-delivery"></i>출고 처리</button>`;
+  return `<span style="color:var(--t3);font-size:11.5px" title="국내입고 단계부터 출고증을 뽑을 수 있습니다">—</span>`;
 }
 function basinCard(b) {
   const idx = basinStageIndex(b);
@@ -11651,8 +11662,17 @@ function openBasinForm(id, pre) {
       <div class="fld full"><label>비고</label><input id="b-note" lang="ko" placeholder="선택" value="${esc(v.note || '')}"></div>
       <div class="fld full" style="font-size:11.5px;color:var(--t3);line-height:1.5;background:var(--soft);border-radius:9px;padding:9px 11px"><i class="ti ti-info-circle"></i> 납기 약 30~33일 · 세면대 1개당 브라켓 1SET 포함(팝업·수전·트랩 별도) · 발주 후 수정 불가</div>
     </div>
+    ${b && basinStageIndex(b) >= 4 ? `<div style="padding:0 16px 10px">${(b.stage || '') === '완료'
+      ? `<button class="btn btn-block" onclick="basinSlipFromForm('${b.id}')"><i class="ti ti-printer"></i>출고증 인쇄</button>`
+      : `<button class="btn btn-block" style="background:#0a5b46;color:#fff;border-color:#0a5b46" onclick="basinSlipFromForm('${b.id}')"><i class="ti ti-truck-delivery"></i>출고 처리 · 출고증 인쇄</button>`}</div>` : ''}
     <div class="frm-foot">${b ? `<button class="btn" style="color:var(--red-t);border-color:#e6a9a9" onclick="deleteBasin('${b.id}')"><i class="ti ti-trash"></i></button>` : ''}<button class="btn" style="flex:1" onclick="closeModal()">취소</button><button class="btn btn-pri" style="flex:2" onclick="submitBasin('${b ? b.id : ''}')"><i class="ti ti-check"></i>${b ? '저장' : '등록'}</button></div>`);
   basinLenHint();
+}
+/* 발주 상세 팝업에서 출고증 — 팝업을 먼저 닫고(인쇄창이 뒤에 가리지 않게) 처리 */
+function basinSlipFromForm(id) {
+  const b = (state.basins || []).find(x => x.id === id); if (!b) return;
+  closeModal();
+  if ((b.stage || '') === '완료') printBasinSlip(id); else basinShipOut(id);
 }
 function basinLen(spec) { const m = String(spec || '').match(/\d+/); return m ? +m[0] : 0; }
 function basinLenHint() {
