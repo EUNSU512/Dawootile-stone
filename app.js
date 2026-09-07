@@ -9179,14 +9179,38 @@ function openPurDetail(id) {
       ${row('공급받는자', esc(p.buyer || '-'))}
       ${row('가져온 시각', p.fetchedAt ? esc(new Date(p.fetchedAt).toLocaleString('ko-KR')) : '-', 'var(--t2)')}
     </div>
-    ${p.nts ? `<button class="btn btn-sm btn-block" style="margin-bottom:8px" onclick="purCopyNts('${esc(p.nts)}')"><i class="ti ti-copy"></i>승인번호 복사 <span style="color:var(--t3);font-weight:500">(홈택스에서 조회할 때 붙여넣기)</span></button>` : ''}
+    ${p.nts ? `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+      ${isAdmin() ? `<button class="btn btn-pri btn-sm" style="flex:1;min-width:140px" onclick="purViewDoc('${esc(p.nts)}','htview')"><i class="ti ti-file-search"></i>팝빌에서 원본 보기</button>
+      <button class="btn btn-sm" style="flex:1;min-width:110px" onclick="purViewDoc('${esc(p.nts)}','htprint')"><i class="ti ti-printer"></i>인쇄본</button>` : ''}
+      <button class="btn btn-sm" style="${isAdmin() ? 'flex:none' : 'flex:1'}" onclick="purCopyNts('${esc(p.nts)}')" title="승인번호 복사"><i class="ti ti-copy"></i>${isAdmin() ? '' : '승인번호 복사'}</button>
+    </div>` : ''}
     <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
       ${lq
       ? `<button class="btn btn-sm" style="flex:1;min-width:130px" onclick="purDetailUnlink('${esc(p.id)}')"><i class="ti ti-unlink"></i>원가 연결 해제</button>`
       : `<button class="btn btn-pri btn-sm" style="flex:1;min-width:130px" onclick="purOpenLink('${esc(p.id)}')"><i class="ti ti-link"></i>견적 원가로 연결</button>`}
       <button class="btn btn-sm" style="flex:1;min-width:130px" onclick="purDetailExclude('${esc(p.id)}')"><i class="ti ti-${p.exclude ? 'eye' : 'eye-off'}"></i>${p.exclude ? '다시 포함하기' : '영업이익에서 제외'}</button>
     </div>
-    <div style="font-size:11px;color:var(--t3);line-height:1.6">여기 값은 <b>홈택스에서 가져와 저장해 둔 내용</b>입니다. 홈택스 원본 화면은 승인번호를 복사해 홈택스에서 조회하세요.</div>`);
+    <div style="font-size:11px;color:var(--t3);line-height:1.6">위 값은 <b>홈택스에서 가져와 저장해 둔 내용</b>이고, <b>원본 보기</b>는 팝빌에 수집돼 있는 계산서 문서를 그대로 띄웁니다.</div>`);
+}
+/* ── 팝빌에 수집된 「원본 계산서」 열기 ────────────────────────
+   매출 계산서의 [발행 내용 보기]와 같은 개념. 다만 매출은 우리가 발행해서
+   문서번호(mgtKey)로 찾고, 매입은 국세청 승인번호(NTSConfirmNum)로 찾는다.
+   kind: 'htview'(팝빌 상세 보기) / 'htprint'(인쇄용)
+   ※ 서버(Cloud Function)에 이 mode 가 올라가 있어야 열린다.               */
+async function purViewDoc(nts, kind) {
+  const n = String(nts || '').replace(/[^0-9]/g, '');
+  if (!n) { toast('국세청 승인번호가 없어서 원본을 찾을 수 없습니다'); return; }
+  const w = window.open('', '_blank');
+  try {
+    const j = await _htCall({ mode: kind || 'htview', nts: n });
+    if (!j || !j.url) throw new Error('문서 주소를 받지 못했습니다');
+    if (w) w.location = j.url; else toast('팝업이 차단되었습니다. 허용 후 다시 눌러주세요');
+  } catch (e) {
+    if (w) w.close();
+    const m = (e && e.message) || String(e);
+    if (/unknown hometax mode/i.test(m)) toast('서버에 「원본 보기」 기능이 아직 안 올라갔습니다 — 승인번호 복사로 홈택스에서 조회하세요');
+    else toast('열기 실패: ' + m);
+  }
 }
 async function purDetailExclude(id) { await purToggleExclude(id); openPurDetail(id); }
 async function purDetailUnlink(id) { await purUnlink(id); openPurDetail(id); }
