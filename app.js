@@ -6577,7 +6577,7 @@ function ledgerDetailHtml(client) {
     <div class="ph"><div><h2><i class="ti ti-book"></i>${esc(client)}</h2><p>${esc(R.label)} · 매출 ${full.filter(r => r.k === 'sale').length}건 · 입금 ${full.filter(r => r.k === 'pay').length}건${catOn ? ` · <b style="color:${QCAT_COL[CAT]}">${esc(CAT)}만 보는 중</b>` : ''}</p></div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-sm" onclick="openManualPay(${JSON.stringify(client).replace(/"/g, '&quot;')})"><i class="ti ti-cash"></i>입금 직접 넣기</button>
-        <button class="btn btn-sm" onclick="ledgerBack()"><i class="ti ti-arrow-left"></i>거래처 목록</button></div>
+        <button class="btn btn-sm" onclick="ledgerBack()"><i class="ti ti-arrow-left"></i>거래처 목록</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:11px">
       <div class="stat"><div class="ic g"><i class="ti ti-file-text"></i></div><div class="v" style="font-size:18px">${fmtWon(sale)}</div><div class="l">확정 매출</div></div>
       <div class="stat"><div class="ic b"><i class="ti ti-cash"></i></div><div class="v" style="font-size:18px">${fmtWon(pay)}</div><div class="l">받은 돈</div><div class="s">${sale > 0 ? Math.min(100, Math.round(pay / sale * 100)) : 0}%${extra > 0 ? ' · 선입금 ' + fmtWon(extra) : ''}</div></div>
