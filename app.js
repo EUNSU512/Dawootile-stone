@@ -6430,6 +6430,7 @@ function renderLedger() {
   const totSale = A.rows.reduce((s, r) => s + r.sale, 0), totPay = A.rows.reduce((s, r) => s + r.pay, 0);
   const totRem = A.rows.reduce((s, r) => s + r.rem, 0), totNoTax = A.rows.reduce((s, r) => s + r.noTaxAmt, 0);
   const totExtra = A.rows.reduce((s, r) => s + r.extra, 0);
+  const totApplied = totPay - totExtra;      // 매출과 실제로 상계된 돈 (선입금은 뺀 값)
   const sc = (v, l) => `<button class="chip ${(filters.ledgerSort || 'rem') === v ? 'active' : ''}" onclick="ledgerSetSort('${v}')">${l}</button>`;
   const pmN = bankNoClientCount();
   /* 확정 매출을 분류(세라믹·세면대·석재·통관비용)로 쪼갠 총합 — 한 견적에 섞여 있으면 품목 금액 비율대로 */
@@ -6453,7 +6454,7 @@ function renderLedger() {
         <button class="btn btn-sm" onclick="ledgerClose()"><i class="ti ti-arrow-left"></i>견적 목록</button></div></div>
     <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:12px">
       <div class="stat"><div class="ic g"><i class="ti ti-file-text"></i></div><div class="v" style="font-size:18px">${fmtWon(totSale)}</div><div class="l">확정 매출</div><div class="s">${A.rows.reduce((s, r) => s + r.qn, 0)}건</div></div>
-      <div class="stat"><div class="ic b"><i class="ti ti-cash"></i></div><div class="v" style="font-size:18px">${fmtWon(totPay)}</div><div class="l">결제됨</div><div class="s">${totSale > 0 ? Math.round(totPay / totSale * 100) : 0}%</div></div>
+      <div class="stat"><div class="ic b"><i class="ti ti-cash"></i></div><div class="v" style="font-size:18px">${fmtWon(totApplied)}</div><div class="l">받은 돈</div><div class="s">매출의 ${totSale > 0 ? Math.round(totApplied / totSale * 100) : 0}%${totExtra > 0 ? ' · 선입금 별도' : ''}</div></div>
       <div class="stat"><div class="ic r"><i class="ti ti-cash-off"></i></div><div class="v" style="font-size:18px;color:var(--red-t)">${fmtWon(totRem)}</div><div class="l">미수금</div><div class="s">거래처 ${A.rows.filter(r => r.rem > 0).length}곳</div></div>
       <div class="stat"><div class="ic b"><i class="ti ti-file-off"></i></div><div class="v" style="font-size:18px">${fmtWon(totNoTax)}</div><div class="l">계산서 미발행</div><div class="s">${A.rows.reduce((s, r) => s + r.noTaxN, 0)}건</div></div>
     </div>
