@@ -7321,15 +7321,28 @@ function cutSimClose() { filters.cutSim = false; renderQuote(); }
 function cutRowHtml(p) {
   p = p || {}; const cid = p.cid != null ? p.cid : (++_cutCid); const inp = 'width:100%;font-size:14px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px;text-align:center';
   return `<tr class="cut-row" data-cid="${cid}">
+    <td class="ct-no" style="width:30px;text-align:center;font-size:12.5px;font-weight:800;color:var(--t3)"></td>
     <td><input class="ct-l" inputmode="numeric" placeholder="길이" value="${p.l != null ? esc(p.l) : ''}" style="${inp}"></td>
     <td style="text-align:center;color:var(--t3);width:16px">×</td>
     <td><input class="ct-w" inputmode="numeric" placeholder="폭" value="${p.w != null ? esc(p.w) : ''}" style="${inp}"></td>
     <td style="width:70px"><input class="ct-q" inputmode="numeric" placeholder="수량" value="${p.q != null ? esc(p.q) : '1'}" style="${inp}"></td>
     <td style="width:44px;text-align:center"><input type="checkbox" class="ct-sel" style="width:17px;height:17px" title="무늬연결 선택"></td>
     <td style="width:44px;text-align:center"><input type="checkbox" class="ct-rot" ${p.rot === false ? '' : 'checked'} style="width:17px;height:17px" title="가로세로 회전 허용"></td>
-    <td style="width:34px;text-align:center"><button type="button" class="btn btn-sm btn-ghost" onclick="this.closest('.cut-row').remove()"><i class="ti ti-x"></i></button></td>
+    <td style="width:34px;text-align:center"><button type="button" class="btn btn-sm btn-ghost" onclick="cutDelRow(this)"><i class="ti ti-x"></i></button></td>
   </tr>`;
 }
+/* ── 부재 번호 (2026-09-08) ────────────────────────────────
+   사용자: *"1번 판재랑 2번 판재끼리 연결, 5번이랑 6번끼리 연결 이런 식으로 가야 됨"*
+   그런데 화면에 번호가 없어서 «몇 번»을 가리킬 수가 없었다. 이제 왼쪽에 번호를 붙인다.
+   이 번호는 도면 조각에 찍히는 #1 #2 와 같은 번호다(둘 다 행 순서 기준). */
+function cutRenumber() {
+  document.querySelectorAll('.cut-row').forEach((r, i) => { const c = r.querySelector('.ct-no'); if (c) c.textContent = (i + 1); });
+  const gb = el('cut-groups'); if (gb) gb.innerHTML = cutGroupsInner();
+}
+function cutDelRow(btn) { const r = btn.closest('.cut-row'); if (!r) return; const cid = r.getAttribute('data-cid'); r.remove();
+  _cutGroups = _cutGroups.filter(g => (g.cids || []).indexOf(cid) < 0);   // 지운 부재가 낀 연결은 같이 없앤다
+  cutRenumber(); }
+function _rowNo(cid) { const rs = [...document.querySelectorAll('.cut-row')]; const i = rs.findIndex(r => r.getAttribute('data-cid') === String(cid)); return i < 0 ? '?' : (i + 1); }
 function _rowDims(cid) { const r = document.querySelector('.cut-row[data-cid="' + cid + '"]'); if (!r) return null; return { l: _numv(r.querySelector('.ct-l').value), w: _numv(r.querySelector('.ct-w').value) }; }
 function cutMakeGroup() {
   const sel = [...document.querySelectorAll('.cut-row')].filter(r => { const c = r.querySelector('.ct-sel'); return c && c.checked; });
@@ -7364,16 +7377,21 @@ function cutMakeGroup() {
   } else dir = 'L';
   if (!fits(blk(dir))) toast('⚠ 연결 블록이 판재보다 큽니다 — 판재 규격/톱날 확인');
   _cutGroups.push({ cids: items.map(x => x.cid), dir });
+  const _nos = items.map(x => _rowNo(x.cid)).join('+');
   sel.forEach(r => { const c = r.querySelector('.ct-sel'); if (c) c.checked = false; });
   const gb = el('cut-groups'); if (gb) gb.innerHTML = cutGroupsInner();
-  toast((dir === 'W' ? '폭 방향 무늬연결' : '기장 방향 무늬연결') + ' · ' + N + '장');
+  toast(_nos + '번 ' + (dir === 'W' ? '폭 방향 무늬연결' : '기장 방향 무늬연결') + ' · ' + N + '장');
 }
 function cutDelGroup(i) { _cutGroups.splice(i, 1); const gb = el('cut-groups'); if (gb) gb.innerHTML = cutGroupsInner(); }
 function cutGroupsInner() {
-  if (!_cutGroups.length) return '<span style="font-size:11.5px;color:var(--t3)">연결 없음 · 부재를 체크하고 [선택 연결]을 누르세요 (폭 같으면 폭방향 · 기장 같으면 기장방향)</span>';
-  return _cutGroups.map((g, i) => { const dims = g.cids.map(_rowDims).filter(Boolean).map(d => d.l + '×' + d.w).join(' + '); return `<span style="display:inline-flex;align-items:center;gap:6px;background:#eaf3ff;border:1px solid #b5d4f4;border-radius:8px;padding:4px 9px;margin:3px 3px 0 0;font-size:12px;color:#185fa5"><i class="ti ti-link"></i>${g.dir === 'W' ? '폭 연결' : '기장 연결'}: ${esc(dims)} <i class="ti ti-x" style="cursor:pointer;color:var(--red-t)" onclick="cutDelGroup(${i})"></i></span>`; }).join('');
+  if (!_cutGroups.length) return '<span style="font-size:11.5px;color:var(--t3)">연결 없음 · <b>짝을 이룰 두 부재만</b> 체크하고 [선택 연결]을 누르세요 (예: 1·2번 → 연결, 다시 5·6번 → 연결)</span>';
+  return _cutGroups.map((g, i) => {
+    const nos = g.cids.map(_rowNo).join('+') + '번';
+    const dims = g.cids.map(_rowDims).filter(Boolean).map(d => d.l + '×' + d.w).join(' + ');
+    return `<span style="display:inline-flex;align-items:center;gap:6px;background:#eaf3ff;border:1px solid #b5d4f4;border-radius:8px;padding:4px 9px;margin:3px 3px 0 0;font-size:12px;color:#185fa5"><i class="ti ti-link"></i><b>${esc(nos)}</b> ${g.dir === 'W' ? '폭 연결' : '기장 연결'} <span style="color:#4a7fb5">${esc(dims)}</span> <i class="ti ti-x" style="cursor:pointer;color:var(--red-t)" onclick="cutDelGroup(${i})"></i></span>`;
+  }).join('');
 }
-function addCutRow() { const b = el('cut-parts'); if (b) { const grain = el('cut-grain') && el('cut-grain').checked; b.insertAdjacentHTML('beforeend', cutRowHtml({ rot: !grain })); } }
+function addCutRow() { const b = el('cut-parts'); if (b) { const grain = el('cut-grain') && el('cut-grain').checked; b.insertAdjacentHTML('beforeend', cutRowHtml({ rot: !grain })); cutRenumber(); } }
 function cutGrainToggle() { const on = el('cut-grain') && el('cut-grain').checked; document.querySelectorAll('.ct-rot').forEach(c => c.checked = !on); }
 function _collectCutParts() {
   const parts = [];
@@ -7730,7 +7748,7 @@ function cutPlanApply(p) {
   _cutGroups = (p.groups || []).map(g => ({
     dir: g.dir, cids: (g.at || []).map(i => cids[i]).filter(Boolean)
   })).filter(g => g.cids.length >= 2);
-  const gb = el('cut-groups'); if (gb) gb.innerHTML = cutGroupsInner();
+  cutRenumber();   // 왼쪽 # 번호 다시 매김 (연결 칩의 «몇 번» 표시도 같이 갱신)
   runCutSim();
   toast('불러왔습니다 — ' + (p.name ? p.name + ' · ' : '') + (p.title || ''));
   const r = el('cut-result'); if (r && r.scrollIntoView) r.scrollIntoView({ block: 'start', behavior: 'smooth' });
@@ -7759,8 +7777,10 @@ function cutSimBodyHtml() {
     </div>
     <div class="card" style="padding:13px 15px;margin-bottom:12px">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><div style="font-weight:700;font-size:13.5px">부재 목록 (길이 × 폭 × 수량)</div><button class="btn btn-sm" onclick="addCutRow()"><i class="ti ti-plus"></i>행 추가</button></div>
-      <table style="width:100%;border-collapse:collapse"><thead><tr style="font-size:11px;color:var(--t3)"><th style="padding:2px 4px;text-align:center">길이</th><th></th><th style="padding:2px 4px;text-align:center">폭</th><th style="padding:2px 4px;text-align:center">수량</th><th style="padding:2px 4px;text-align:center" title="무늬연결 선택">연결</th><th style="padding:2px 4px;text-align:center" title="가로세로 회전 허용">회전</th><th></th></tr></thead><tbody id="cut-parts">${rows}</tbody></table>
-      <div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn btn-sm" onclick="cutMakeGroup()"><i class="ti ti-link"></i>선택 연결 (무늬)</button><span style="font-size:11px;color:var(--t3)">체크한 부재 연결 · 폭 같으면 폭방향, 기장 같으면 기장방향 자동 · 같은 부재 여러 장은 그 행 1개만 체크(수량 기준) · 판재에 맞게 방향 자동회전</span></div>
+      <table style="width:100%;border-collapse:collapse"><thead><tr style="font-size:11px;color:var(--t3)"><th style="padding:2px 4px;text-align:center" title="도면에 찍히는 번호">#</th><th style="padding:2px 4px;text-align:center">길이</th><th></th><th style="padding:2px 4px;text-align:center">폭</th><th style="padding:2px 4px;text-align:center">수량</th><th style="padding:2px 4px;text-align:center" title="무늬연결 선택">연결</th><th style="padding:2px 4px;text-align:center" title="가로세로 회전 허용">회전</th><th></th></tr></thead><tbody id="cut-parts">${rows}</tbody></table>
+      <div style="display:flex;align-items:center;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn btn-sm" onclick="cutMakeGroup()"><i class="ti ti-link"></i>선택 연결 (무늬)</button><span style="font-size:11px;color:var(--t3)">체크한 부재끼리 <b>한 덩어리</b>가 됩니다 · 폭 같으면 폭방향, 기장 같으면 기장방향 자동 · 같은 부재 여러 장은 그 행 1개만 체크(수량 기준) · 판재에 맞게 방향 자동회전</span>
+      </div>
+      <div style="margin-top:8px;font-size:11.5px;color:var(--t2);background:#eaf3ff;border:1px solid #b5d4f4;border-radius:9px;padding:8px 11px"><i class="ti ti-link" style="color:#185fa5"></i> <b>짝끼리 따로따로 연결하세요.</b> 1·2번을 체크해 [선택 연결] → 그 다음 5·6번을 체크해 [선택 연결] — 이렇게 <b>연결을 2개</b> 만듭니다.<br><span style="color:var(--t3)">네 줄(1·2·5·6번)을 한꺼번에 체크하면 <b>넷이 한 덩어리로 붙어버립니다</b>. 왼쪽 # 번호가 도면에 찍히는 번호와 같습니다.</span></div>
       <div id="cut-groups" style="margin-top:6px">${cutGroupsInner()}</div>
       <button class="btn btn-pri btn-block" style="margin-top:11px" onclick="runCutSim()"><i class="ti ti-player-play"></i>재단 시뮬레이션 실행</button>
     </div>
@@ -7772,6 +7792,7 @@ function renderCutSim() {
     <div class="ph"><div><h2><i class="ti ti-layout-grid"></i>재단 시뮬레이션</h2><p>판재·부재 치수 입력 → 재단 배치 · 면적 · 재단 길이 자동 계산 (직원용)</p></div>
       <button class="btn btn-sm" onclick="cutSimClose()"><i class="ti ti-arrow-left"></i>견적</button></div>
     ${cutSimBodyHtml()}</div>`;
+  cutRenumber();   // 처음 그린 기본 3줄에도 # 번호를 붙인다
 }
 /* 견적 작성/수정 중에 팝업으로 재단 시뮬레이션 (작성 중인 견적 내용은 그대로 유지됨) */
 function openCutSimModal() {
@@ -7779,6 +7800,7 @@ function openCutSimModal() {
   _cutGroups = []; _cutCid = 0;
   openModal(`<div class="sheet-h"><h3><i class="ti ti-layout-grid"></i>재단 시뮬레이션</h3><button class="x" onclick="closeModal()">×</button></div>
     <div id="cutsim-root">${cutSimBodyHtml()}</div>`);
+  cutRenumber();
 }
 function openQuoteSettings() { filters.quoteSettings = true; renderQuote(); }
 function quoteSettingsClose() { filters.quoteSettings = false; renderQuote(); }
