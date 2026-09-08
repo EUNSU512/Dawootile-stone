@@ -1160,6 +1160,7 @@ function renderClientDetail() {
       <div class="frm-foot">${isAdmin() ? `<button class="btn" style="color:var(--red-t);flex:none" onclick="delClientC('${c.id}')"><i class="ti ti-trash"></i></button>` : ''}<button class="btn btn-pri" style="flex:1" onclick="saveClientBizInfo('${c.id}')"><i class="ti ti-check"></i>저장</button></div>
       </div>
     </div>
+    ${clientPriceCard(c)}
     <div class="card" style="padding:14px 16px">
       <div class="card-h"><h3><i class="ti ti-book"></i>거래 장부</h3><div style="display:flex;align-items:center;gap:8px"><button class="btn btn-sm" onclick="downloadClientLedger('${c.id}')"><i class="ti ti-file-spreadsheet"></i>엑셀</button><span style="font-size:11px;color:var(--t3)">미수 ${fmtWon(st.unpaid)}원</span></div></div>
       <div style="max-height:52vh;overflow:auto">${ledger}</div>
@@ -5098,9 +5099,86 @@ function collectQItems() {
   });
   return items;
 }
-/* 견적 저장 시 유형별 단가표에 반영(학습) */
-async function quoteLearnPrice(type, name, price) {
-  if (!name || !(price > 0)) return; const key = ctypeKey(type);
+/* ── 거래처 전용 단가 (2026-09-08) ─────────────────────────
+   사용자: *"현대엘앤씨 / 신성그룹 단가 따로 들어갈거야"*
+   ★ 예전 문제: 유형이 「별도」인 거래처(현대엘앤씨·신성그룹·볼드커피)가
+     단가표의 `special` 열 **하나를 같이 썼다.** 그래서 한 곳 견적을 저장하면
+     나머지 두 곳 단가까지 같이 바뀌었다. (실측: 헤이즈 아이보리·알래스카 화이트 12T 등)
+   이제 「별도」는 **거래처마다 자기 단가**(clientPrices 컬렉션)를 갖는다.
+   조회 우선순위는 이미 ① 거래처 전용 ② 유형별 단가표 ③ 품목 단가 순이다(quoteGetPrice). */
+function clientPriceRows(client) {
+  const cn = _normName(client || '');
+  return (state.clientPrices || []).filter(p => _normName(p.client) === cn)
+    .sort((a, b) => (a.itemName || '').localeCompare(b.itemName || '', 'ko'));
+}
+async function saveClientPrice(client, name, price) {
+  const cl = String(client || '').trim(), nm = String(name || '').trim(), pr = Math.round(+price || 0);
+  if (!cl || !nm || !(pr > 0)) return;
+  const hit = (state.clientPrices || []).find(p => _normName(p.client) === _normName(cl) && _normName(p.itemName) === _normName(nm));
+  if (hit) { if (Math.round(+hit.price || 0) !== pr) await Store.update('clientPrices', hit.id, { price: pr, at: Date.now() }); }
+  else await Store.add('clientPrices', { client: cl, itemName: nm, price: pr, at: Date.now(), by: (me && me.name) || '' });
+}
+async function delClientPrice(id) { await Store.remove('clientPrices', id); toast('전용 단가 삭제됨'); renderClients(); }
+async function addClientPriceRow(cid) {
+  const c = (state.clients || []).find(x => x.id === cid); if (!c) return;
+  const nm = (el('cp-name') && el('cp-name').value || '').trim();
+  const pr = _numv(el('cp-price') && el('cp-price').value);
+  if (!nm) { toast('품목을 고르세요'); return; }
+  if (!(pr > 0)) { toast('단가를 입력하세요'); return; }
+  await saveClientPrice(c.value, nm, pr);
+  toast(nm + ' · ' + fmtWon(pr) + '원 저장');
+  renderClients();
+}
+async function editClientPriceRow(id) {
+  const r = (state.clientPrices || []).find(x => x.id === id); if (!r) return;
+  const inp = document.querySelector('.cp-edit[data-id="' + id + '"]'); if (!inp) return;
+  const pr = _numv(inp.value);
+  if (!(pr > 0)) { toast('단가를 입력하세요'); return; }
+  if (pr === Math.round(+r.price || 0)) { toast('바뀐 값이 없습니다'); return; }
+  await Store.update('clientPrices', id, { price: pr, at: Date.now() });
+  toast('저장됨');
+}
+/* 이 거래처가 지금 실제로 적용받는 단가 (전용 → 유형별 → 품목) 를 한 줄로 설명 */
+function clientPriceCard(c) {
+  const rows = clientPriceRows(c.value);
+  const ctype = c.ctype || '소비자';
+  const pick = quotePriceItems().map(i => `<option value="${esc(i.name)}">`).join('');
+  const body = rows.length ? `<table style="width:100%;border-collapse:collapse;font-size:12.5px">
+      <thead><tr style="border-bottom:1.5px solid var(--bd);color:var(--t2);font-size:11px"><th style="padding:6px 8px;text-align:left">품목</th><th style="padding:6px 8px;text-align:right;width:130px">전용 단가</th><th style="padding:6px 8px;text-align:right;width:110px">유형별 단가</th><th style="width:70px"></th></tr></thead>
+      <tbody>${rows.map(r => {
+    const pl = (state.priceList || []).find(x => _normName(x.itemName) === _normName(r.itemName));
+    const base = pl ? (+pl[ctypeKey(ctype)] || 0) : 0;
+    return `<tr style="border-bottom:1px solid var(--soft)">
+        <td style="padding:6px 8px;word-break:keep-all">${esc(r.itemName)}</td>
+        <td style="padding:4px 8px;text-align:right"><input class="cp-edit" data-id="${r.id}" inputmode="numeric" value="${Math.round(+r.price || 0)}" onchange="editClientPriceRow('${r.id}')" style="width:110px;text-align:right;font-size:13px;font-weight:700;padding:5px 7px;border:1.5px solid var(--bd2);border-radius:7px"></td>
+        <td style="padding:6px 8px;text-align:right;color:var(--t3)">${base > 0 ? fmtWon(base) : '-'}</td>
+        <td style="padding:6px 8px;text-align:center">${isAdmin() ? `<button class="btn btn-sm btn-ghost" onclick="delClientPrice('${r.id}')" title="삭제"><i class="ti ti-x"></i></button>` : ''}</td>
+      </tr>`;
+  }).join('')}</tbody></table>`
+    : `<div style="font-size:12px;color:var(--t3);padding:10px 2px">전용 단가가 없습니다 — 지금은 <b>${esc(ctype)}</b> 유형 단가표를 씁니다.</div>`;
+  return `<div class="card" style="margin-bottom:12px;padding:0;overflow:hidden">
+    <div onclick="const _b=el('cp-body');_b.style.display=(_b.style.display==='none'?'block':'none')" style="cursor:pointer;padding:13px 16px;display:flex;justify-content:space-between;align-items:center">
+      <h3 style="margin:0;font-size:15px"><i class="ti ti-tag"></i> 이 거래처 전용 단가 ${rows.length ? `<span style="color:var(--gd)">${rows.length}</span>` : ''}</h3><i class="ti ti-chevron-down" style="color:var(--t3)"></i></div>
+    <div id="cp-body" style="display:${rows.length ? 'block' : 'none'};padding:0 16px 14px">
+      <div style="font-size:11.5px;color:var(--t2);background:var(--soft);border-radius:9px;padding:8px 11px;margin-bottom:9px;line-height:1.6">
+        여기 적은 단가가 <b>유형별 단가표보다 먼저</b> 적용됩니다. 이 거래처에만 적용되고 다른 거래처는 건드리지 않습니다.<br>
+        <span style="color:var(--t3)">유형이 <b>별도</b>인 거래처는 견적을 저장할 때 그 단가가 자동으로 여기에 기록됩니다.</span>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px">
+        <input id="cp-name" list="cp-items" lang="ko" placeholder="품목명" style="flex:2;min-width:150px;font-size:13.5px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px">
+        <datalist id="cp-items">${pick}</datalist>
+        <input id="cp-price" inputmode="numeric" placeholder="단가" style="flex:1;min-width:100px;font-size:13.5px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px;text-align:right">
+        <button class="btn btn-sm btn-pri" style="flex:none" onclick="addClientPriceRow('${c.id}')"><i class="ti ti-plus"></i>추가</button>
+      </div>
+      ${body}
+    </div>
+  </div>`;
+}
+/* 견적 저장 시 단가 기억 — 「별도」는 거래처 전용으로, 나머지는 유형별 단가표에 */
+async function quoteLearnPrice(type, name, price, client) {
+  if (!name || !(price > 0)) return;
+  if (type === '별도') { if (client && String(client).trim()) await saveClientPrice(client, name, price); return; }
+  const key = ctypeKey(type);
   const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(name));
   if (pl) { if ((+pl[key] || 0) !== price) { const patch = {}; patch[key] = price; await Store.update('priceList', pl.id, patch); } }
   else { const obj = { itemName: name, dist: 0, interior: 0, consumer: 0 }; obj[key] = price; await Store.add('priceList', obj); }
@@ -5133,7 +5211,7 @@ async function submitQuote(id) {
     data.fromHoldIds = (_qFromHolds || []).filter(hid => (state.holdings || []).some(h => h.id === hid));
     if (id) await Store.update('quotes', id, data); else await Store.add('quotes', data);
     try { const cdoc = (state.clients || []).find(x => _normName(x.value) === _normName(client)); if (cdoc && (cdoc.ctype || '') !== ctype) await Store.update('clients', cdoc.id, { ctype }); } catch (e) { }   // 거래처 유형 기억
-    for (const it of items) { if (it.extra) continue; try { await quoteLearnPrice(ctype, it.name, +it.price || 0); } catch (e) { } }   // 유형별 단가표 학습(부대비용 제외)
+    for (const it of items) { if (it.extra) continue; try { await quoteLearnPrice(ctype, it.name, +it.price || 0, client); } catch (e) { } }   // 단가 기억 — 별도는 거래처 전용, 나머지는 유형별 (부대비용 제외)
     try {   // 부대비용 기본단가 기억
       const cur = extraPrices(); const np = Object.assign({}, cur); let ch = false;
       document.querySelectorAll('.qx-row').forEach(r => { const nm = r.getAttribute('data-name'); if (marginCat(nm) === '가공') return; const pr = _numv(r.querySelector('.qx-price').value); if (pr > 0 && cur[nm] !== pr) { np[nm] = pr; ch = true; } });   // 가공비는 기본단가에서 변동 없이 · 기억 안 함
