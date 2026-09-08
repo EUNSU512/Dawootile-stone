@@ -7532,6 +7532,28 @@ function cutSheetSvg(sh, Ws, Hs, n) {
   const cuts = (sh.cuts || []).map(c => `<line x1="${(c.x1 * sc).toFixed(1)}" y1="${(c.y1 * sc).toFixed(1)}" x2="${(c.x2 * sc).toFixed(1)}" y2="${(c.y2 * sc).toFixed(1)}" stroke="#d94a3d" stroke-width="1.1" stroke-dasharray="6 4" opacity=".85"/>`).join('');
   return `<div style="margin-bottom:10px"><div style="font-size:12px;color:var(--t3);margin-bottom:3px">판재 ${n} · ${Ws}×${Hs} <span style="color:#d94a3d">— 빨간 점선 = 톱질 선</span></div><svg viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" style="width:100%;max-width:${W.toFixed(0)}px;border:1px solid #999;background:#fff">${rects}${cuts}<rect x="0.5" y="0.5" width="${(W - 1).toFixed(1)}" height="${(H - 1).toFixed(1)}" fill="none" stroke="#333" stroke-width="1"/></svg></div>`;
 }
+/* ── 실제 톱질 길이 (2026-09-08 수정) ─────────────────────────
+   예전 「재단 미터수」는 부재 4면 둘레를 그냥 다 더한 값이었다. 그래서
+     ① 판재 원래 모서리(자를 필요가 없는 변)까지 세고
+     ② 두 부재가 맞닿은 자리를 한 번이 아니라 두 번 셌다.
+   실측: 3200×1600 통판을 그대로 쓰는데도 9.6m 로 나왔다(실제 톱질 0m).
+        1600×1600 한 장 잘라내기 = 실제 1.6m 인데 6.4m 로 나왔다.
+   이제 배치 결과에 기록된 재단선(화면의 빨간 점선)을 그대로 더한다.
+   무늬연결 블록 안에서 부재끼리 갈라내는 이음선도 톱질이므로 같이 센다. */
+function cutSawLength(sheets) {
+  let mm = 0;
+  (sheets || []).forEach(sh => {
+    (sh.cuts || []).forEach(c => { mm += Math.abs(c.x2 - c.x1) + Math.abs(c.y2 - c.y1); });
+    (sh.placed || []).forEach(pc => {
+      const subs = pc.subs;
+      if (!subs || subs.length < 2) return;
+      const sideBySide = Math.abs(subs[1].x - subs[0].x) > 0.01;   // 가로로 이어붙인 블록인가
+      const seam = sideBySide ? subs[0].w : subs[0].l;             // 이음선 한 줄의 길이
+      mm += seam * (subs.length - 1);
+    });
+  });
+  return mm;
+}
 function runCutSim() {
   const Ws = _numv(el('cut-sheetL').value) || 3200, Hs = _numv(el('cut-sheetW').value) || 1600;
   _cutSheet = { L: Ws, W: Hs };
@@ -7554,17 +7576,23 @@ function runCutSim() {
   });
   parts.forEach(p => { for (let k = 0; k < rem[p.cid]; k++) pieces.push({ l: p.l, w: p.w, idx: p.idx, rot: p.rot }); });
   const sheets = _packPieces(Ws, Hs, pieces, kerf);
-  let partArea = 0, cutLen = 0, over = false;
-  parts.forEach(p => { partArea += p.l * p.w * p.q; cutLen += 2 * (p.l + p.w) * p.q; const big = Math.max(p.l, p.w), small = Math.min(p.l, p.w); if (big > Math.max(Ws, Hs) + 0.001 || small > Math.min(Ws, Hs) + 0.001) over = true; });
+  let partArea = 0, edgeLen = 0, over = false;
+  parts.forEach(p => { partArea += p.l * p.w * p.q; edgeLen += 2 * (p.l + p.w) * p.q; const big = Math.max(p.l, p.w), small = Math.min(p.l, p.w); if (big > Math.max(Ws, Hs) + 0.001 || small > Math.min(Ws, Hs) + 0.001) over = true; });
+  const sawLen = cutSawLength(sheets);
   const sheetArea = sheets.length * Ws * Hs;
   const m2 = v => (v / 1e6).toFixed(3);
-  const sc = (lab, val, sub) => `<div style="background:var(--soft);border-radius:10px;padding:9px 8px;text-align:center"><div style="font-size:10.5px;color:var(--t2)">${lab}</div><div style="font-size:16px;font-weight:800;color:var(--gd)">${val}</div>${sub ? `<div style="font-size:10px;color:var(--t3)">${sub}</div>` : ''}</div>`;
+  const sc = (lab, val, sub, col) => `<div style="background:var(--soft);border-radius:10px;padding:9px 8px;text-align:center"><div style="font-size:10.5px;color:var(--t2)">${lab}</div><div style="font-size:16px;font-weight:800;color:${col || 'var(--gd)'}">${val}</div>${sub ? `<div style="font-size:10px;color:var(--t3)">${sub}</div>` : ''}</div>`;
   el('cut-result').innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:12px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:8px">
       ${sc('부재 총 면적', m2(partArea) + ' ㎡')}
-      ${sc('재단 미터수', (cutLen / 1000).toFixed(2) + ' m', '4면 기장 합')}
+      ${sc('재단 길이 (톱질)', (sawLen / 1000).toFixed(2) + ' m', '빨간 점선 길이 합', '#d94a3d')}
+      ${sc('마구리 둘레 합', (edgeLen / 1000).toFixed(2) + ' m', '부재 4면 · 연마용')}
       ${sc('사용 판재', sheets.length + ' 장', Ws + '×' + Hs)}
       ${sc('자투리(로스)', m2(Math.max(0, sheetArea - partArea)) + ' ㎡')}
+    </div>
+    <div style="font-size:11px;color:var(--t3);line-height:1.6;margin-bottom:10px;background:var(--soft);border-radius:9px;padding:8px 11px">
+      <b style="color:#d94a3d">재단 길이</b>는 아래 그림의 <b>빨간 점선(톱이 지나간 선)</b>을 그대로 더한 값입니다 — 판재 원래 모서리는 안 세고, 두 부재가 맞닿은 자리는 한 번만 셉니다.<br>
+      <b>마구리 둘레 합</b>은 부재 4면을 전부 더한 값입니다 (연마·엣지 가공 견적용). 예전 「재단 미터수」가 이 값이었습니다.
     </div>${over ? '<div style="color:#c0341d;font-size:12px;margin-bottom:8px"><i class="ti ti-alert-triangle"></i> 판재보다 큰 부재가 있습니다 — 치수를 확인하세요</div>' : ''}
     ${sheets.map((sh, i) => cutSheetSvg(sh, Ws, Hs, i + 1)).join('')}`;
   cutPlanAutoSave(sheets.length, partArea);   // ★ 돌릴 때마다 '최근 커팅플랜'에 자동 저장
@@ -7741,7 +7769,7 @@ function cutSimBodyHtml() {
 function renderCutSim() {
   _cutSimSheetClear();
   el('pg-quote').innerHTML = `<div id="cutsim-root">
-    <div class="ph"><div><h2><i class="ti ti-layout-grid"></i>재단 시뮬레이션</h2><p>판재·부재 치수 입력 → 재단 배치 · 면적 · 재단 미터수 자동 계산 (직원용)</p></div>
+    <div class="ph"><div><h2><i class="ti ti-layout-grid"></i>재단 시뮬레이션</h2><p>판재·부재 치수 입력 → 재단 배치 · 면적 · 재단 길이 자동 계산 (직원용)</p></div>
       <button class="btn btn-sm" onclick="cutSimClose()"><i class="ti ti-arrow-left"></i>견적</button></div>
     ${cutSimBodyHtml()}</div>`;
 }
