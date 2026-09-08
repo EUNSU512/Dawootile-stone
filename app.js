@@ -31,7 +31,10 @@ function cref(name) { return db.collection('teams').doc(TEAM).collection(name); 
 
 const COLLS = ['members', 'sites', 'inventory', 'holdings', 'transactions', 'specs', 'factories', 'teams', 'suppliers', 'clients', 'issues', 'restocks', 'basins', 'holdRequests', 'shipments', 'chulgoReqs', 'chulgoHandlers', 'quotes', 'clientPrices', 'priceList', 'appmeta', 'expenses', 'banktx', 'purchases', 'cutPlans'];
 const CTYPES = ['유통', '대리점', '인테리어', '소비자', '별도'];   // 거래처 유형 (별도 = 예외 업체 단가)
-function ctypeKey(t) { return t === '유통' ? 'dist' : (t === '대리점' ? 'agency' : (t === '인테리어' ? 'interior' : (t === '별도' ? 'special' : 'consumer'))); }
+/* ★ 2026-09-08 — 「별도」는 업체마다 단가가 달라서 **거래처 전용 단가**(clientPrices)로 관리한다.
+   예전엔 별도 업체 셋이 단가표의 'special' 열 하나를 같이 써서 서로 덮어썼다.
+   전용 단가가 없는 품목은 **대리점 단가**를 기준선으로 쓴다 (0원으로 떨어지지 않게). */
+function ctypeKey(t) { return t === '유통' ? 'dist' : (t === '인테리어' ? 'interior' : (t === '소비자' ? 'consumer' : 'agency')); }
 /* ── 분류 (세라믹 / 세면대 / 석재 / 통관비용) ──
    예전에는 '세라믹+세면대' 한 칸이었는데 둘을 갈라 달라는 요청으로 나눴다.
    예전에 저장된 견적·단가표에는 아직 '세라믹+세면대' 가 남아 있으므로
@@ -8039,8 +8042,8 @@ function priceListTemplate() {
   if (typeof XLSX === 'undefined') { toast('엑셀 모듈 로딩 중 — 잠시 후 다시'); return; }
   const adm = isAdmin();
   const items = quotePriceItems();
-  const head = ['자재명', '규격', '유통', '대리점', '인테리어', '소비자', '별도'].concat(adm ? ['원가'] : []);
-  const aoa = [head].concat(items.map(i => { const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(i.name)) || {}; const row = [i.name, i.spec || '', pl.dist || '', pl.agency || '', pl.interior || '', pl.consumer || '', pl.special || '']; if (adm) row.push(pl.cost || ''); return row; }));
+  const head = ['자재명', '규격', '유통', '대리점', '인테리어', '소비자'].concat(adm ? ['원가'] : []);   // 「별도」는 거래처 전용 단가로 옮겨서 뺐다
+  const aoa = [head].concat(items.map(i => { const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(i.name)) || {}; const row = [i.name, i.spec || '', pl.dist || '', pl.agency || '', pl.interior || '', pl.consumer || '']; if (adm) row.push(pl.cost || ''); return row; }));
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, '단가표');
   XLSX.writeFile(wb, '단가표양식_' + todayStr() + '.xlsx');
@@ -8059,14 +8062,13 @@ function _qsPriceRowsHtml() {
   let mats = quotePriceItems();
   if (matSearch) mats = mats.filter(i => (i.name || '').toLowerCase().includes(matSearch) || (i.spec || '').toLowerCase().includes(matSearch));
   const inp = 'width:100%;font-size:13px;padding:7px 4px;border:1.5px solid var(--bd2);border-radius:8px;text-align:right';
-  const cols = adm ? 8 : 7;
+  const cols = adm ? 7 : 6;   // 「별도」 열을 뺐다 (거래처 전용 단가로 옮김)
   return mats.slice(0, 150).map(i => { const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(i.name)) || {}; const nm = esc(i.name).replace(/'/g, "\\'");
     const _cat = itemCategory(i.name); return `<tr class="qs-prow" data-nm="${esc(i.name)}"><td style="text-align:left"><b>${esc(i.name)}</b>${i.spec ? `<div style="font-size:10.5px;color:var(--t3)">${esc(i.spec)}</div>` : ''}<select onchange="saveItemCat('${nm}',this.value)" style="margin-top:3px;font-size:10.5px;padding:2px 4px;border:1px solid var(--bd2);border-radius:6px;color:var(--t2)">${QCATS.map(cc => `<option ${_cat === cc ? 'selected' : ''}>${cc}</option>`).join('')}</select></td>
       <td><input class="qsp-dist" inputmode="numeric" value="${esc(pl.dist || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
       <td><input class="qsp-agy" inputmode="numeric" value="${esc(pl.agency || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
       <td><input class="qsp-int" inputmode="numeric" value="${esc(pl.interior || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
       <td><input class="qsp-con" inputmode="numeric" value="${esc(pl.consumer || '')}" onchange="savePriceRow('${nm}')" style="${inp}"></td>
-      <td><input class="qsp-spc" inputmode="numeric" value="${esc(pl.special || '')}" onchange="savePriceRow('${nm}')" style="${inp};background:#eef5ff;border-color:#b8d4ee"></td>
       ${adm ? `<td><input class="qsp-cost" inputmode="numeric" value="${esc(pl.cost || '')}" onchange="savePriceRow('${nm}')" style="${inp};background:#fff6f6;border-color:#e6b0b0"></td>` : ''}
       <td style="width:46px;white-space:nowrap;text-align:center"><i class="ti ti-check qsp-ok" style="color:var(--gd);opacity:0;transition:opacity .2s"></i>${pl.id ? `<i class="ti ti-trash" onclick="deletePriceRow('${pl.id}','${nm}')" title="단가 삭제" style="color:#c0341d;cursor:pointer;margin-left:8px;font-size:16px"></i>` : ''}</td></tr>`; }).join('') || `<tr><td colspan="${cols}"><div class="empty" style="padding:14px">자재가 없습니다</div></td></tr>`;
 }
@@ -8123,7 +8125,7 @@ function renderQuoteSettings() {
         <div style="font-size:11px;color:var(--t3);margin-bottom:8px">엑셀/CSV 열: <b>자재명 · 규격 · 유통 · 대리점 · 인테리어 · 소비자 · 별도</b> (열 이름만 맞으면 순서 무관). <b style="color:#1a6dc0">별도</b>=예외 업체(신성그룹·현대엘앤씨 등) 단가. PDF는 자동 인식이 안 되니 엑셀/CSV로 올려주세요.</div>
         <div class="search-box" style="margin-bottom:8px"><i class="ti ti-search"></i><input placeholder="자재명·규격 검색" value="${esc(filters.qsMatSearch || '')}" oninput="qsFilterPrices(this.value)" autocomplete="off" lang="ko"></div>
         <div data-keepscroll id="qs-prices" style="max-height:52vh;overflow:auto">
-          <table class="tbl"><thead><tr><th style="text-align:left">자재</th><th>유통</th><th>대리점</th><th>인테리어</th><th>소비자</th><th style="color:#1a6dc0">별도</th>${isAdmin() ? '<th style="color:#c0341d">원가🔒</th>' : ''}<th></th></tr></thead><tbody>${_qsPriceRowsHtml()}</tbody></table>
+          <table class="tbl"><thead><tr><th style="text-align:left">자재</th><th>유통</th><th>대리점</th><th>인테리어</th><th>소비자</th>${isAdmin() ? '<th style="color:#c0341d">원가🔒</th>' : ''}<th></th></tr></thead><tbody>${_qsPriceRowsHtml()}</tbody></table>
         </div>
         <div style="font-size:11px;color:var(--t3);margin-top:6px">단가는 칸을 벗어나면(Tab/클릭) 자동 저장됩니다. 상위 120개 표시 — 검색으로 좁혀주세요.</div>
       </div>
