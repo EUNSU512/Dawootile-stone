@@ -2286,6 +2286,31 @@ function mrowLotRefresh() {
   });
   shipDepotHint();
 }
+/* ── 미래 출고일 도우미 ──────────────────────────────────────────
+   ★ 출고 수량은 예전부터 «출고일(t.date)» 기준으로 집계된다. 내일로 잡으면 내일 몫으로 잡힌다.
+     다만 **재고는 등록하는 순간 바로 빠진다**(그 자리를 잡아 두는 셈). 그래서 화면에 그렇게 적어 준다. */
+function dayDiff(ymd) {
+  const s = String(ymd || '').slice(0, 10); if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const a = new Date(s + 'T00:00:00'), b = new Date(todayStr() + 'T00:00:00');
+  return Math.round((a - b) / 86400000);
+}
+function isFutureYmd(ymd) { const d = dayDiff(ymd); return d != null && d > 0; }
+function mdLabel(ymd) { const p = String(ymd || '').split('-'); return p.length === 3 ? (+p[1] + '/' + +p[2]) : String(ymd || ''); }
+/* 「예정 9/9 · D-1」 배지 — 미래 날짜일 때만 나온다 */
+function futureBadge(ymd, size) {
+  if (!isFutureYmd(ymd)) return '';
+  const d = dayDiff(ymd);
+  return `<span class="pill" style="background:#e8f0ff;color:#1b4fb0;border:1px solid #c3d6f5;font-size:${size === 'sm' ? '9.5' : '10.5'}px;font-weight:700;white-space:nowrap"><i class="ti ti-calendar-clock"></i>예정 ${mdLabel(ymd)}${d <= 14 ? ' · D-' + d : ''}</span>`;
+}
+function shipDateHint() {
+  const box = el('o-date-hint'); if (!box) return;
+  const v = el('o-date') ? el('o-date').value : '';
+  const d = dayDiff(v);
+  if (d == null) { box.innerHTML = ''; return; }
+  if (d > 0) box.innerHTML = `<span style="color:#1b4fb0"><i class="ti ti-calendar-clock"></i> <b>${mdLabel(v)} 예정 출고 (D-${d})</b> — 출고 수량은 <b>${mdLabel(v)} 몫</b>으로 잡힙니다. 재고는 지금 바로 빠집니다(자리 확보).</span>`;
+  else if (d < 0) box.innerHTML = `<span style="color:var(--amber-t,#8a5a00)"><i class="ti ti-alert-triangle"></i> ${-d}일 <b>지난 날짜</b>입니다. 맞는지 확인하세요.</span>`;
+  else box.innerHTML = `<span style="color:var(--t3)">오늘 출고입니다.</span>`;
+}
 /* ★ 2026-09-08 — 출고할 때 창고를 안 골라서 본사 재고만 마이너스로 빠지는 일이 잦았다.
    고른 창고에 그 자재가 모자라면 「어느 창고에 몇 장 있는지」를 바로 알려 준다. */
 function shipDepotHint() {
@@ -4200,7 +4225,7 @@ function shipSlipListHtml() {
     const totJang = g.items.reduce((a, b) => a + (+b.jang || 0), 0), totHebe = g.items.reduce((a, b) => a + (+b.hebe || 0), 0);
     return `<div class="card" style="margin-bottom:10px;padding:11px 13px">
       <div style="display:flex;justify-content:space-between;align-items:flex-start">
-        <div><div style="font-weight:700;font-size:14px"><i class="ti ti-briefcase" style="color:var(--blue);font-size:14px"></i> ${esc(g.targetName || '-')}${(() => { const sc = shipConfirm('out', g.key); return sc && sc.confirmed ? ` <span class="pill" style="background:#e8f7f0;color:#0F6E56;font-size:10px"><i class="ti ti-checks"></i> 확인</span>` : ''; })()}</div>
+        <div><div style="font-weight:700;font-size:14px"><i class="ti ti-briefcase" style="color:var(--blue);font-size:14px"></i> ${esc(g.targetName || '-')}${(() => { const sc = shipConfirm('out', g.key); return sc && sc.confirmed ? ` <span class="pill" style="background:#e8f7f0;color:#0F6E56;font-size:10px"><i class="ti ti-checks"></i> 확인</span>` : ''; })()} ${futureBadge(g.date, 'sm')}</div>
           <div style="font-size:12px;color:var(--t3);margin-top:2px">${esc(g.date)}${g.dest ? ' · → ' + esc(g.dest) : ''} · ${esc(g.by || '')}</div></div>
         ${isAdmin() ? `<button class="x" onclick="delShipGroup('${g.key}')" aria-label="삭제"><i class="ti ti-trash" style="font-size:16px;color:var(--red-t)"></i></button>` : ''}
       </div>
@@ -4272,6 +4297,23 @@ function thickChipsHtml(agg) {
     return `<span style="display:inline-block;${col};border-radius:7px;padding:2px 8px;font-size:12.5px;font-weight:700;margin:2px 4px 2px 0">${esc(label)} <b>${agg.m[k]}</b>${unit}</span>`;
   }).join('');
 }
+/* ★ 2026-09-08 — 출고일을 내일·다음주로 잡은 건을 «날짜별»로 모아 보여 준다.
+   집계는 예전부터 출고일(t.date) 기준이라 계산은 그대로다. 안 보여서 확인이 안 됐을 뿐. */
+function shipFutureCardHtml(outs) {
+  const fut = (outs || []).filter(t => isFutureYmd(t.date));
+  if (!fut.length) return '';
+  const byDay = {};
+  fut.forEach(t => { const d = t.date; if (!byDay[d]) byDay[d] = { jang: 0, hebe: 0, ships: new Set(), names: {} }; const g = byDay[d]; g.jang += (+t.jang || 0); g.hebe += (+t.hebe || 0); g.ships.add(t.shipId || t.id); g.names[t.targetName || '-'] = 1; });
+  const days = Object.keys(byDay).sort();
+  const tot = fut.reduce((a, b) => a + (+b.jang || 0), 0);
+  return `<div style="margin-top:10px;background:#eef4ff;border:1.5px solid #c3d6f5;border-radius:11px;padding:10px 12px">
+    <div style="font-size:12px;color:#1b4fb0;font-weight:700;margin-bottom:6px"><i class="ti ti-calendar-clock"></i> 출고 예정 <span style="font-weight:600">· ${days.length}일 · 합계 ${fmtQty(tot)}장</span></div>
+    ${days.map(d => { const g = byDay[d]; const who = Object.keys(g.names); return `<div style="display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:3px 0;border-top:0.5px solid #d6e3f7">
+      <span style="min-width:0;color:var(--t2)"><b style="color:#1b4fb0">${mdLabel(d)}</b> <span style="color:var(--t3)">(D-${dayDiff(d)})</span> · ${esc(who.slice(0, 2).join(', '))}${who.length > 2 ? ` 외 ${who.length - 2}` : ''}</span>
+      <span style="flex:none;font-weight:700">${fmtQty(g.jang)}장 <span style="font-weight:500;color:var(--t3)">${g.hebe.toFixed(1)}㎡</span></span></div>`; }).join('')}
+    <div style="font-size:11px;color:var(--t3);margin-top:5px">각 날짜 몫으로 집계됩니다. 재고는 등록 시점에 이미 빠져 있습니다.</div>
+  </div>`;
+}
 function renderShip() {
   keepScrolls();
   const _shipSY = window.scrollY, _shipTW = el('r-wrap') ? el('r-wrap').scrollTop : 0;   // 재렌더 후 스크롤 위치 유지
@@ -4314,6 +4356,7 @@ function renderShip() {
           <div style="line-height:1.7">${thickChipsHtml(monthAgg)}</div>
         </div>
       </div>
+      ${shipFutureCardHtml(outs)}
     </div>
     <div class="seg" id="ship-seg" style="margin:2px 0 12px">
       <button type="button" data-t="slip" class="${shipTab === 'slip' ? 'on' : ''}" onclick="goShipTab('slip')"><i class="ti ti-printer" style="font-size:14px"></i> 출고증</button>
@@ -13052,7 +13095,10 @@ function openShipForm(pre) {
     <div class="frm">
       <div class="fld full"><label>업체명<span class="req">*</span></label>${searchBox('o-targetName', '업체명 검색·입력', (pre && pre.targetName) || '', 'companyNames', '')}</div>
       <div class="fld full"><label>출고 자재 / 장수 / 롯트 / 패턴<span class="req">*</span> <span style="color:var(--t3);font-weight:500">(여러 자재는 '자재 추가')</span></label>${matRowsHtml(pre && pre.items && pre.items.length ? pre.items : (pre && pre.material ? [{ name: pre.material, qty: pre.jang, lot: pre.lot, pattern: pre.pattern }] : [{}]), '장수')}</div>
-      <div class="fld"><label>출고일<span class="req">*</span></label><input type="date" id="o-date" value="${todayStr()}"></div>
+      <div class="fld"><label>출고일<span class="req">*</span> <span style="color:var(--t3);font-weight:500">(내일·다음주로 잡아도 됩니다)</span></label>
+        <input type="date" id="o-date" value="${todayStr()}" onchange="shipDateHint()">
+        <div id="o-date-hint" style="font-size:11.5px;margin-top:5px;line-height:1.5"></div>
+      </div>
       <div class="fld" style="background:#fff8e6;border:1.5px solid #f0d48a;border-radius:11px;padding:10px 12px">
         <label style="color:#8a5a00"><i class="ti ti-building-warehouse"></i> 출고 창고<span class="req">*</span> <span style="color:#a07a2a;font-weight:500">— 물건이 <b>나가는 곳</b></span></label>
         ${depotPickHtml('o-depot', HOME_DEPOT, 'shipDepotHint')}
@@ -13083,6 +13129,7 @@ function openShipForm(pre) {
   const _tn = el('o-targetName');
   if (_tn) _tn.addEventListener('input', () => { const ck = el('o-dest-same'); if (ck && ck.checked) { const t = el('o-dest-text'); if (t) t.value = (_tn.value || '').trim(); } });
   mrowLotRefresh();
+  shipDateHint();
 }
 function pickOutItem() {
   const id = el('o-pick') && el('o-pick').value; if (!id) return;
@@ -14046,7 +14093,7 @@ function chulgoQueueRow(r) {
   const items = (r.items || []).map(it => `${esc(it.name)} ${+it.qty || 0}${esc(it.unit || '')}`).join(', ');
   return `<label class="cq-item" style="display:flex;gap:9px;align-items:flex-start;padding:9px 8px;border-bottom:0.5px solid var(--bd)">
     <input type="checkbox" class="cq-chk" value="${r.id}" style="width:19px;height:19px;margin-top:2px">
-    <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13.5px">${r.urgent ? '<span class="pill" style="background:#fde8e8;color:#c0341d;font-size:10px">긴급</span> ' : ''}${esc(r.client || '-')}</div>
+    <div style="flex:1;min-width:0"><div style="font-weight:600;font-size:13.5px">${r.urgent ? '<span class="pill" style="background:#fde8e8;color:#c0341d;font-size:10px">긴급</span> ' : ''}${esc(r.client || '-')} ${futureBadge(r.schedDate, 'sm')}</div>
       <div style="font-size:12px;color:var(--t2);margin-top:2px;word-break:break-word">${items}</div>
       ${(r.dispatchDest || '').trim() ? `<div style="font-size:11px;color:#1b4fb0;margin-top:2px"><i class="ti ti-map-pin" style="font-size:12px;vertical-align:-1px"></i> 하차 ${esc(r.dispatchDest)}</div>` : ''}
       <div style="font-size:10.5px;color:var(--t3);margin-top:2px">${esc(r.docNo || '')} · ${esc(r.sender || '')}</div></div>
@@ -14149,6 +14196,12 @@ function chulgoOfficeSection() {
           ${times.map(h => `<option>${h}</option>`).join('')}
         </select>
       </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;background:#eef4ff;border:1.5px solid #c3d6f5;border-radius:10px;padding:8px 10px">
+        <label for="dsp-date" style="flex:none;font-size:13px;font-weight:700;color:#1b4fb0;white-space:nowrap"><i class="ti ti-calendar-event"></i> 출고예정일</label>
+        <input type="date" id="dsp-date" value="${esc(chulgoDefaultSched())}" onchange="dspDateHint()" style="flex:1;min-width:0;font-size:15px;padding:7px 9px;border:1.5px solid var(--bd2);border-radius:9px;background:#fff">
+        <button type="button" class="btn btn-sm" style="flex:none" onclick="dspDateShift(1)" title="하루 뒤">＋1일</button>
+      </div>
+      <div id="dsp-date-hint" style="font-size:11.5px;margin:-3px 2px 8px;line-height:1.5"></div>
       <input id="dsp-driver-other" lang="ko" placeholder="기사명 직접 입력" class="hidden" style="width:100%;font-size:15px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:10px;margin-bottom:8px">
       <input id="dsp-dest" lang="ko" list="dsp-dest-list" placeholder="공통 하차지(선택) · 비우면 각 건 하차지 사용" style="width:100%;font-size:15px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:10px;margin-bottom:10px">
       <datalist id="dsp-dest-list">${dests.map(d => `<option value="${esc(d)}"></option>`).join('')}</datalist>
@@ -14156,7 +14209,7 @@ function chulgoOfficeSection() {
       <textarea id="dsp-memo" lang="ko" placeholder="비고 · 특이사항 (창고 전달사항 · 요청서에 기재)" style="width:100%;font-size:15px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:10px;margin-bottom:10px;min-height:52px;resize:vertical"></textarea>
       <button class="btn btn-pri btn-block" onclick="issueDispatch()"><i class="ti ti-truck-delivery"></i>선택 항목 묶어 출고 지시 내리기 (창고 알림)</button>
     </div>
-    <div style="font-size:12px;font-weight:600;color:var(--t2);margin:2px 2px 6px"><i class="ti ti-calendar-event"></i> 오늘 출고 요청 목록 <span style="font-weight:500;color:var(--t3)">· ${esc(_todayCh.slice(5).replace('-', '/'))}</span></div>
+    <div style="font-size:12px;font-weight:600;color:var(--t2);margin:2px 2px 6px"><i class="ti ti-calendar-event"></i> 진행 중인 출고 요청 <span style="font-weight:500;color:var(--t3)">· 오늘 ${esc(_todayCh.slice(5).replace('-', '/'))} 기준 (예정일이 미래인 건도 함께 보입니다)</span></div>
     ${active.length ? `<div id="chulgo-active" data-keepscroll style="max-height:40vh;overflow-y:auto;-webkit-overflow-scrolling:touch;border:0.5px solid var(--bd);border-radius:12px;padding:9px 9px 1px;background:#fff">${active.map(g => chulgoDispatchCard(g, false)).join('')}</div>` : `<div class="empty" style="padding:14px"><i class="ti ti-inbox"></i>오늘 출고 요청이 없습니다</div>`}
     ${chulgoCompletedSection()}
     <details style="margin-top:14px"><summary style="font-size:13px;color:var(--t2);cursor:pointer;padding:6px 2px"><i class="ti ti-plus"></i> 입고 · 입고알림 직접 등록</summary>
@@ -14231,10 +14284,32 @@ function renderChulgo() {
     </div>
     <button class="btn btn-sm btn-block" style="margin-bottom:10px;${chulgoPushEnabled() ? 'background:var(--gl2);border-color:var(--gbd);color:var(--gd)' : ''}" onclick="toggleChulgoPush()"><i class="ti ti-device-mobile"></i> 📱 휴대폰 출고 지시 알림 <b>${chulgoPushEnabled() ? '켜짐' : '꺼짐'}</b> · 눌러서 ${chulgoPushEnabled() ? '끄기' : '켜기'} <span style="font-weight:500;color:var(--t3)">(원하는 사람만 · 앱 꺼져도 수신)</span></button>
     ${side === 'office' ? chulgoOfficeSection() : chulgoWarehouseSection()}`;
+  dspDateHint();   // 출고예정일이 미래면 안내 한 줄
+}
+/* 배차 폼의 출고예정일 기본값 — 대기열에 이미 잡힌 예정일 중 가장 이른 미래일, 없으면 오늘 */
+function chulgoDefaultSched() {
+  const q = (state.chulgoReqs || []).filter(r => (r.status || '') === '대기열' && (r.schedDate || '').trim());
+  const fut = q.map(r => r.schedDate).filter(isFutureYmd).sort();
+  return fut.length ? fut[0] : todayStr();
+}
+function dspDateHint() {
+  const box = el('dsp-date-hint'); if (!box) return;
+  const v = el('dsp-date') ? el('dsp-date').value : '';
+  const d = dayDiff(v);
+  if (d == null || d === 0) { box.innerHTML = ''; return; }
+  if (d > 0) box.innerHTML = `<span style="color:#1b4fb0"><i class="ti ti-calendar-clock"></i> <b>${mdLabel(v)} (D-${d}) 예정</b>으로 지시가 나갑니다. 요청서에도 그 날짜로 찍힙니다.</span>`;
+  else box.innerHTML = `<span style="color:var(--amber-t,#8a5a00)"><i class="ti ti-alert-triangle"></i> ${-d}일 지난 날짜입니다.</span>`;
+}
+function dspDateShift(n) {
+  const i = el('dsp-date'); if (!i) return;
+  const base = /^\d{4}-\d{2}-\d{2}$/.test(i.value || '') ? i.value : todayStr();
+  const dt = new Date(base + 'T00:00:00'); dt.setDate(dt.getDate() + n);
+  i.value = _ymd(dt); dspDateHint();
 }
 async function issueDispatch() {
   const ids = [...document.querySelectorAll('#chulgo-queue input.cq-chk:checked')].map(c => c.value);
   if (!ids.length) { toast('출고 지시할 항목을 체크하세요'); return; }
+  const schedDate = (el('dsp-date') && el('dsp-date').value || '').trim();   // ★ 미래 날짜로도 지시할 수 있다
   const sel = (el('dsp-driver-sel') && el('dsp-driver-sel').value) || '';
   const company = sel === '__company';
   let driver = '';
@@ -14260,6 +14335,7 @@ async function issueDispatch() {
       /* destOrig = 출고 등록 때 정한 원래 하차지. 배차/취소로는 절대 지우지 않는다.
          (업체 배차나 공통 출고지로 지시하면 dispatchDest 가 덮어써지기 때문) */
       const _patch = { status: '지시', dispatchId, vehicle: '', driver, companyDispatch: company, loadTime, packing, dispatchNote, dispatchDest: itemDest, dispatchedAt: Date.now(), dispatchedBy: (me && me.name) || '' };
+      if (schedDate) _patch.schedDate = schedDate;   // 지시할 때 정한 출고예정일로 덮어쓴다 (요청서에 찍히는 날짜)
       if (!(r.destOrig || '').trim()) _patch.destOrig = (r.dispatchDest || '').trim();
       await Store.update('chulgoReqs', id, _patch);
     }
