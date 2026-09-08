@@ -7618,10 +7618,7 @@ function runCutSim() {
       ${sc('사용 판재', sheets.length + ' 장', Ws + '×' + Hs)}
       ${sc('자투리(로스)', m2(Math.max(0, sheetArea - partArea)) + ' ㎡')}
     </div>
-    <div style="font-size:11px;color:var(--t3);line-height:1.6;margin-bottom:10px;background:var(--soft);border-radius:9px;padding:8px 11px">
-      <b style="color:#d94a3d">재단 길이</b>는 아래 그림의 <b>빨간 점선(톱이 지나간 선)</b>을 그대로 더한 값입니다 — 판재 원래 모서리는 안 세고, 두 부재가 맞닿은 자리는 한 번만 셉니다.<br>
-      <b>마구리 둘레 합</b>은 부재 4면을 전부 더한 값입니다 (연마·엣지 가공 견적용). 예전 「재단 미터수」가 이 값이었습니다.
-    </div>${over ? '<div style="color:#c0341d;font-size:12px;margin-bottom:8px"><i class="ti ti-alert-triangle"></i> 판재보다 큰 부재가 있습니다 — 치수를 확인하세요</div>' : ''}
+    ${over ? '<div style="color:#c0341d;font-size:12px;margin-bottom:8px"><i class="ti ti-alert-triangle"></i> 판재보다 큰 부재가 있습니다 — 치수를 확인하세요</div>' : ''}
     ${sheets.map((sh, i) => cutSheetSvg(sh, Ws, Hs, i + 1)).join('')}`;
   cutPlanAutoSave(sheets.length, partArea);   // ★ 돌릴 때마다 '최근 커팅플랜'에 자동 저장
 }
