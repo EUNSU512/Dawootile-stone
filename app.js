@@ -527,6 +527,7 @@ function onData(coll) {
   if (['quotes', 'banktx', 'appmeta', 'clients'].includes(coll)) moneyBust();   // 돈 계산을 다시 하게 만든다
   if (['priceList', 'inventory', 'appmeta'].includes(coll)) catalogBust();     // 단가표·재고·설정이 바뀌면 분류 표를 다시 만든다
   if (['holdings', 'transactions'].includes(coll)) stockIxBust();             // 홀딩·입출고가 바뀌면 재고 계산표를 다시 만든다
+  if (['transactions', 'inventory', 'appmeta'].includes(coll)) depotBust();   // 창고 목록·창고별 재고를 다시 만든다
   if (coll === 'members' && !_membersLoaded) {
     _membersLoaded = true;
     _membersWaiters.splice(0).forEach(fn => fn());
@@ -1713,7 +1714,7 @@ function siteItems(s) {
   return (s && s.materialName) ? [{ name: s.materialName, qty: s.qty || '', lot: s.lot || '' }] : [];
 }
 /* 활성 홀딩(예약 중 '홀딩')으로 잡힌 장수 합계 — 자재명 기준(다자재 합산) */
-function stockIxBust() { _heldIx = null; _dmgIx = null; }
+function stockIxBust() { _heldIx = null; _dmgIx = null; depotBust(); }
 /* ★ 2026-09-07 속도 — 자재 하나의 «홀딩 잡힌 수량»을 물어볼 때마다 홀딩 301건을
    통째로 다시 훑고 있었다. 재고가 182품목이라 홈 화면 한 번에 5만 번.
    자재명별 합계를 한 번만 만들어 두고 쓴다 (자료가 바뀌면 stockIxBust() 가 버린다). */
@@ -1835,18 +1836,53 @@ function normDepot(d) {
 }
 function depotLabel(d) { const v = normDepot(d); return v === HOME_DEPOT ? HOME_DEPOT_LABEL : v; }
 function depotDatalistHtml() { return depotOptions().map(d => `<option value="${esc(d)}">${esc(depotLabel(d))}</option>`).join(''); }
-function depotStock(name) {
-  const it = state.inventory.find(i => _normName(i.name) === _normName(name));
-  const key = _normName(name); const m = {};
-  state.transactions.forEach(t => {
-    if (_normName(t.itemName) !== key) return;
+/* ── ★ 2026-09-08 창고 목록을 «등록해서» 쓴다 ─────────────────────────
+   예전엔 입출고 기록에 적힌 창고 이름을 그러모아 목록을 만들었다. 그래서
+     ① 새 창고는 «입고를 한 번 해봐야» 목록에 나타났고(닭이 먼저냐 달걀이 먼저냐),
+     ② 오타를 내면 그게 새 창고가 되어 재고가 둘로 쪼개졌고,
+     ③ 「거봉석재」가 매입처(물건을 사온 회사)이자 창고(물건이 놓인 곳)라 헷갈렸다.
+   이제 창고 이름은 appmeta 문서 한 장(key:'depots')에 목록으로 적어 두고 관리한다.
+   ★ 매입처(suppliers)와는 완전히 다른 목록이다. 이름이 같아도 서로 상관없다. */
+function depotMasterDoc() { return (state.appmeta || []).find(m => m.key === 'depots') || null; }
+function depotMasterList() {
+  const d = depotMasterDoc();
+  const arr = (d && Array.isArray(d.list)) ? d.list : [];
+  const out = [], seen = new Set([HOME_DEPOT]);
+  arr.forEach(v => { const n = normDepot(v); if (n && !seen.has(n)) { seen.add(n); out.push(n); } });
+  return out;   // 본사는 항상 있으므로 목록에서 뺀다
+}
+async function depotMasterSave(list) {
+  const clean = [], seen = new Set([HOME_DEPOT]);
+  (list || []).forEach(v => { const n = normDepot(v); if (n && !seen.has(n)) { seen.add(n); clean.push(n); } });
+  const d = depotMasterDoc();
+  if (d) await Store.update('appmeta', d.id, { list: clean, at: Date.now() });
+  else await Store.add('appmeta', { key: 'depots', list: clean, createdAt: Date.now() });
+  depotBust();
+}
+/* ★ 속도 — 창고별 재고를 물어볼 때마다 입출고 1,134건을 통째로 다시 훑고 있었다.
+   재고표에 창고 열을 붙이면 184품목 × 1,134건 = 20만 번이 된다.
+   자재명 → 창고별 합계를 한 번만 만들어 두고 쓴다 (자료가 바뀌면 depotBust() 가 버린다). */
+let _depIx = null, _depAt = 0, _depOpt = null;
+function depotBust() { _depIx = null; _depOpt = null; }
+function _depotIndex() {
+  if (_depIx && Date.now() - _depAt < 2000) return _depIx;
+  const m = new Map();
+  (state.transactions || []).forEach(t => {
+    const k = _normName(t.itemName); if (!k) return;
+    let g = m.get(k); if (!g) { g = new Map(); m.set(k, g); }
     const dep = normDepot(t.depot);   // 빈칸·다우세라믹 → 본사로 통합
-    if (!m[dep]) m[dep] = { depot: dep, inQty: 0, outQty: 0, adjQty: 0 };
-    if (t.type === 'in') m[dep].inQty += (+t.jang || 0);
-    else if (t.type === 'out') m[dep].outQty += (+t.jang || 0);
-    else if (t.type === 'adjust') m[dep].adjQty += (+t.jang || 0);
+    let x = g.get(dep); if (!x) { x = { depot: dep, inQty: 0, outQty: 0, adjQty: 0 }; g.set(dep, x); }
+    if (t.type === 'in') x.inQty += (+t.jang || 0);
+    else if (t.type === 'out') x.outQty += (+t.jang || 0);
+    else if (t.type === 'adjust') x.adjQty += (+t.jang || 0);
   });
-  const arr = Object.values(m).map(x => ({ depot: x.depot, inQty: x.inQty, outQty: x.outQty, remain: x.inQty - x.outQty + x.adjQty }));
+  _depIx = m; _depAt = Date.now(); return m;
+}
+function depotStock(name) {
+  const key = _normName(name);
+  const it = state.inventory.find(i => _normName(i.name) === key);
+  const g = _depotIndex().get(key);
+  const arr = g ? [...g.values()].map(x => ({ depot: x.depot, inQty: x.inQty, outQty: x.outQty, remain: x.inQty - x.outQty + x.adjQty })) : [];
   // 창고별 합계를 실재고(jang)에 맞춤 — 차이는 기본창고(본사)에 반영. 롯트별 재고와 같은 방식.
   if (it) {
     const diff = (+it.jang || 0) - arr.reduce((a, x) => a + x.remain, 0);
@@ -1858,12 +1894,45 @@ function depotStock(name) {
   }
   return arr.filter(x => x.inQty > 0 || x.remain !== 0).sort((a, b) => b.remain - a.remain);
 }
+/* 자재 하나의 특정 창고 잔여 장수 */
+function depotRemain(name, depot) {
+  const d = normDepot(depot);
+  const hit = depotStock(name).find(x => x.depot === d);
+  return hit ? hit.remain : 0;
+}
 function depotOptions() {
-  const set = new Set();
+  if (_depOpt) return _depOpt;
+  const set = new Set(depotMasterList());   // ① 등록한 창고
   (state.inventory || []).forEach(i => { if ((i.depot || '').trim()) set.add(normDepot(i.depot)); });
-  (state.transactions || []).forEach(t => { if ((t.depot || '').trim()) set.add(normDepot(t.depot)); });
+  (state.transactions || []).forEach(t => { if ((t.depot || '').trim()) set.add(normDepot(t.depot)); });   // ② 예전 기록에만 있는 창고도 빠뜨리지 않는다
   set.delete(HOME_DEPOT);
-  return [HOME_DEPOT].concat([...set].sort());   // 기본창고를 항상 맨 앞에
+  _depOpt = [HOME_DEPOT].concat([...set].sort());   // 기본창고를 항상 맨 앞에
+  return _depOpt;
+}
+/* 창고 고르는 select 한 칸 (입고·출고 폼 공통) — 맨 아래 «+ 새 창고 추가…» 포함 */
+function depotPickHtml(id, cur, onchange) {
+  const c = normDepot(cur);
+  const opts = depotOptions().map(d => `<option value="${esc(d)}" ${c === d ? 'selected' : ''}>${esc(depotLabel(d))}</option>`).join('');
+  return `<select id="${id}" onchange="depotPickChange('${id}'${onchange ? `,${JSON.stringify(onchange)}` : ''})">${opts}<option value="__add">+ 새 창고 추가…</option></select>
+    <div class="hidden" id="${id}-add" style="display:flex;gap:6px;margin-top:6px">
+      <input id="${id}-new" lang="ko" placeholder="새 창고 이름 (예: 김해 2창고)" style="flex:1">
+      <button class="btn btn-pri btn-sm" type="button" style="flex:none" onclick="depotPickCommit('${id}')"><i class="ti ti-plus"></i>추가</button>
+    </div>`;
+}
+function depotPickChange(id, cb) {
+  const sel = el(id), box = el(id + '-add'); if (!sel) return;
+  if (sel.value === '__add') { if (box) { box.classList.remove('hidden'); setTimeout(() => el(id + '-new') && el(id + '-new').focus(), 50); } }
+  else { if (box) box.classList.add('hidden'); if (cb && typeof window[cb] === 'function') window[cb](); }
+}
+async function depotPickCommit(id) {
+  const inp = el(id + '-new'); if (!inp) return;
+  const val = normDepot((inp.value || '').trim());
+  if (!val || val === HOME_DEPOT) { toast('새 창고 이름을 입력하세요'); return; }
+  if (depotOptions().indexOf(val) < 0) await depotMasterSave(depotMasterList().concat([val]));
+  const sel = el(id);
+  if (sel) { sel.innerHTML = depotOptions().map(d => `<option value="${esc(d)}" ${d === val ? 'selected' : ''}>${esc(depotLabel(d))}</option>`).join('') + '<option value="__add">+ 새 창고 추가…</option>'; }
+  el(id + '-add').classList.add('hidden'); inp.value = '';
+  toast('창고 추가됨: ' + val);
 }
 /* 자재행 창고 선택칸 옵션 — 창고 2곳 이상(창고별 재고 있는 자재)만 목록 표시, 아니면 빈 문자열 반환(칸 숨김).
    기본은 항상 다우세라믹(본사)이 선택된 상태. */
@@ -1876,6 +1945,87 @@ function depotSelectHtml(name, current) {
   ds.filter(d => d.depot !== HOME_DEPOT).forEach(d => { html += `<option value="${esc(d.depot)}" ${cur === d.depot ? 'selected' : ''}>${esc(d.depot)} · 잔여 ${d.remain}장</option>`; });
   if (cur !== HOME_DEPOT && !ds.some(d => d.depot === cur)) html += `<option value="${esc(cur)}" selected>${esc(cur)}</option>`;
   return html;
+}
+/* ── 창고 관리 (등록 · 이름변경 · 삭제) ─────────────────────────────
+   창고 = 물건이 놓여 있는 «장소». 매입처 = 물건을 사온 «회사». 둘은 별개 목록이다. */
+function fmtQty(n) { const v = +n || 0; return Number.isInteger(v) ? String(v) : (Math.round(v * 100) / 100).toString(); }   // 장수는 소수가 섞인다 (0.32장 등)
+function depotUsage(d) {   // 그 창고에 걸린 입출고 건수 · 남은 장수
+  const dep = normDepot(d);
+  let n = 0; (state.transactions || []).forEach(t => { if (normDepot(t.depot) === dep) n++; });
+  let remain = 0, items = 0;
+  (state.inventory || []).forEach(i => { const r = depotRemain(i.name, dep); if (r !== 0) { remain += r; items++; } });
+  return { rows: n, remain, items };
+}
+function openDepotManage() {
+  if (isCustomerRole()) { toast('권한이 없습니다'); return; }
+  const list = depotOptions();
+  const rows = list.map(d => {
+    const u = depotUsage(d), home = d === HOME_DEPOT;
+    const reg = home || depotMasterList().indexOf(d) >= 0;
+    return `<tr>
+      <td><b>${esc(depotLabel(d))}</b>${home ? ' <span class="pill p-done" style="font-size:9.5px">기본</span>' : ''}${!reg ? ' <span class="pill p-wait" style="font-size:9.5px" title="예전 입출고 기록에만 있는 이름입니다">미등록</span>' : ''}</td>
+      <td style="text-align:right"><b style="color:${u.remain > 0 ? 'var(--gd)' : 'var(--t3)'}">${fmtQty(u.remain)}</b>장<div style="font-size:10.5px;color:var(--t3)">${u.items}품목 · 기록 ${u.rows}건</div></td>
+      <td style="text-align:right;white-space:nowrap">${home ? '<span style="color:var(--t3);font-size:11.5px">고정</span>' : `
+        <button class="btn btn-sm" onclick="depotRename('${esc(d).replace(/'/g, "\\'")}')"><i class="ti ti-pencil"></i></button>
+        <button class="btn btn-sm" style="color:var(--red-t)" onclick="depotDelete('${esc(d).replace(/'/g, "\\'")}')"><i class="ti ti-trash"></i></button>`}</td>
+    </tr>`;
+  }).join('');
+  openModal(`
+    <div class="sheet-h"><h3><i class="ti ti-building-warehouse"></i>창고 관리</h3><button class="x" onclick="closeModal()">×</button></div>
+    <div style="font-size:11.5px;color:var(--t2);background:var(--soft);border-radius:9px;padding:9px 11px;margin:0 2px 11px;line-height:1.6">
+      <b>창고</b>는 물건이 <b>놓여 있는 장소</b>입니다. 입고할 때 「어느 창고에 넣었는지」를 고르는 목록이에요.<br>
+      <span style="color:var(--t3)">「발주처·매입처」는 물건을 <b>사온 회사</b>라서 완전히 다른 목록입니다. 이름이 같아도(예: 거봉석재) 서로 상관없습니다.</span>
+    </div>
+    <div style="display:flex;gap:6px;margin:0 2px 11px">
+      <input id="dep-new" lang="ko" placeholder="창고 이름 (예: 김해 2창고)" style="flex:1;font-size:14px;padding:9px 11px;border:1.5px solid var(--bd2);border-radius:9px">
+      <button class="btn btn-pri" style="flex:none" onclick="depotAdd()"><i class="ti ti-plus"></i>창고 추가</button>
+    </div>
+    <div class="tbl-wrap"><table class="tbl">
+      <thead><tr><th>창고</th><th style="text-align:right">남은 재고</th><th style="text-align:right">관리</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <div style="font-size:11px;color:var(--t3);padding:9px 4px 0;line-height:1.6">
+      ・<b>이름 변경</b>을 하면 그 창고로 기록된 <b>입출고 내역까지 같이</b> 바뀝니다.<br>
+      ・재고가 <b>남아 있는 창고는 삭제할 수 없습니다.</b> 먼저 재고를 다른 창고로 옮기세요 (품목 › 재고 조정 › 창고 이동).
+    </div>
+    <div class="frm-foot"><button class="btn btn-block" onclick="closeModal()">닫기</button></div>`);
+}
+async function depotAdd() {
+  const inp = el('dep-new'); if (!inp) return;
+  const v = normDepot((inp.value || '').trim());
+  if (!v || v === HOME_DEPOT) { toast('창고 이름을 입력하세요'); return; }
+  if (depotOptions().indexOf(v) >= 0) { toast('이미 있는 창고입니다'); return; }
+  await depotMasterSave(depotMasterList().concat([v]));
+  toast('창고 추가됨: ' + v);
+  openDepotManage();
+}
+async function depotRename(old) {
+  const from = normDepot(old); if (from === HOME_DEPOT) return;
+  const u = depotUsage(from);
+  const raw = prompt(`「${from}」 창고의 새 이름을 입력하세요.\n\n입출고 기록 ${u.rows}건도 함께 바뀝니다.`, from);
+  if (raw == null) return;
+  const to = normDepot(String(raw).trim());
+  if (!to || to === from) return;
+  if (to === HOME_DEPOT) { toast('기본 창고 이름으로는 바꿀 수 없습니다'); return; }
+  if (!confirm(`「${from}」 → 「${to}」 로 바꿉니다.\n입출고 기록 ${u.rows}건이 함께 바뀝니다. 진행할까요?`)) return;
+  const hits = (state.transactions || []).filter(t => normDepot(t.depot) === from);
+  for (const t of hits) await Store.update('transactions', t.id, { depot: to });
+  const invHits = (state.inventory || []).filter(i => normDepot(i.depot) === from);
+  for (const i of invHits) await Store.update('inventory', i.id, { depot: to });
+  const ml = depotMasterList().filter(x => x !== from); ml.push(to);
+  await depotMasterSave(ml);
+  toast(`창고 이름 변경 · 기록 ${hits.length}건 반영`);
+  openDepotManage();
+}
+async function depotDelete(d) {
+  const dep = normDepot(d); if (dep === HOME_DEPOT) return;
+  const u = depotUsage(dep);
+  if (u.remain !== 0 || u.items > 0) { toast(`재고가 남아 있어 삭제할 수 없습니다 (${u.items}품목 ${fmtQty(u.remain)}장)`); return; }
+  if (u.rows > 0) { toast(`입출고 기록 ${u.rows}건이 남아 있어 목록에서만 숨길 수 없습니다 — 이름 변경을 쓰세요`); return; }
+  if (!confirm(`창고 「${dep}」 을(를) 목록에서 지울까요?`)) return;
+  await depotMasterSave(depotMasterList().filter(x => x !== dep));
+  toast('삭제됨: ' + dep);
+  openDepotManage();
 }
 /* 파손 재고: 입고 비고에 '파손' 포함(+) − 출고 비고에 '파손' 포함(−). 자재명 기준 */
 /* ★ 2026-09-07 속도 — 파손 수량도 자재마다 입출고 1,106건을 다시 훑고 있었다(20만 번).
@@ -2134,6 +2284,30 @@ function mrowLotRefresh() {
       info.innerHTML = it ? ('가용 <b style="color:' + (availJang(it) <= 0 ? 'var(--red-t)' : 'var(--gd)') + '">' + availJang(it) + '장</b> / 실재고 ' + (+it.jang || 0) + '장' + (q > 0 ? ' · 헤베 ' + (q * (+it.hebePerJang || 0)).toFixed(2) + '㎡' : '')) : (mat ? '<span style="color:var(--amber-t)">재고에 없는 자재 (입고 시 자동 전환)</span>' : '');
     }
   });
+  shipDepotHint();
+}
+/* ★ 2026-09-08 — 출고할 때 창고를 안 골라서 본사 재고만 마이너스로 빠지는 일이 잦았다.
+   고른 창고에 그 자재가 모자라면 「어느 창고에 몇 장 있는지」를 바로 알려 준다. */
+function shipDepotHint() {
+  const box = el('o-depot-hint'); if (!box) return;
+  const sel = el('o-depot'); const dep = normDepot(sel && sel.value !== '__add' ? sel.value : HOME_DEPOT);
+  const bad = [];
+  document.querySelectorAll('#mat-rows .mrow').forEach(row => {
+    const inp = row.querySelector('input.sb-in'); const mat = inp ? (inp.value || '').trim() : '';
+    const q = parseFloat(row.querySelector('.m-qty') ? row.querySelector('.m-qty').value : '') || 0;
+    if (!mat || q <= 0) return;
+    const rowDep = row.querySelector('select.m-depot');
+    if (rowDep && rowDep.style.display !== 'none' && (rowDep.value || '').trim()) return;   // 행에서 따로 골랐으면 통과
+    if (!state.inventory.some(x => _normName(x.name) === _normName(mat))) return;
+    const have = depotRemain(mat, dep);
+    if (have < q) {
+      const other = depotStock(mat).filter(d => d.depot !== dep && d.remain > 0).map(d => `${depotLabel(d.depot)} ${fmtQty(d.remain)}장`);
+      bad.push(`<b>${esc(mat)}</b> — ${depotLabel(dep)}에 ${fmtQty(have)}장뿐 (${q}장 필요)${other.length ? ` · <span style="color:var(--gd)">${other.join(' · ')}</span>` : ''}`);
+    }
+  });
+  box.innerHTML = bad.length
+    ? `<span style="color:var(--red-t)"><i class="ti ti-alert-triangle"></i> ${bad.join('<br>')}</span>`
+    : `<span style="color:var(--t3)">이 창고에서 나갑니다. 다른 창고 물건이면 위에서 바꾸세요.</span>`;
 }
 function collectMaterialRows() {
   const rows = [];
@@ -3124,8 +3298,49 @@ function stockBaseList() {
   if (q) list = list.filter(i => (i.name || '').toLowerCase().includes(q) || (i.spec || '').toLowerCase().includes(q) || (i.vendor || '').toLowerCase().includes(q) || itemCat(i).includes(q));
   return list;
 }
+/* ★ 2026-09-08 — 재고표의 「창고」 열은 품목에 적어 둔 «기본 창고» 하나만 보여줬다.
+   그래서 어느 창고에 몇 장 있는지는 품목을 하나씩 열어봐야 알 수 있었다.
+   창고가 두 곳 이상이면 창고마다 열을 만들어 한 화면에서 비교한다. */
+function stockDepotCols() { const d = depotOptions(); return d.length > 1 ? d : null; }
+/* 재고 화면 맨 위 «창고별 합계» 띠 — 창고가 두 곳 이상일 때만 나온다 */
+function depotSummaryHtml() {
+  const cols = stockDepotCols(); if (!cols) return '';
+  const tot = {}; cols.forEach(d => { tot[d] = { jang: 0, hebe: 0, items: 0 }; });
+  (state.inventory || []).forEach(i => {
+    const per = +i.hebePerJang || 0;
+    depotStock(i.name).forEach(d => {
+      if (!tot[d.depot] || d.remain === 0) return;
+      tot[d.depot].jang += d.remain; tot[d.depot].hebe += d.remain * per; tot[d.depot].items++;
+    });
+  });
+  return `<div style="display:flex;gap:8px;overflow-x:auto;margin-bottom:12px;padding-bottom:2px">${cols.map(d => {
+    const t = tot[d], home = d === HOME_DEPOT;
+    return `<div style="flex:1;min-width:132px;background:${home ? 'var(--gl2,#eef7f3)' : '#fff'};border:1.5px solid ${home ? 'var(--gbd,#bcdccd)' : 'var(--bd2)'};border-radius:12px;padding:10px 12px">
+      <div style="font-size:11.5px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><i class="ti ti-building-warehouse"></i> ${esc(depotLabel(d))}</div>
+      <div style="font-size:19px;font-weight:800;color:${t.jang > 0 ? 'var(--gd)' : 'var(--t3)'};line-height:1.25">${fmtQty(t.jang)}<span style="font-size:12px;font-weight:600">장</span></div>
+      <div style="font-size:11px;color:var(--t3)">${t.items}품목 · ${t.hebe.toFixed(1)}㎡</div>
+    </div>`;
+  }).join('')}</div>`;
+}
+function stockHeadHtml() {
+  const cols = stockDepotCols();
+  const base = `<th>자재명</th><th>규격</th><th>패턴별</th><th>실재고</th><th>가용</th><th>헤베(㎡)</th><th>상태</th>`;
+  if (!cols) return base + `<th>창고</th>`;
+  return base + cols.map(d => `<th style="text-align:right;white-space:nowrap"><i class="ti ti-building-warehouse" style="font-size:11px;color:var(--t3)"></i> ${esc(d === HOME_DEPOT ? '본사' : d)}</th>`).join('');
+}
+function stockColCount() { const c = stockDepotCols(); return 7 + (c ? c.length : 1); }
+function stockDepotCells(name) {
+  const cols = stockDepotCols();
+  if (!cols) { const it = state.inventory.find(i => _normName(i.name) === _normName(name)); return `<td>${esc(depotLabel(it && it.depot))}</td>`; }
+  const ds = depotStock(name); const m = {}; ds.forEach(d => { m[d.depot] = d.remain; });
+  return cols.map(d => {
+    const v = m[d];
+    if (v == null || v === 0) return `<td style="text-align:right;color:var(--e3,#c9ccd1)">·</td>`;
+    return `<td style="text-align:right"><b style="color:${v < 0 ? 'var(--red-t)' : 'var(--gd)'}">${fmtQty(v)}</b></td>`;
+  }).join('');
+}
 function stockRowsHtml(list) {
-  if (!list.length) return `<tr><td colspan="8"><div class="empty"><i class="ti ti-package-off"></i>해당하는 자재가 없습니다</div></td></tr>`;
+  if (!list.length) return `<tr><td colspan="${stockColCount()}"><div class="empty"><i class="ti ti-package-off"></i>해당하는 자재가 없습니다</div></td></tr>`;
   return list.map(i => {
     const s = stockState(i);
     const held = heldJangFor(i.name), avail = (+i.jang || 0) - held;
@@ -3141,7 +3356,7 @@ function stockRowsHtml(list) {
       <td><b style="color:${avail <= 0 ? 'var(--red-t)' : 'var(--gd)'}">${avail}</b>${u}${held > 0 ? `<div style="font-size:10px;color:var(--t3)">홀딩 ${held}</div>` : ''}</td>
       <td>${ceramic ? itemHebe(i).toFixed(1) + '㎡' : '-'}</td>
       <td><span class="pill ${s.cls}">${s.k}</span></td>
-      <td>${esc(depotLabel(i.depot))}</td>
+      ${stockDepotCells(i.name)}
     </tr>`;
   }).join('');
 }
@@ -3214,7 +3429,11 @@ function renderStock() {
       <button class="btn btn-pri" style="flex:1" onclick="openStockForm()"><i class="ti ti-login"></i>입고 등록</button>
       <button class="btn" style="flex:1" onclick="openItemForm()"><i class="ti ti-plus"></i>품목 추가</button>
     </div>
-    <button class="btn btn-block" style="margin-bottom:12px" onclick="bulkInOpen()"><i class="ti ti-file-spreadsheet"></i>엑셀로 여러 건 한꺼번에 입고</button>
+    <div style="display:flex;gap:9px;margin-bottom:12px">
+      <button class="btn" style="flex:2" onclick="bulkInOpen()"><i class="ti ti-file-spreadsheet"></i>엑셀로 한꺼번에 입고</button>
+      <button class="btn" style="flex:1" onclick="openDepotManage()"><i class="ti ti-building-warehouse"></i>창고 관리</button>
+    </div>
+    ${depotSummaryHtml()}
     <div class="search-box">
       <i class="ti ti-search"></i>
       <input id="stock-search" placeholder="품명·규격·공급처 검색" value="${esc(filters.stockSearch || '')}" oninput="filterStockTable()" autocomplete="off">
@@ -3226,7 +3445,7 @@ function renderStock() {
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:12px;color:var(--t3)">검색 결과 <b id="stock-count" style="color:var(--t1)">${list.length}종</b></span><button class="btn btn-sm" onclick="stockExportExcel()"><i class="ti ti-download"></i>재고 엑셀</button></div>
     <div class="tbl-wrap" id="stock-wrap" data-keepscroll style="max-height:calc(100vh - 360px);min-height:220px;overflow:auto">
       <table class="tbl">
-        <thead><tr><th>자재명</th><th>규격</th><th>패턴별</th><th>실재고</th><th>가용</th><th>헤베(㎡)</th><th>상태</th><th>창고</th></tr></thead>
+        <thead><tr>${stockHeadHtml()}</tr></thead>
         <tbody id="stock-tbody">${stockRowsHtml(list)}</tbody>
       </table>
     </div>
@@ -3255,7 +3474,7 @@ function stockExportExcel() {
     const lotText = lotStock(it.name).filter(l => l.remain !== 0)
       .map(l => `${l.lot} ${l.remain}장`).join(' · ');
     const patText = patternStock(it.name).map(p => `${p.pattern} ${p.remain}장`).join(' · ');
-    rows.push({
+    const row = {
       '자재명': it.name || '',
       '규격': it.spec || '',
       '실재고(장)': jang,
@@ -3263,10 +3482,14 @@ function stockExportExcel() {
       '파손(장)': (function () { const d = damagedStock(it.name); return d > 0 ? d : ''; })(),
       '헤베(㎡)': +(jang * per).toFixed(2),
       '패턴별(참고)': patText,
-      '롯트별(참고)': lotText,
-      '창고': depotLabel(it.depot),
-      '공급처': it.vendor || ''
-    });
+      '롯트별(참고)': lotText
+    };
+    // 창고가 두 곳 이상이면 창고마다 열을 만든다
+    const _dc = stockDepotCols();
+    if (_dc) { const m = {}; depotStock(it.name).forEach(d => { m[d.depot] = d.remain; }); _dc.forEach(d => { row['[창고] ' + depotLabel(d)] = m[d] || 0; }); }
+    else row['창고'] = depotLabel(it.depot);
+    row['공급처'] = it.vendor || '';
+    rows.push(row);
   });
   if (!rows.length) { toast('재고가 없습니다'); return; }
   const ws = XLSX.utils.json_to_sheet(rows);
@@ -3598,8 +3821,11 @@ function openStockForm() {
         ${searchBox('in-item', '자재명 검색·입력', '', 'invNames', 'onInItemChange')}
       </div>
       <div class="fld"><label>규격</label><input id="in-spec" readonly placeholder="자재 선택 시 자동" style="background:var(--soft)"></div>
+      <div class="fld full" style="background:#fff8e6;border:1.5px solid #f0d48a;border-radius:11px;padding:10px 12px;margin-bottom:2px">
+        <label style="color:#8a5a00"><i class="ti ti-building-warehouse"></i> 입고 창고<span class="req">*</span> <span style="color:#a07a2a;font-weight:500">— 물건을 <b>어디에 넣었는지</b></span></label>
+        ${depotPickHtml('in-depot', HOME_DEPOT)}
+      </div>
       <div class="fld" id="in-lot-fld"><label>롯트 넘버<span class="req">*</span></label><input id="in-lot" placeholder="롯트 넘버 입력"></div>
-      <div class="fld"><label>창고(입고지) <span style="color:var(--t3);font-weight:500">(비우면 기본)</span></label><input id="in-depot" list="in-depot-list" placeholder="${HOME_DEPOT_LABEL} (기본)"><datalist id="in-depot-list">${depotDatalistHtml()}</datalist></div>
     </div>
     <div id="in-pattern-block">
       <div class="sec-label"><i class="ti ti-layout-grid"></i>패턴별 장수 <span style="font-weight:500;color:var(--t3)">(패턴이 없으면 장수만 입력)</span></div>
@@ -3611,7 +3837,7 @@ function openStockForm() {
     </div>
     <div class="frm" style="margin-top:14px">
       <div class="fld"><label>입고일</label><input type="date" id="in-date" value="${todayStr()}"></div>
-      <div class="fld"><label>발주처/매입처 <span style="color:var(--t3);font-weight:500">(기본: 직발주)</span></label><select id="in-vendor" onchange="onMasterChange('in-vendor','suppliers')">${masterOptions('suppliers', '다우세라믹앤석재')}</select></div>
+      <div class="fld"><label>발주처/매입처 <span style="color:var(--t3);font-weight:500">— 물건을 <b>사온 회사</b> (창고 아님)</span></label><select id="in-vendor" onchange="onMasterChange('in-vendor','suppliers')">${masterOptions('suppliers', '다우세라믹앤석재')}</select></div>
       <div class="fld full hidden" id="in-vendor-add"><label>기타 발주처 입력 후 추가</label><div style="display:flex;gap:8px"><input id="in-vendor-new" placeholder="이름 입력" style="flex:1"><button class="btn btn-pri btn-sm" type="button" onclick="commitMaster('in-vendor','suppliers')"><i class="ti ti-plus"></i>추가</button></div></div>
       <div class="fld full"><label>메모</label><input id="in-note" placeholder="선택"></div>
     </div>
@@ -3632,7 +3858,9 @@ function inSelItem() {   // 입고 폼에서 검색창에 입력된 자재명 �
 function onInItemChange() {
   const it = inSelItem();
   el('in-spec').value = it ? (it.spec || '-') : '';
-  if (el('in-depot')) el('in-depot').value = it ? (it.depot || '') : '';   // 선택 자재의 기본 창고
+  // 선택 자재의 기본 창고를 미리 골라 준다 (목록에 없는 이름이면 기본창고)
+  const _dp = el('in-depot');
+  if (_dp && _dp.value !== '__add') { const want = normDepot(it ? it.depot : ''); _dp.value = depotOptions().indexOf(want) >= 0 ? want : HOME_DEPOT; }
   // 종류별: 세라믹·석재는 롯트+패턴, 그 외(세면대·무늬목·기타)는 수량만
   const cat = it ? itemCat(it) : '세라믹';
   const ceramic = catIsCeramicLike(cat);
@@ -3699,7 +3927,9 @@ async function submitStock() {
   const hebe = ceramic ? +(jang * (+it.hebePerJang || 0)).toFixed(2) : 0;
   let vendor = el('in-vendor').value; if (vendor === '__add') vendor = ''; vendor = (vendor || '다우세라믹앤석재').trim();
   const date = el('in-date').value, note = el('in-note').value.trim();
-  const depot = normDepot((el('in-depot') && el('in-depot').value || '').trim() || it.depot);
+  let _dpv = (el('in-depot') && el('in-depot').value || '').trim();
+  if (_dpv === '__add') { toast('새 창고 이름을 넣고 「추가」를 눌러 주세요'); return; }
+  const depot = normDepot(_dpv || it.depot);
   const newJang = (+it.jang || 0) + jang;
   await Store.update('inventory', it.id, { jang: newJang, lastInDate: date });
   await Store.add('transactions', { type: 'in', itemId: it.id, itemName: it.name, spec: it.spec, lot, patterns, jang, hebe, vendor, date, note, depot, by: me.name });
@@ -12823,7 +13053,11 @@ function openShipForm(pre) {
       <div class="fld full"><label>업체명<span class="req">*</span></label>${searchBox('o-targetName', '업체명 검색·입력', (pre && pre.targetName) || '', 'companyNames', '')}</div>
       <div class="fld full"><label>출고 자재 / 장수 / 롯트 / 패턴<span class="req">*</span> <span style="color:var(--t3);font-weight:500">(여러 자재는 '자재 추가')</span></label>${matRowsHtml(pre && pre.items && pre.items.length ? pre.items : (pre && pre.material ? [{ name: pre.material, qty: pre.jang, lot: pre.lot, pattern: pre.pattern }] : [{}]), '장수')}</div>
       <div class="fld"><label>출고일<span class="req">*</span></label><input type="date" id="o-date" value="${todayStr()}"></div>
-      <div class="fld"><label>출고 창고 <span style="color:var(--t3);font-weight:500">(비우면 기본 · 거봉석재 등 다른 창고에서 나갈 때만 지정)</span></label><input id="o-depot" list="o-depot-list" placeholder="${HOME_DEPOT_LABEL} (기본)"><datalist id="o-depot-list">${depotDatalistHtml()}</datalist></div>
+      <div class="fld" style="background:#fff8e6;border:1.5px solid #f0d48a;border-radius:11px;padding:10px 12px">
+        <label style="color:#8a5a00"><i class="ti ti-building-warehouse"></i> 출고 창고<span class="req">*</span> <span style="color:#a07a2a;font-weight:500">— 물건이 <b>나가는 곳</b></span></label>
+        ${depotPickHtml('o-depot', HOME_DEPOT, 'shipDepotHint')}
+        <div id="o-depot-hint" style="font-size:11.5px;margin-top:6px;line-height:1.5"></div>
+      </div>
       <div class="fld full"><label>출고지<span class="req">*</span> <span style="color:var(--t3);font-weight:500">(자재가 실제로 들어가는 곳 — 받는 공장)</span></label>
         <select id="o-dest" onchange="onShipDest()">
           <option value="">선택…</option>
@@ -12937,7 +13171,8 @@ async function submitShip() {
       const newJang = oldJang - jang;   // 재고보다 많이 출고하면 마이너스로 남김 → 다음 입고 때 자동 상쇄
       const hebe = it ? +(jang * (+it.hebePerJang || 0)).toFixed(2) : 0;
       const lot = (r.lot && r.lot.trim()) ? r.lot.trim() : soleLot(material);   // 롯트 미지정인데 남은 롯트가 하나면 자동 연동
-      const oDepot = normDepot((r.depot && r.depot.trim()) ? r.depot.trim() : (el('o-depot') && el('o-depot').value || '').trim());   // 행별 창고 우선, 없으면 폼 상단 창고, 그것도 없으면 기본창고(본사)
+      const _fdep = (el('o-depot') && el('o-depot').value || '').trim();
+      const oDepot = normDepot((r.depot && r.depot.trim()) ? r.depot.trim() : (_fdep === '__add' ? '' : _fdep));   // 행별 창고 우선, 없으면 폼 상단 창고, 그것도 없으면 기본창고(본사)
       if (it) await Store.update('inventory', it.id, { jang: newJang });
       await Store.add('transactions', { type: 'out', shipId, itemId: it ? it.id : '', itemName: material, spec: it ? it.spec : '', hebe, jang, lot, pattern: r.pattern, depot: oDepot, dest, factory: dest, target: '', targetName, date, note, siteAddr, quoteId: _fromQuote, damaged, createdAt: Date.now(), by: me.name });
       totalJang += jang;
