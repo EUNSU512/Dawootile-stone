@@ -7315,8 +7315,18 @@ th{background:#f1efe8;font-weight:700}td.c{text-align:center}td.l{text-align:lef
 let _cutSheet = { L: 3200, W: 1600 };
 const CUT_KERF = 3;   // 톱날(재단날) 두께 3mm 고정
 function _cutSimSheetClear() { const sh = el('sheet'); if (sh && sh.querySelector('#cutsim-root') && !(el('modal') && el('modal').classList.contains('open'))) sh.innerHTML = ''; }   // 닫힌 모달에 남은 시뮬레이터 DOM 제거(ID 중복 방지)
+/* ★ 2026-09-08 버그 — `_cutCid` 를 0 으로 되돌리는 바람에 같은 번호(data-cid)가 두 개 생겼다.
+   그러면 무늬연결이 «엉뚱한 행»을 가리킨다 (실측: 5+6번을 연결했는데 5+1번으로 잡힘).
+   화면을 다시 열어도 번호는 계속 올라가게 두고, 대신 행을 찾을 때 항상 지금 표(#cut-parts) 안에서만 찾는다. */
 let _cutGroups = []; let _cutCid = 0;
-function openCutSim() { if (isCustomerRole()) { toast('권한이 없습니다'); return; } _cutGroups = []; _cutCid = 0; _cutSimSheetClear(); filters.cutSim = true; renderQuote(); if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' }); }
+function _cutRows() { const b = el('cut-parts'); return b ? [...b.querySelectorAll('.cut-row')] : []; }
+function openCutSim() {
+  if (isCustomerRole()) { toast('권한이 없습니다'); return; }
+  _cutGroups = []; _cutSimSheetClear();
+  const _pq = el('pg-quote'); if (_pq) _pq.innerHTML = '';   // ★ 항상 빈 표로 새로 시작 (예전 행이 남아 번호가 겹치지 않게)
+  filters.cutSim = true; renderQuote();
+  if (el('pg-quote')) el('pg-quote').scrollIntoView({ block: 'start' });
+}
 function cutSimClose() { filters.cutSim = false; renderQuote(); }
 function cutRowHtml(p) {
   p = p || {}; const cid = p.cid != null ? p.cid : (++_cutCid); const inp = 'width:100%;font-size:14px;padding:7px 8px;border:1.5px solid var(--bd2);border-radius:8px;text-align:center';
@@ -7336,16 +7346,16 @@ function cutRowHtml(p) {
    그런데 화면에 번호가 없어서 «몇 번»을 가리킬 수가 없었다. 이제 왼쪽에 번호를 붙인다.
    이 번호는 도면 조각에 찍히는 #1 #2 와 같은 번호다(둘 다 행 순서 기준). */
 function cutRenumber() {
-  document.querySelectorAll('.cut-row').forEach((r, i) => { const c = r.querySelector('.ct-no'); if (c) c.textContent = (i + 1); });
+  _cutRows().forEach((r, i) => { const c = r.querySelector('.ct-no'); if (c) c.textContent = (i + 1); });
   const gb = el('cut-groups'); if (gb) gb.innerHTML = cutGroupsInner();
 }
 function cutDelRow(btn) { const r = btn.closest('.cut-row'); if (!r) return; const cid = r.getAttribute('data-cid'); r.remove();
   _cutGroups = _cutGroups.filter(g => (g.cids || []).indexOf(cid) < 0);   // 지운 부재가 낀 연결은 같이 없앤다
   cutRenumber(); }
-function _rowNo(cid) { const rs = [...document.querySelectorAll('.cut-row')]; const i = rs.findIndex(r => r.getAttribute('data-cid') === String(cid)); return i < 0 ? '?' : (i + 1); }
-function _rowDims(cid) { const r = document.querySelector('.cut-row[data-cid="' + cid + '"]'); if (!r) return null; return { l: _numv(r.querySelector('.ct-l').value), w: _numv(r.querySelector('.ct-w').value) }; }
+function _rowNo(cid) { const i = _cutRows().findIndex(r => r.getAttribute('data-cid') === String(cid)); return i < 0 ? '?' : (i + 1); }
+function _rowDims(cid) { const r = _cutRows().find(x => x.getAttribute('data-cid') === String(cid)); if (!r) return null; return { l: _numv(r.querySelector('.ct-l').value), w: _numv(r.querySelector('.ct-w').value) }; }
 function cutMakeGroup() {
-  const sel = [...document.querySelectorAll('.cut-row')].filter(r => { const c = r.querySelector('.ct-sel'); return c && c.checked; });
+  const sel = _cutRows().filter(r => { const c = r.querySelector('.ct-sel'); return c && c.checked; });
   const grainOn = el('cut-grain') && el('cut-grain').checked;
   const Ws = _numv(el('cut-sheetL') && el('cut-sheetL').value) || 3200, Hs = _numv(el('cut-sheetW') && el('cut-sheetW').value) || 1600;
   const kerf = CUT_KERF;   // 톱날두께 3mm 고정
@@ -7392,10 +7402,10 @@ function cutGroupsInner() {
   }).join('');
 }
 function addCutRow() { const b = el('cut-parts'); if (b) { const grain = el('cut-grain') && el('cut-grain').checked; b.insertAdjacentHTML('beforeend', cutRowHtml({ rot: !grain })); cutRenumber(); } }
-function cutGrainToggle() { const on = el('cut-grain') && el('cut-grain').checked; document.querySelectorAll('.ct-rot').forEach(c => c.checked = !on); }
+function cutGrainToggle() { const on = el('cut-grain') && el('cut-grain').checked; _cutRows().forEach(r => { const c = r.querySelector('.ct-rot'); if (c) c.checked = !on; }); }
 function _collectCutParts() {
   const parts = [];
-  document.querySelectorAll('.cut-row').forEach((r, i) => {
+  _cutRows().forEach((r, i) => {
     const l = _numv(r.querySelector('.ct-l').value), w = _numv(r.querySelector('.ct-w').value);
     const q = Math.max(1, Math.round(_numv(r.querySelector('.ct-q').value) || 0) || 1);
     const rot = r.querySelector('.ct-rot') ? r.querySelector('.ct-rot').checked : true;
@@ -7797,7 +7807,7 @@ function renderCutSim() {
 /* 견적 작성/수정 중에 팝업으로 재단 시뮬레이션 (작성 중인 견적 내용은 그대로 유지됨) */
 function openCutSimModal() {
   if (isCustomerRole()) { toast('권한이 없습니다'); return; }
-  _cutGroups = []; _cutCid = 0;
+  _cutGroups = [];
   openModal(`<div class="sheet-h"><h3><i class="ti ti-layout-grid"></i>재단 시뮬레이션</h3><button class="x" onclick="closeModal()">×</button></div>
     <div id="cutsim-root">${cutSimBodyHtml()}</div>`);
   cutRenumber();
