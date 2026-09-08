@@ -7320,6 +7320,28 @@ function _cutSimSheetClear() { const sh = el('sheet'); if (sh && sh.querySelecto
    화면을 다시 열어도 번호는 계속 올라가게 두고, 대신 행을 찾을 때 항상 지금 표(#cut-parts) 안에서만 찾는다. */
 let _cutGroups = []; let _cutCid = 0;
 function _cutRows() { const b = el('cut-parts'); return b ? [...b.querySelectorAll('.cut-row')] : []; }
+/* ── 판재 규격 고르기 (2026-09-08) ─────────────────────────
+   사용자 요청: *"1200*2700 아니면 1600*3200으로 선택하고 기타로 하면 직접 써서"*
+   ★ 입력칸 순서가 «길이 × 폭» 이라 3200×1600 / 2700×1200 으로 넣는다. */
+const CUT_SHEET_PRESETS = [{ L: 3200, W: 1600 }, { L: 2700, W: 1200 }];
+function cutSheetVals() {
+  return { L: _numv(el('cut-sheetL') && el('cut-sheetL').value) || 0, W: _numv(el('cut-sheetW') && el('cut-sheetW').value) || 0 };
+}
+function cutSheetChipsInner() {
+  const v = cutSheetVals();
+  const hit = CUT_SHEET_PRESETS.findIndex(p => p.L === v.L && p.W === v.W);
+  return CUT_SHEET_PRESETS.map((p, i) =>
+    `<button class="chip ${hit === i ? 'active' : ''}" onclick="cutPickSheet(${p.L},${p.W})">${p.L} × ${p.W}</button>`).join('')
+    + `<button class="chip ${hit < 0 ? 'active' : ''}" onclick="cutPickSheetOther()"><i class="ti ti-pencil"></i> 기타 (직접 입력)</button>`;
+}
+function cutSheetChipsRefresh() { const b = el('cut-sheet-chips'); if (b) b.innerHTML = cutSheetChipsInner(); }
+function cutPickSheet(L, W) {
+  if (el('cut-sheetL')) el('cut-sheetL').value = L;
+  if (el('cut-sheetW')) el('cut-sheetW').value = W;
+  _cutSheet = { L: L, W: W };
+  cutSheetChipsRefresh();
+}
+function cutPickSheetOther() { const i = el('cut-sheetL'); if (i) { i.focus(); i.select(); } cutSheetChipsRefresh(); }
 function openCutSim() {
   if (isCustomerRole()) { toast('권한이 없습니다'); return; }
   _cutGroups = []; _cutSimSheetClear();
@@ -7756,6 +7778,7 @@ function cutPlanApply(p) {
     dir: g.dir, cids: (g.at || []).map(i => cids[i]).filter(Boolean)
   })).filter(g => g.cids.length >= 2);
   cutRenumber();   // 왼쪽 # 번호 다시 매김 (연결 칩의 «몇 번» 표시도 같이 갱신)
+  cutSheetChipsRefresh();
   runCutSim();
   toast('불러왔습니다 — ' + (p.name ? p.name + ' · ' : '') + (p.title || ''));
   const r = el('cut-result'); if (r && r.scrollIntoView) r.scrollIntoView({ block: 'start', behavior: 'smooth' });
@@ -7774,9 +7797,10 @@ function cutSimBodyHtml() {
     </div>
     <div class="card" style="padding:13px 15px;margin-bottom:12px">
       <div style="font-weight:700;font-size:13.5px;margin-bottom:9px">판재 규격</div>
+      <div class="chips" id="cut-sheet-chips" style="margin-bottom:9px">${cutSheetChipsInner()}</div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-        <input id="cut-sheetL" inputmode="numeric" value="${_cutSheet.L}" style="${inp}"> <span style="color:var(--t3)">×</span>
-        <input id="cut-sheetW" inputmode="numeric" value="${_cutSheet.W}" style="${inp}"> <span style="color:var(--t3);font-size:13px">mm</span>
+        <input id="cut-sheetL" inputmode="numeric" value="${_cutSheet.L}" oninput="cutSheetChipsRefresh()" style="${inp}"> <span style="color:var(--t3)">×</span>
+        <input id="cut-sheetW" inputmode="numeric" value="${_cutSheet.W}" oninput="cutSheetChipsRefresh()" style="${inp}"> <span style="color:var(--t3);font-size:13px">mm</span>
         <span style="margin-left:12px;font-size:12px;color:var(--t3)">톱날두께</span> <span id="cut-kerf-fix" style="display:inline-flex;align-items:center;gap:3px;font-size:14px;font-weight:800;color:var(--gd);background:var(--soft);border:1.5px solid var(--bd2);border-radius:9px;padding:8px 12px">${CUT_KERF}<span style="font-size:11.5px;font-weight:600;color:var(--t3)">mm</span></span> <span style="font-size:11px;color:var(--t3)">고정</span>
       </div>
       <label style="display:inline-flex;align-items:center;gap:8px;margin-top:10px;font-size:13px;background:var(--soft);border-radius:9px;padding:8px 11px;cursor:pointer"><input type="checkbox" id="cut-grain" onchange="cutGrainToggle()" style="width:17px;height:17px"> 결방향 자재 (무늬결 있음) <span style="color:var(--t3);font-size:11.5px">— 체크 시 회전 없이 결 방향 유지</span></label>
@@ -7800,6 +7824,7 @@ function renderCutSim() {
       <button class="btn btn-sm" onclick="cutSimClose()"><i class="ti ti-arrow-left"></i>견적</button></div>
     ${cutSimBodyHtml()}</div>`;
   cutRenumber();   // 처음 그린 기본 3줄에도 # 번호를 붙인다
+  cutSheetChipsRefresh();
 }
 /* 견적 작성/수정 중에 팝업으로 재단 시뮬레이션 (작성 중인 견적 내용은 그대로 유지됨) */
 function openCutSimModal() {
@@ -7808,6 +7833,7 @@ function openCutSimModal() {
   openModal(`<div class="sheet-h"><h3><i class="ti ti-layout-grid"></i>재단 시뮬레이션</h3><button class="x" onclick="closeModal()">×</button></div>
     <div id="cutsim-root">${cutSimBodyHtml()}</div>`);
   cutRenumber();
+  cutSheetChipsRefresh();
 }
 function openQuoteSettings() { filters.quoteSettings = true; renderQuote(); }
 function quoteSettingsClose() { filters.quoteSettings = false; renderQuote(); }
