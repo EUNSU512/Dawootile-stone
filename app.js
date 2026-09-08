@@ -50,7 +50,7 @@ const CUSTOMS_LINES = ['관세', '부가가치세', '지원가산세', '통관�
    단가표를 «이름 → 분류» 표로 한 번만 만들어 두고, 이름별 결과도 기억해 둔다.
    판정 규칙은 예전과 똑같다 — 단가표에 있으면 그 분류, 없으면 이름으로 추정. */
 let _catIx = null;
-function catalogBust() { _catIx = null; _qmiSets = null; }
+function catalogBust() { _catIx = null; _qmiSets = null; _areaMemo = null; }
 function _catIndex() {
   if (_catIx) return _catIx;
   const m = new Map();
@@ -4397,7 +4397,11 @@ function quoteMemoTemplate() { const m = (state.appmeta || []).find(x => x.key =
 /* 단가 조회: ① 거래처 개별단가(override) ② 유형별 단가표 ③ 품목 price */
 function quoteGetPrice(client, name, typeOverride) {
   const cn = _normName(client || ''), nm = _normName(name || ''); const cps = state.clientPrices || [];
-  if (client && client.trim()) { const hit = cps.find(p => (p.client || '').trim() && _normName(p.client) === cn && _normName(p.itemName) === nm); if (hit) return +hit.price || 0; }
+  if (client && client.trim()) {
+    const hit = cps.find(p => (p.client || '').trim() && _normName(p.client) === cn && _normName(p.itemName) === nm);
+    if (hit) return +hit.price || 0;                       // ① 품목별 전용 단가
+    const rp = clientRulePrice(client, name); if (rp > 0) return rp;   // ② 거래처 단가 규칙
+  }
   const type = typeOverride || clientType(client); const pl = (state.priceList || []).find(p => _normName(p.itemName) === nm);
   if (pl) { const v = +pl[ctypeKey(type)] || 0; if (v) return v; }
   const it = (state.inventory || []).find(i => _normName(i.name) === nm); return it ? (+it.price || 0) : 0;
@@ -5109,6 +5113,58 @@ function collectQItems() {
      나머지 두 곳 단가까지 같이 바뀌었다. (실측: 헤이즈 아이보리·알래스카 화이트 12T 등)
    이제 「별도」는 **거래처마다 자기 단가**(clientPrices 컬렉션)를 갖는다.
    조회 우선순위는 이미 ① 거래처 전용 ② 유형별 단가표 ③ 품목 단가 순이다(quoteGetPrice). */
+/* ── 거래처 단가 «규칙» (2026-09-08) ──────────────────────
+   사용자: *"신성그룹 단가는 자동으로 채워줘 유통단가에서 -7000원 하면 됨 6티 12티 전부 똑같이"*
+   → 품목마다 값을 일일이 넣지 않고, 거래처 문서에 **규칙 한 줄**만 둔다.
+     `clients.priceRule = { base:'dist', minusM2:7000 }`  (유통가에서 ㎡당 7,000원 빼기)
+   단가 우선순위: ① 품목별 전용 단가 ② 이 규칙 ③ 유형별 단가표 ④ 품목 단가
+   ★ 세라믹 슬라브에만 적용한다. 세면대·석재·통관비용, 규격을 모르는 품목은 규칙을 안 쓴다
+     (세면대는 장당 값이라 ㎡로 빼면 엉뚱한 값이 나온다 — 실측으로 확인). */
+const PRICE_RULE_BASES = { dist: '유통', agency: '대리점', interior: '인테리어', consumer: '소비자' };
+function clientPriceRule(client) {
+  const c = (state.clients || []).find(x => _normName(x.value) === _normName(client));
+  const r = c && c.priceRule;
+  return (r && PRICE_RULE_BASES[r.base] && (+r.minusM2 || 0) >= 0) ? r : null;
+}
+function _parseAreaM2(spec) {
+  const a = String(spec == null ? '' : spec).replace(/[^0-9Xx*]/g, ' ').split(/[Xx*\s]+/).filter(Boolean).map(Number);
+  return (a.length >= 2 && a[0] > 100 && a[1] > 100) ? (a[0] * a[1] / 1e6) : 0;
+}
+/* 품목 한 장의 면적(㎡) — 단가표 규격 → 재고 규격 → 이름의 6T/12T 순으로 찾는다 */
+let _areaMemo = null;
+function itemAreaM2(name) {
+  const k = _normName(name); if (!k) return 0;
+  if (!_areaMemo) _areaMemo = new Map();
+  const hit = _areaMemo.get(k); if (hit !== undefined) return hit;
+  let a = 0;
+  const pl = (state.priceList || []).find(p => _normName(p.itemName) === k); if (pl) a = _parseAreaM2(pl.spec);
+  if (!a) { const iv = (state.inventory || []).find(i => _normName(i.name) === k); if (iv) a = _parseAreaM2(iv.spec); }
+  if (!a) { const n = String(name || ''); if (/6T/i.test(n)) a = 1.2 * 2.7; else if (/12T/i.test(n)) a = 1.6 * 3.2; }
+  _areaMemo.set(k, a); return a;
+}
+/* 규칙으로 계산한 단가 (못 쓰면 0) */
+function clientRulePrice(client, name) {
+  const r = clientPriceRule(client); if (!r) return 0;
+  if (itemCategory(name) !== '세라믹') return 0;        // 슬라브만
+  const a = itemAreaM2(name); if (!(a >= 2)) return 0;   // 규격을 모르거나 조각이면 적용 안 함
+  const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(name));
+  const base = pl ? (+pl[r.base] || 0) : 0; if (!(base > 0)) return 0;
+  const v = Math.round(base - (+r.minusM2 || 0) * a);
+  return v > 0 ? v : 0;
+}
+async function saveClientRule(cid) {
+  const c = (state.clients || []).find(x => x.id === cid); if (!c) return;
+  const base = (el('cr-base') && el('cr-base').value) || 'dist';
+  const minus = _numv(el('cr-minus') && el('cr-minus').value);
+  if (!(minus >= 0)) { toast('뺄 금액을 입력하세요'); return; }
+  await Store.update('clients', cid, { priceRule: { base: base, minusM2: Math.round(minus) } });
+  toast(PRICE_RULE_BASES[base] + '가에서 ㎡당 ' + fmtWon(Math.round(minus)) + '원 빼기 — 저장됨');
+  renderClients();
+}
+async function clearClientRule(cid) {
+  await Store.update('clients', cid, { priceRule: firebase.firestore.FieldValue.delete() });
+  toast('단가 규칙을 지웠습니다'); renderClients();
+}
 function clientPriceRows(client) {
   const cn = _normName(client || '');
   return (state.clientPrices || []).filter(p => _normName(p.client) === cn)
@@ -5141,7 +5197,31 @@ async function editClientPriceRow(id) {
   await Store.update('clientPrices', id, { price: pr, at: Date.now() });
   toast('저장됨');
 }
-/* 이 거래처가 지금 실제로 적용받는 단가 (전용 → 유형별 → 품목) 를 한 줄로 설명 */
+/* 단가 규칙 상자 — 「유통가에서 ㎡당 N원 빼기」 */
+function clientRuleBox(c) {
+  const r = clientPriceRule(c.value) || {};
+  const base = r.base || 'dist', minus = (+r.minusM2 || 0);
+  const on = !!clientPriceRule(c.value);
+  /* 지금 규칙이 실제로 몇 개 품목에 걸리는지 + 예시 하나 */
+  let n = 0, ex = '';
+  if (on) {
+    (state.priceList || []).forEach(p => { const v = clientRulePrice(c.value, p.itemName); if (v > 0) { n++; if (!ex) ex = esc(p.itemName) + ' → <b>' + fmtWon(v) + '</b>원 (' + PRICE_RULE_BASES[base] + ' ' + fmtWon(+p[base] || 0) + ' − ' + fmtWon(minus) + '×' + itemAreaM2(p.itemName).toFixed(2) + '㎡)'; } });
+  }
+  return `<div style="border:1.5px solid ${on ? 'var(--gd)' : 'var(--bd2)'};background:${on ? '#f2fbf6' : '#fff'};border-radius:10px;padding:9px 11px;margin-bottom:10px">
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:12.5px">
+      <span style="font-weight:700;color:${on ? 'var(--gd)' : 'var(--t2)'}"><i class="ti ti-calculator"></i> 단가 규칙</span>
+      <select id="cr-base" style="font-size:12.5px;padding:5px 7px;border:1.5px solid var(--bd2);border-radius:8px">${Object.keys(PRICE_RULE_BASES).map(k => `<option value="${k}" ${base === k ? 'selected' : ''}>${PRICE_RULE_BASES[k]}</option>`).join('')}</select>
+      <span>가에서 ㎡당</span>
+      <input id="cr-minus" inputmode="numeric" value="${minus || ''}" placeholder="7000" style="width:82px;text-align:right;font-size:13px;font-weight:700;padding:5px 7px;border:1.5px solid var(--bd2);border-radius:8px">
+      <span>원 빼기</span>
+      <button class="btn btn-sm btn-pri" style="flex:none" onclick="saveClientRule('${c.id}')"><i class="ti ti-check"></i>적용</button>
+      ${on ? `<button class="btn btn-sm" style="flex:none;color:var(--red-t);border-color:#e6a9a9" onclick="clearClientRule('${c.id}')">규칙 끄기</button>` : ''}
+    </div>
+    ${on ? `<div style="font-size:11px;color:var(--t2);margin-top:7px;line-height:1.6">지금 <b style="color:var(--gd)">${n}개 품목</b>에 자동 적용 중 — 세라믹 슬라브만 (세면대·석재·규격 모르는 품목은 제외)<br>${ex ? `<span style="color:var(--t3)">예) ${ex}</span>` : ''}</div>`
+      : `<div style="font-size:11px;color:var(--t3);margin-top:6px">규칙을 켜면 품목마다 값을 넣지 않아도 됩니다. 단가표의 유통가가 바뀌면 자동으로 따라갑니다.</div>`}
+  </div>`;
+}
+/* 이 거래처가 지금 실제로 적용받는 단가 (전용 → 규칙 → 유형별) 를 한 줄로 설명 */
 function clientPriceCard(c) {
   const rows = clientPriceRows(c.value);
   const ctype = c.ctype || '소비자';
@@ -5164,9 +5244,10 @@ function clientPriceCard(c) {
       <h3 style="margin:0;font-size:15px"><i class="ti ti-tag"></i> 이 거래처 전용 단가 ${rows.length ? `<span style="color:var(--gd)">${rows.length}</span>` : ''}</h3><i class="ti ti-chevron-down" style="color:var(--t3)"></i></div>
     <div id="cp-body" style="display:${rows.length ? 'block' : 'none'};padding:0 16px 14px">
       <div style="font-size:11.5px;color:var(--t2);background:var(--soft);border-radius:9px;padding:8px 11px;margin-bottom:9px;line-height:1.6">
-        여기 적은 단가가 <b>유형별 단가표보다 먼저</b> 적용됩니다. 이 거래처에만 적용되고 다른 거래처는 건드리지 않습니다.<br>
-        <span style="color:var(--t3)">유형이 <b>별도</b>인 거래처는 견적을 저장할 때 그 단가가 자동으로 여기에 기록됩니다.</span>
+        단가는 <b>① 아래 품목별 단가 → ② 단가 규칙 → ③ 유형별 단가표</b> 순으로 적용됩니다. 이 거래처에만 적용되고 다른 거래처는 안 건드립니다.<br>
+        <span style="color:var(--t3)">유형이 <b>별도</b>인 거래처는 견적을 저장할 때 그 단가가 자동으로 여기에 기록됩니다 (규칙과 값이 같으면 안 만듭니다).</span>
       </div>
+      ${clientRuleBox(c)}
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:9px">
         <input id="cp-name" list="cp-items" lang="ko" placeholder="품목명" style="flex:2;min-width:150px;font-size:13.5px;padding:8px 10px;border:1.5px solid var(--bd2);border-radius:9px">
         <datalist id="cp-items">${pick}</datalist>
@@ -5180,7 +5261,12 @@ function clientPriceCard(c) {
 /* 견적 저장 시 단가 기억 — 「별도」는 거래처 전용으로, 나머지는 유형별 단가표에 */
 async function quoteLearnPrice(type, name, price, client) {
   if (!name || !(price > 0)) return;
-  if (type === '별도') { if (client && String(client).trim()) await saveClientPrice(client, name, price); return; }
+  if (type === '별도') {
+    if (!(client && String(client).trim())) return;
+    /* 규칙으로 나오는 값과 같으면 굳이 줄을 만들지 않는다. 다르면 그 품목만 «예외»로 남긴다. */
+    if (clientRulePrice(client, name) === Math.round(price)) return;
+    await saveClientPrice(client, name, price); return;
+  }
   const key = ctypeKey(type);
   const pl = (state.priceList || []).find(p => _normName(p.itemName) === _normName(name));
   if (pl) { if ((+pl[key] || 0) !== price) { const patch = {}; patch[key] = price; await Store.update('priceList', pl.id, patch); } }
